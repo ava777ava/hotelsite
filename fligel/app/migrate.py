@@ -12,12 +12,14 @@ def migrate(url: str | None = None) -> list[str]:
     applied: list[str] = []
     with psycopg.connect(url or config.DATABASE_URL, autocommit=False) as conn:
         with conn.cursor() as cur:
+            # Не даём двум экземплярам приложения мигрировать одновременно.
+            # Лок берём до CREATE TABLE: иначе параллельные `CREATE TABLE IF NOT EXISTS`
+            # от нескольких воркеров uvicorn падают гонкой в системном каталоге Postgres.
+            cur.execute("SELECT pg_advisory_xact_lock(724501)")
             cur.execute(
                 "CREATE TABLE IF NOT EXISTS schema_migrations ("
                 " name text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
             )
-            # Не даём двум экземплярам приложения мигрировать одновременно
-            cur.execute("SELECT pg_advisory_xact_lock(724501)")
             cur.execute("SELECT name FROM schema_migrations")
             done = {r[0] for r in cur.fetchall()}
             for path in sorted(MIGRATIONS_DIR.glob("*.sql")):
