@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Бронирование</title>
+<style>
+:root {
+  --ink: #1C2420; --paper: #F4F3EE; --surface: #fff; --border: #DCDFD6; --line: #ECEEE8; --muted: #6A7563;
+  --pine: #2F5D50; --pine-2: #264C41; --pine-soft: #E1EBE6; --clay: #B4562E; --clay-soft: #F5E0D5; --ochre: #C1852B;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 var(--font); -webkit-font-smoothing: antialiased; }
+body.embed { background: transparent; }
+button, input, select, textarea { font: inherit; color: inherit; }
+.wrap { max-width: 760px; margin: 0 auto; padding: 0 16px 48px; }
+header { padding: 36px 0 22px; }
+header h1 { font-size: 30px; line-height: 1.15; margin: 0 0 6px; font-weight: 650; letter-spacing: -.015em; }
+header p { margin: 0; color: var(--muted); }
+body.embed header { padding-top: 12px; }
+.search {
+  display: grid; grid-template-columns: 1fr 1fr .6fr auto; gap: 10px; align-items: end; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 14px; padding: 14px;
+}
+label { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+.input { height: 44px; border: 1px solid var(--border); border-radius: 9px; padding: 0 12px; background: #fff; width: 100%; outline: none; font-weight: 400; color: var(--ink); }
+textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
+.input:focus { border-color: var(--pine); box-shadow: 0 0 0 3px var(--pine-soft); }
+.input.invalid { border-color: var(--clay); box-shadow: 0 0 0 3px var(--clay-soft); }
+.btn { height: 44px; border-radius: 9px; border: 0; background: var(--pine); color: #fff; font-weight: 600; padding: 0 20px; cursor: pointer; white-space: nowrap; }
+.btn:hover { background: var(--pine-2); }
+.btn:disabled { opacity: .55; cursor: default; }
+.btn.ghost { background: transparent; color: var(--pine); padding: 0 8px; }
+.results { margin-top: 22px; display: flex; flex-direction: column; gap: 12px; }
+.opt { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 18px; display: grid; grid-template-columns: 1fr auto; gap: 8px 20px; align-items: center; }
+.opt h2 { margin: 0; font-size: 18px; font-weight: 650; }
+.opt .desc { color: var(--muted); font-size: 14px; margin-top: 2px; }
+.opt .meta { font-size: 13px; color: var(--muted); margin-top: 6px; }
+.opt .price { text-align: right; }
+.opt .price b { font-size: 22px; font-variant-numeric: tabular-nums; display: block; }
+.opt .price span { font-size: 12.5px; color: var(--muted); }
+.opt.off { opacity: .62; }
+.opt .reason { color: var(--clay); font-size: 13.5px; }
+.left { color: var(--ochre); font-weight: 600; }
+.msg { padding: 12px 14px; border-radius: 10px; background: var(--clay-soft); color: #7A3418; margin-top: 14px; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 20px; margin-top: 22px; }
+.panel h2 { margin: 0 0 4px; font-size: 20px; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 16px 0 12px; }
+.full { grid-column: 1 / -1; }
+.consent { flex-direction: row; align-items: flex-start; gap: 9px; font-weight: 400; font-size: 13px; color: var(--muted); margin: 6px 0 16px; }
+.consent input { margin-top: 3px; }
+.total { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px dashed var(--border); padding-top: 14px; margin-bottom: 14px; }
+.total b { font-size: 24px; font-variant-numeric: tabular-nums; }
+.done { text-align: center; padding: 34px 20px; }
+.done .mark { width: 54px; height: 54px; border-radius: 50%; background: var(--pine-soft); color: var(--pine); display: grid; place-items: center; margin: 0 auto 14px; font-size: 26px; font-weight: 700; }
+.done .ref { font-size: 13px; color: var(--muted); letter-spacing: .04em; }
+.foot { margin-top: 28px; font-size: 12.5px; color: var(--muted); }
+@media (max-width: 640px) {
+  header h1 { font-size: 25px; }
+  .search { grid-template-columns: 1fr 1fr; }
+  .search .btn { grid-column: 1 / -1; }
+  .opt { grid-template-columns: 1fr; }
+  .opt .price { text-align: left; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .grid2 { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1 id="name">Загрузка…</h1><p id="addr"></p></header>
+  <form class="search" id="search">
+    <label>Заезд<input class="input" type="date" id="ci" required></label>
+    <label>Выезд<input class="input" type="date" id="co" required></label>
+    <label>Гостей<select class="input" id="guests"></select></label>
+    <button class="btn" type="submit">Найти номер</button>
+  </form>
+  <div id="out"></div>
+  <p class="foot" id="foot"></p>
+</div>
+<script>
+(() => {
+  const slug = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop());
+  if (new URLSearchParams(location.search).get('embed')) document.body.classList.add('embed');
+  const $ = (id) => document.getElementById(id);
+  const out = $('out');
+  const pad = (n) => String(n).padStart(2, '0');
+  const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  const addDays = (s, n) => { const [y, m, d] = s.split('-').map(Number); const x = new Date(y, m - 1, d + n); return iso(x); };
+  const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
+  const fmtDate = (s) => { const [y, m, d] = s.split('-').map(Number); return `${d} ${MONTHS[m - 1]}`; };
+  const money = (v) => `${Math.round(Number(v)).toLocaleString('ru-RU')} ₽`;
+  const nightsWord = (n) => { const a = n % 10, b = n % 100; if (a === 1 && b !== 11) return 'ночь'; if (a >= 2 && a <= 4 && (b < 10 || b >= 20)) return 'ночи'; return 'ночей'; };
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  let info = null;
+
+  async function call(method, path, body) {
+    let res;
+    try { res = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); }
+    catch { throw Object.assign(new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз'), { data: {} }); }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw Object.assign(new Error(data.error || 'Что-то пошло не так'), { data });
+    return data;
+  }
+
+  const today = iso(new Date());
+  $('ci').min = today; $('ci').value = addDays(today, 1);
+  $('co').min = addDays(today, 1); $('co').value = addDays(today, 3);
+  $('ci').addEventListener('change', () => {
+    $('co').min = addDays($('ci').value, 1);
+    if ($('co').value <= $('ci').value) $('co').value = addDays($('ci').value, 1);
+  });
+
+  call('GET', `/api/public/${encodeURIComponent(slug)}`).then((d) => {
+    info = d;
+    document.title = `${d.name} — бронирование`;
+    $('name').textContent = d.name;
+    $('addr').textContent = [d.address, `заезд с ${d.check_in_time}, выезд до ${d.check_out_time}`].filter(Boolean).join(' · ');
+    const maxCap = Math.max(1, ...d.room_types.map((t) => t.capacity));
+    $('guests').innerHTML = Array.from({ length: maxCap }, (_, i) => `<option value="${i + 1}"${i === 1 && maxCap > 1 ? ' selected' : ''}>${i + 1}</option>`).join('');
+    $('foot').textContent = d.phone ? `Вопросы по бронированию: ${d.phone}` : '';
+    search();
+  }).catch((e) => { $('name').textContent = 'Бронирование недоступно'; $('search').style.display = 'none'; out.innerHTML = `<div class="msg">${esc(e.message)}</div>`; });
+
+  $('search').addEventListener('submit', (e) => { e.preventDefault(); search(); });
+
+  async function search() {
+    out.innerHTML = '<div class="results"><div class="opt"><div>Ищем свободные номера…</div></div></div>';
+    try {
+      const d = await call('GET', `/api/public/${encodeURIComponent(slug)}/availability?check_in=${$('ci').value}&check_out=${$('co').value}&guests=${$('guests').value}`);
+      const list = document.createElement('div'); list.className = 'results';
+      if (!d.options.some((o) => o.available)) list.insertAdjacentHTML('beforeend', `<div class="msg">На эти даты свободных номеров нет. Попробуйте другие даты${info.phone ? ` или позвоните: ${esc(info.phone)}` : ''}.</div>`);
+      d.options.forEach((o) => {
+        const el = document.createElement('div');
+        el.className = 'opt' + (o.available ? '' : ' off');
+        el.innerHTML = `<div><h2>${esc(o.name)}</h2>${o.description ? `<div class="desc">${esc(o.description)}</div>` : ''}
+          <div class="meta">до ${o.capacity} гостей${o.available && o.free_rooms <= 2 ? ` · <span class="left">осталось ${o.free_rooms}</span>` : ''}</div>
+          ${o.available ? '' : `<div class="reason">${esc(o.reason)}</div>`}</div>
+          <div class="price"><b>${money(o.total)}</b><span>за ${o.nights} ${nightsWord(o.nights)}</span>
+          ${o.available ? '<div style="margin-top:8px"><button class="btn" type="button">Забронировать</button></div>' : ''}</div>`;
+        if (o.available) el.querySelector('button').addEventListener('click', () => form(o, d));
+        list.append(el);
+      });
+      out.innerHTML = ''; out.append(list);
+    } catch (e) { out.innerHTML = `<div class="msg">${esc(e.message)}</div>`; }
+  }
+
+  function form(o, d) {
+    out.innerHTML = `<div class="panel"><h2>${esc(o.name)}</h2>
+      <div style="color:var(--muted)">${fmtDate(d.check_in)} — ${fmtDate(d.check_out)}, ${o.nights} ${nightsWord(o.nights)}, гостей: ${d.guests}</div>
+      <form id="bf"><div class="grid2">
+        <label>Имя и фамилия<input class="input" name="guest_name" autocomplete="name" required></label>
+        <label>Телефон<input class="input" name="guest_phone" type="tel" autocomplete="tel" placeholder="+7" required></label>
+        <label class="full">Email (необязательно)<input class="input" name="guest_email" type="email" autocomplete="email"></label>
+        <label class="full">Пожелания (необязательно)<textarea class="input" name="comment" placeholder="Время заезда, детская кроватка…"></textarea></label>
+      </div>
+      <label class="consent"><input type="checkbox" name="consent" required> Я согласен на обработку персональных данных для оформления бронирования</label>
+      <div class="total"><span>Итого</span><b>${money(o.total)}</b></div>
+      <div id="err"></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" type="submit">Отправить заявку</button><button class="btn ghost" type="button" id="back">Выбрать другой номер</button></div>
+      </form></div>`;
+    $('back').addEventListener('click', search);
+    const f = $('bf');
+    f.guest_name.focus();
+    f.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = f.querySelector('button[type=submit]'); btn.disabled = true; $('err').innerHTML = '';
+      f.querySelectorAll('.invalid').forEach((x) => x.classList.remove('invalid'));
+      try {
+        const r = await call('POST', `/api/public/${encodeURIComponent(slug)}/book`, {
+          room_type_id: o.room_type_id, check_in: d.check_in, check_out: d.check_out, guests: d.guests,
+          guest_name: f.guest_name.value, guest_phone: f.guest_phone.value, guest_email: f.guest_email.value,
+          comment: f.comment.value, consent: f.consent.checked,
+        });
+        out.innerHTML = `<div class="panel done"><div class="mark">✓</div><h2>Заявка отправлена</h2>
+          <p>${esc(r.room_type)}, ${fmtDate(r.check_in)} — ${fmtDate(r.check_out)}, ${money(r.total)}</p>
+          <p style="color:var(--muted)">${esc(r.message)}${info.phone ? ` Телефон: ${esc(info.phone)}` : ''}</p>
+          <div class="ref">Номер заявки ${esc(r.reference)}</div></div>`;
+        $('search').style.display = 'none';
+      } catch (ex) {
+        $('err').innerHTML = `<div class="msg" style="margin:0 0 14px">${esc(ex.message)}</div>`;
+        if (ex.data?.field && f[ex.data.field]) f[ex.data.field].classList.add('invalid');
+        btn.disabled = false;
+      }
+    });
+  }
+})();
+</script>
+</body>
+</html>
