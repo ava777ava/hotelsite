@@ -189,6 +189,63 @@ class BookingTests(Base):
         self.assertEqual(float(s["adr"]), 1000)
 
 
+class MultiPropertyTests(Base):
+    """Один владелец, два объекта: экраны должны работать по выбранному объекту,
+    а «Сегодня», «Брони» и «Отчёты» — уметь показать оба сразу."""
+
+    def add_property(self, ctx, name="Квартиры", rooms=(("Студия", 2, 2000),)):
+        r = self.client.post("/api/setup", headers=ctx["h"], json={
+            "name": name, "room_types": [{"name": n, "count": c, "base_price": p, "capacity": 2} for n, c, p in rooms]})
+        self.assertEqual(r.status_code, 200, r.text)
+        prop = self.client.get(f"/api/properties/{r.json()['id']}", headers=ctx["h"]).json()
+        return {"prop": prop, "rooms": [room for t in prop["room_types"] for room in t["rooms"]]}
+
+    def test_board_and_channels_scoped_to_property(self):
+        ctx = self.register("multi1@example.ru", rooms=(("Стандарт", 2, 3000),))
+        p2 = self.add_property(ctx)
+        self.book(ctx, ctx["rooms"][0], d(1), d(3))
+        self.book(ctx, p2["rooms"][0], d(1), d(3))
+        board1 = self.client.get("/api/board", headers=ctx["h"], params={"property_id": ctx["prop"]["id"]}).json()
+        board2 = self.client.get("/api/board", headers=ctx["h"], params={"property_id": p2["prop"]["id"]}).json()
+        self.assertEqual({r["id"] for t in board1["room_types"] for r in t["rooms"]}, {r["id"] for r in ctx["rooms"]})
+        self.assertEqual({r["id"] for t in board2["room_types"] for r in t["rooms"]}, {r["id"] for r in p2["rooms"]})
+        self.assertEqual(len(board1["bookings"]), 1)
+        self.assertEqual(len(board2["bookings"]), 1)
+        ch1 = self.client.get("/api/channels", headers=ctx["h"], params={"property_id": ctx["prop"]["id"]}).json()
+        ch2 = self.client.get("/api/channels", headers=ctx["h"], params={"property_id": p2["prop"]["id"]}).json()
+        self.assertEqual({r["id"] for r in ch1["rooms"]}, {r["id"] for r in ctx["rooms"]})
+        self.assertEqual({r["id"] for r in ch2["rooms"]}, {r["id"] for r in p2["rooms"]})
+        # объект другого аккаунта недоступен
+        other = self.register("multi1b@example.ru")
+        self.assertEqual(self.client.get("/api/board", headers=other["h"],
+                                          params={"property_id": ctx["prop"]["id"]}).status_code, 404)
+        self.assertEqual(self.client.get("/api/channels", headers=other["h"],
+                                          params={"property_id": ctx["prop"]["id"]}).status_code, 404)
+
+    def test_today_and_stats_all_properties_mode(self):
+        ctx = self.register("multi2@example.ru", rooms=(("Стандарт", 1, 3000),))
+        p2 = self.add_property(ctx, rooms=(("Студия", 1, 2000),))
+        self.book(ctx, ctx["rooms"][0], d(0), d(2), total_price=6000)
+        self.book(ctx, p2["rooms"][0], d(0), d(2), total_price=4000)
+        today1 = self.client.get("/api/today", headers=ctx["h"], params={"property_id": ctx["prop"]["id"]}).json()
+        self.assertEqual(len(today1["arrivals"]), 1)
+        today_all = self.client.get("/api/today", headers=ctx["h"]).json()
+        self.assertEqual(len(today_all["arrivals"]), 2)
+        self.assertEqual({r["property_name"] for r in today_all["arrivals"]}, {ctx["prop"]["name"], p2["prop"]["name"]})
+        stats1 = self.client.get("/api/stats", headers=ctx["h"],
+                                  params={"property_id": ctx["prop"]["id"], "from": d(0), "days": 2}).json()
+        self.assertEqual(stats1["rooms"], 1)
+        self.assertEqual(float(stats1["revenue"]), 6000)
+        stats_all = self.client.get("/api/stats", headers=ctx["h"], params={"from": d(0), "days": 2}).json()
+        self.assertEqual(stats_all["rooms"], 2)
+        self.assertEqual(float(stats_all["revenue"]), 10000)
+        bookings_all = self.client.get("/api/bookings", headers=ctx["h"], params={"from": d(0)}).json()
+        self.assertEqual(len(bookings_all), 2)
+        bookings1 = self.client.get("/api/bookings", headers=ctx["h"],
+                                     params={"from": d(0), "property_id": ctx["prop"]["id"]}).json()
+        self.assertEqual(len(bookings1), 1)
+
+
 class ICalTests(unittest.TestCase):
     def test_parse_variants(self):
         text = (

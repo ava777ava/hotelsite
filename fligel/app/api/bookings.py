@@ -10,6 +10,7 @@ from ..errors import ApiError
 from ..pricing import quote
 from ..util import opt_str, parse_date, parse_int, parse_money, parse_uuid
 from .base import Ctx, api
+from .common import selected_property
 
 STATUSES = ("confirmed", "pending", "blocked", "cancelled")
 SOURCES = ("manual", "direct", "avito", "yandex", "sutochno", "ostrovok", "other")
@@ -81,7 +82,8 @@ def list_bookings(c: Ctx):
     with tx() as conn:
         return all_(
             conn,
-            f"SELECT {BOOKING_COLS}, r.name AS room_name FROM bookings b JOIN rooms r ON r.id = b.room_id"
+            f"SELECT {BOOKING_COLS}, r.name AS room_name, p.name AS property_name FROM bookings b"
+            " JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
             f" WHERE {' AND '.join(where)} ORDER BY b.check_in, r.sort_order LIMIT 1000",
             params,
         )
@@ -239,15 +241,7 @@ def quote_booking(c: Ctx):
 def board(c: Ctx):
     start, end = _date_range(c, 31)
     with tx() as conn:
-        prop_id = c.q.get("property_id")
-        if prop_id:
-            prop = one(conn, "SELECT * FROM properties WHERE id = %s AND account_id = %s",
-                       (parse_uuid(prop_id), c.account_id))
-        else:
-            prop = one(conn, "SELECT * FROM properties WHERE account_id = %s ORDER BY created_at LIMIT 1",
-                       (c.account_id,))
-        if not prop:
-            raise ApiError(404, "Объект не найден")
+        prop = selected_property(conn, c.account_id, c.q.get("property_id"))
         types = all_(conn, "SELECT id, name, capacity, base_price, min_stay FROM room_types"
                            " WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
         rooms = all_(conn, "SELECT id, room_type_id, name FROM rooms WHERE property_id = %s"
@@ -331,16 +325,22 @@ def set_rates(c: Ctx):
 @api("manager")
 def stats(c: Ctx):
     start, end = _date_range(c, 30)
+    prop_id = parse_uuid(c.q["property_id"], "Объект") if c.q.get("property_id") else None
     with tx() as conn:
-        rooms = one(conn, "SELECT count(*) AS n FROM rooms WHERE account_id = %s", (c.account_id,))["n"]
+        if prop_id:
+            selected_property(conn, c.account_id, prop_id)
+        prop_filter = " AND property_id = %s" if prop_id else ""
+        prop_params = (prop_id,) if prop_id else ()
+        rooms = one(conn, f"SELECT count(*) AS n FROM rooms WHERE account_id = %s{prop_filter}",
+                    (c.account_id, *prop_params))["n"]
         rows = all_(
             conn,
             "SELECT source, status,"
             " (least(check_out, %s::date) - greatest(check_in, %s::date)) AS nights_in,"
             " (check_out - check_in) AS nights, total_price, paid_amount"
-            " FROM bookings WHERE account_id = %s AND status IN ('confirmed', 'pending', 'blocked')"
-            " AND check_in < %s AND check_out > %s",
-            (end, start, c.account_id, end, start),
+            f" FROM bookings WHERE account_id = %s AND status IN ('confirmed', 'pending', 'blocked')"
+            f" AND check_in < %s AND check_out > %s{prop_filter}",
+            (end, start, c.account_id, end, start, *prop_params),
         )
     days = (end - start).days
     sold = blocked = 0
@@ -373,13 +373,19 @@ def stats(c: Ctx):
 @api()
 def today(c: Ctx):
     day = parse_date(c.q["date"], "Дата") if c.q.get("date") else date.today()
+    prop_id = parse_uuid(c.q["property_id"], "Объект") if c.q.get("property_id") else None
     with tx() as conn:
+        if prop_id:
+            selected_property(conn, c.account_id, prop_id)
+        prop_filter = " AND b.property_id = %s" if prop_id else ""
+        prop_params = (prop_id,) if prop_id else ()
         rows = all_(
             conn,
-            f"SELECT {BOOKING_COLS}, r.name AS room_name FROM bookings b JOIN rooms r ON r.id = b.room_id"
-            " WHERE b.account_id = %s AND b.status IN ('confirmed', 'pending')"
-            " AND b.check_in <= %s AND b.check_out >= %s ORDER BY r.sort_order",
-            (c.account_id, day, day),
+            f"SELECT {BOOKING_COLS}, r.name AS room_name, p.name AS property_name FROM bookings b"
+            " JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
+            f" WHERE b.account_id = %s AND b.status IN ('confirmed', 'pending')"
+            f" AND b.check_in <= %s AND b.check_out >= %s{prop_filter} ORDER BY r.sort_order",
+            (c.account_id, day, day, *prop_params),
         )
     return {
         "date": day,

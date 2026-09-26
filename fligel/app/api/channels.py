@@ -15,6 +15,7 @@ from ..errors import ApiError
 from ..sync import CHANNEL_LABELS, export_events, export_type_events, sync_feed
 from ..util import parse_uuid
 from .base import Ctx, api
+from .common import selected_property
 
 CHANNELS = ("avito", "yandex", "sutochno", "ostrovok", "other")
 # По умолчанию: Яндекс для гостиниц работает с категориями, остальные — с отдельными номерами
@@ -32,33 +33,34 @@ FEED_COLS = ("id, room_id, room_type_id, channel, url, enabled, last_synced_at, 
 
 @api("manager")
 def channels_overview(c: Ctx):
-    """Номера и категории: ссылки экспорта для каждой площадки и подключённые календари импорта."""
+    """Номера и категории выбранного объекта: ссылки экспорта для каждой площадки и подключённые календари импорта."""
     with tx() as conn:
+        prop = selected_property(conn, c.account_id, c.q.get("property_id"))
         types = all_(
             conn,
             "SELECT rt.id, rt.name, rt.ical_token, (SELECT count(*) FROM rooms r WHERE r.room_type_id = rt.id)"
-            " AS rooms_count FROM room_types rt WHERE rt.account_id = %s ORDER BY rt.sort_order, rt.name",
-            (c.account_id,),
+            " AS rooms_count FROM room_types rt WHERE rt.property_id = %s ORDER BY rt.sort_order, rt.name",
+            (prop["id"],),
         )
         rooms = all_(
             conn,
             "SELECT r.id, r.name, r.ical_token, rt.name AS room_type FROM rooms r"
-            " JOIN room_types rt ON rt.id = r.room_type_id WHERE r.account_id = %s"
+            " JOIN room_types rt ON rt.id = r.room_type_id WHERE r.property_id = %s"
             " ORDER BY rt.sort_order, r.sort_order, r.name",
-            (c.account_id,),
+            (prop["id"],),
         )
         feeds = all_(conn, f"SELECT {FEED_COLS} FROM ical_feeds WHERE account_id = %s", (c.account_id,))
         exports = all_(
             conn,
             "SELECT e.target_id, e.channel, e.last_fetched_at FROM ical_exports e WHERE e.target_id IN ("
-            " SELECT id FROM rooms WHERE account_id = %s UNION SELECT id FROM room_types WHERE account_id = %s)",
-            (c.account_id, c.account_id),
+            " SELECT id FROM rooms WHERE property_id = %s UNION SELECT id FROM room_types WHERE property_id = %s)",
+            (prop["id"], prop["id"]),
         )
         modes = all_(
             conn,
             "SELECT s.room_type_id, s.channel, s.mode FROM ical_export_settings s"
-            " JOIN room_types rt ON rt.id = s.room_type_id WHERE rt.account_id = %s",
-            (c.account_id,),
+            " JOIN room_types rt ON rt.id = s.room_type_id WHERE rt.property_id = %s",
+            (prop["id"],),
         )
     exp_map = {(str(e["target_id"]), e["channel"]): e["last_fetched_at"] for e in exports}
     mode_map = {(str(m["room_type_id"]), m["channel"]): m["mode"] for m in modes}

@@ -68,6 +68,37 @@ def main() -> None:
         run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, notes)"
                   " VALUES (%s, %s, %s, %s, %s, 'blocked', 'Ремонт') ON CONFLICT DO NOTHING",
             (acc, prop, rooms[-1][0], today + timedelta(days=45), today + timedelta(days=50)))
+
+        # второй объект того же владельца: квартиры посуточно
+        prop2 = one(conn, "INSERT INTO properties (account_id, name, address, phone, public_slug) VALUES"
+                          " (%s, 'Квартиры на сутки', 'Казань, ул. Баумана, 5', '+7 900 111-22-33', 'apartments')"
+                          " RETURNING id", (acc,))["id"]
+        rt2 = one(conn, "INSERT INTO room_types (account_id, property_id, name, description, capacity, base_price,"
+                        " sort_order, ical_token) VALUES (%s, %s, 'Квартира', 'Студия с кухней в центре города',"
+                        " %s, %s, 0, %s) RETURNING id", (acc, prop2, 3, 2800, new_ical_token()))["id"]
+        rooms2 = []
+        for i in range(3):
+            no = i + 1
+            rid = one(conn, "INSERT INTO rooms (account_id, property_id, room_type_id, name, sort_order, ical_token)"
+                            " VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                      (acc, prop2, rt2, f"Кв. {no}", no, new_ical_token()))["id"]
+            rooms2.append((rid, 2800))
+        for rid, price in rooms2:
+            d = today - timedelta(days=rnd.randint(0, 6))
+            while d < today + timedelta(days=40):
+                d += timedelta(days=rnd.randint(0, 3))
+                nights = rnd.choice([1, 2, 2, 3, 4])
+                src = rnd.choice(sources)
+                status = "pending" if src == "direct" and rnd.random() < 0.5 else "confirmed"
+                guest = rnd.choice(GUESTS)
+                total = price * nights
+                run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source,"
+                          " guest_name, guest_phone, guests_count, total_price, paid_amount)"
+                          " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (acc, prop2, rid, d, d + timedelta(days=nights), status, src, guest,
+                     f"+7 9{rnd.randint(10, 99)} {rnd.randint(100, 999)}-{rnd.randint(10, 99)}-{rnd.randint(10, 99)}",
+                     rnd.choice([1, 2]), total, total if status == "confirmed" and rnd.random() < 0.6 else 0))
+                d += timedelta(days=nights)
     print("Готово: войдите как demo@fligel.ru / demo12345, страница бронирования — /book/demo")
 
 

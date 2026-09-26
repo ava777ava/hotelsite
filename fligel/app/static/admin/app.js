@@ -155,18 +155,41 @@ function layout(route, main) {
   return h('div', { class: 'shell' },
     h('aside', { class: 'side' },
       h('div', { class: 'brand' }, h('div', { class: 'brand-mark' }),
-        h('div', {}, h('div', { class: 'brand-name' }, 'Флигель'), h('div', { class: 'brand-sub' }, prop ? prop.name : ''))),
+        h('div', {}, h('div', { class: 'brand-name' }, 'Флигель'),
+        propertySwitcher('prop-switch') || h('div', { class: 'brand-sub' }, prop ? prop.name : ''))),
       h('nav', { class: 'nav' }, visible.map(link)),
       h('div', { class: 'side-foot' }, h('b', {}, state.me.name), ROLE[state.me.role],
         h('br'), h('button', { onclick: logout }, 'Выйти'))),
     h('div', {},
-      h('div', { class: 'mobile-top' }, h('div', { class: 'brand-mark' }), h('div', { class: 'brand-name' }, prop ? prop.name : 'Флигель'),
+      h('div', { class: 'mobile-top' }, h('div', { class: 'brand-mark' }),
+        propertySwitcher('prop-switch') || h('div', { class: 'brand-name' }, prop ? prop.name : 'Флигель'),
         h('button', { class: 'btn small ghost', style: { marginLeft: 'auto', color: '#fff' }, onclick: logout }, 'Выйти')),
       main),
     h('nav', { class: 'mobile-nav' }, MOBILE_ORDER.map((k) => visible.find(([v]) => v === k)).filter(Boolean).slice(0, 5).map(link)));
 }
 
 function logout() { store.set('token', null); state.me = null; location.hash = ''; render(); }
+
+function switchProperty(id) {
+  if (id === state.propertyId) return;
+  state.propertyId = id; store.set('propertyId', id);
+  boardData = null;
+  render();
+}
+
+function propertySwitcher(cls) {
+  if (state.me.properties.length < 2) return null;
+  return h('select', { class: cls, onchange: (e) => switchProperty(e.target.value), 'aria-label': 'Объект' },
+    state.me.properties.map((p) => h('option', { value: p.id, selected: p.id === state.propertyId }, p.name)));
+}
+
+// Список объектов для выбора «Этот объект / Все объекты» на страницах, где это уместно.
+function scopeSeg(scope, onChange) {
+  if (state.me.properties.length < 2) return null;
+  return h('div', { class: 'seg' },
+    h('button', { type: 'button', class: scope.value === 'current' ? 'on' : '', onclick: () => { scope.value = 'current'; onChange(); } }, 'Этот объект'),
+    h('button', { type: 'button', class: scope.value === 'all' ? 'on' : '', onclick: () => { scope.value = 'all'; onChange(); } }, 'Все объекты'));
+}
 
 // ---------- вход и регистрация ----------
 function viewAuth() {
@@ -626,18 +649,21 @@ function rateDrawer(t, day, reload) {
 // ---------- сегодня ----------
 async function viewToday(main) {
   let day = todayISO();
+  const scope = { value: 'current' };
   const content = h('div');
   const dateInput = h('input', { class: 'input', type: 'date', value: day, style: { width: '160px' }, onchange: (e) => { day = e.target.value || todayISO(); load(); } });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Заезды и выезды'),
     h('button', { class: 'btn icon', onclick: () => { day = addDays(day, -1); dateInput.value = day; load(); } }, icon('left')),
     dateInput,
-    h('button', { class: 'btn icon', onclick: () => { day = addDays(day, 1); dateInput.value = day; load(); } }, icon('right'))), content);
+    h('button', { class: 'btn icon', onclick: () => { day = addDays(day, 1); dateInput.value = day; load(); } }, icon('right')),
+    scopeSeg(scope, () => load())), content);
   const item = (b, kind) => {
     const due = Number(b.total_price) - Number(b.paid_amount);
     return h('div', { class: 'item', onclick: () => bookingDrawer(b, load) },
       h('div', { class: 'room-chip' }, b.room_name),
       h('div', { style: { flex: 1, minWidth: 0 } },
-        h('div', { style: { fontWeight: 600 } }, b.guest_name || `Гость с площадки ${SOURCE[b.source]}`),
+        h('div', { style: { fontWeight: 600 } }, b.guest_name || `Гость с площадки ${SOURCE[b.source]}`,
+          scope.value === 'all' ? h('span', { class: 'muted small', style: { fontWeight: 400 } }, ' · ', b.property_name) : null),
         h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${b.guests_count} гост. · ${SOURCE[b.source]}`,
           b.guest_phone ? [' · ', h('a', { href: `tel:${b.guest_phone}`, onclick: (e) => e.stopPropagation() }, b.guest_phone)] : null)),
       kind !== 'staying' && due > 0 && can('manager') ? h('span', { class: 'pill warn num' }, `к оплате ${fmtMoney(due)}`) : null,
@@ -648,7 +674,7 @@ async function viewToday(main) {
     list.length ? h('div', { class: 'day-list' }, list.map((b) => item(b, kind))) : h('div', { class: 'empty' }, emptyText));
   const load = async () => {
     try {
-      const d = await api('GET', '/api/today?' + qs({ date: day }));
+      const d = await api('GET', '/api/today?' + qs({ date: day, property_id: scope.value === 'current' ? state.propertyId : undefined }));
       content.innerHTML = '';
       content.append(
         h('p', { class: 'muted', style: { marginTop: '-6px' } }, `${fmtDate(day)}, ${WD[parseISO(day).getDay()].toLowerCase()}`),
@@ -663,6 +689,7 @@ async function viewToday(main) {
 
 // ---------- список броней ----------
 async function viewBookings(main) {
+  const scope = { value: 'current' };
   const f = {
     q: h('input', { class: 'input', placeholder: 'Имя, телефон или email', style: { width: '240px' } }),
     from: h('input', { class: 'input', type: 'date', value: addDays(todayISO(), -7), style: { width: '150px' } }),
@@ -675,15 +702,19 @@ async function viewBookings(main) {
   Object.values(f).forEach((el) => el.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); }));
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Брони'),
     h('button', { class: 'btn primary', onclick: () => bookingDrawer({}, load) }, icon('plus'), 'Бронь')),
-  h('div', { class: 'board-tools', style: { marginBottom: '14px' } }, f.q, f.from, '—', f.to, f.status), table);
+  h('div', { class: 'board-tools', style: { marginBottom: '14px' } }, f.q, f.from, '—', f.to, f.status, scopeSeg(scope, () => load())), table);
   async function load() {
     try {
-      const rows = await api('GET', '/api/bookings?' + qs({ q: f.q.value, from: f.from.value, to: f.to.value, status: f.status.value, property_id: state.propertyId }));
+      const rows = await api('GET', '/api/bookings?' + qs({
+        q: f.q.value, from: f.from.value, to: f.to.value, status: f.status.value,
+        property_id: scope.value === 'current' ? state.propertyId : undefined,
+      }));
       table.innerHTML = '';
       if (!rows.length) { table.append(h('div', { class: 'empty' }, h('h3', {}, 'Броней не найдено'), 'Измените период или поиск.')); return; }
       table.append(h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
-        h('thead', {}, h('tr', {}, ['Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Статус', 'Сумма', 'Оплачено'].map((t) => h('th', {}, t)))),
+        h('thead', {}, h('tr', {}, [scope.value === 'all' ? 'Объект' : null, 'Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Статус', 'Сумма', 'Оплачено'].filter(Boolean).map((t) => h('th', {}, t)))),
         h('tbody', {}, rows.map((b) => h('tr', { class: 'click', onclick: () => bookingDrawer(b, load) },
+          scope.value === 'all' ? h('td', { class: 'muted small' }, b.property_name) : null,
           h('td', { class: 'num' }, fmtShort(b.check_in)), h('td', { class: 'num' }, fmtShort(b.check_out)),
           h('td', { class: 'num' }, b.room_name),
           h('td', {}, b.status === 'blocked' ? h('span', { class: 'muted' }, 'Закрыто') : (b.guest_name || h('span', { class: 'muted' }, '—')),
@@ -836,7 +867,8 @@ async function viewChannels(main) {
   }
 
   async function load() {
-    const [data, conflicts] = await Promise.all([api('GET', '/api/channels'), api('GET', '/api/conflicts')]);
+    const [data, conflicts] = await Promise.all([
+      api('GET', '/api/channels?' + qs({ property_id: state.propertyId })), api('GET', '/api/conflicts')]);
     state.conflicts = conflicts.length;
     const level = levelOverride[channel] || data.levels[channel];
     content.innerHTML = '';
@@ -891,14 +923,15 @@ async function viewStats(main) {
     ['Следующие 30 дней', t, addDays(t, 30)], ['Прошедшие 30 дней', addDays(t, -30), t],
   ];
   let current = 0;
+  const scope = { value: 'current' };
   const content = h('div');
   const seg = h('div', { class: 'seg' });
   const drawSeg = () => { seg.innerHTML = ''; periods.forEach(([l], i) => seg.append(h('button', { class: i === current ? 'on' : '', onclick: () => { current = i; drawSeg(); load(); } }, l))); };
   drawSeg();
-  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Отчёты'), seg), content);
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Отчёты'), seg, scopeSeg(scope, () => load())), content);
   async function load() {
     const [, from, to] = periods[current];
-    const s = await api('GET', '/api/stats?' + qs({ from, to }));
+    const s = await api('GET', '/api/stats?' + qs({ from, to, property_id: scope.value === 'current' ? state.propertyId : undefined }));
     const maxRev = Math.max(1, ...s.by_source.map((x) => Number(x.revenue)));
     content.innerHTML = '';
     content.append(
@@ -922,6 +955,49 @@ async function viewStats(main) {
   load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
 }
 
+// ---------- добавление объекта ----------
+function addPropertyDrawer() {
+  const types = [{ name: 'Стандарт', count: 4, capacity: 2, base_price: 3000 }];
+  const g = {};
+  const list = h('div');
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  const drawTypes = () => {
+    list.innerHTML = '';
+    types.forEach((t, i) => {
+      const inp = (key, label, type = 'text') => h('label', { class: 'field' }, h('span', {}, label),
+        h('input', { class: 'input', type, value: t[key], min: type === 'number' ? 0 : null, oninput: (e) => { t[key] = e.target.value; } }));
+      list.append(h('div', { class: 'type-row' }, inp('name', 'Категория'), inp('count', 'Номеров', 'number'),
+        inp('capacity', 'Гостей', 'number'), inp('base_price', 'Цена за ночь', 'number'),
+        h('button', { class: 'btn icon ghost del', type: 'button', title: 'Убрать категорию', disabled: types.length === 1,
+          onclick: () => { types.splice(i, 1); drawTypes(); } }, icon('close'))));
+    });
+  };
+  drawTypes();
+  const save = h('button', { class: 'btn primary', onclick: async () => {
+    save.disabled = true; err.style.display = 'none';
+    try {
+      const prop = await api('POST', '/api/setup', {
+        name: g.name.value, address: g.address.value, phone: g.phone.value, first_number: g.first.value, room_types: types,
+      });
+      state.me = await api('GET', '/api/me');
+      closeDrawer();
+      switchProperty(prop.id);
+      toast('Объект добавлен');
+    } catch (ex) { err.textContent = ex.message; err.style.display = ''; } finally { save.disabled = false; }
+  } }, 'Создать объект');
+  openDrawer('Новый объект', h('div', {}, err,
+    h('label', { class: 'field' }, h('span', {}, 'Название'), g.name = h('input', { class: 'input', required: true })),
+    h('div', { class: 'row2' },
+      h('label', { class: 'field' }, h('span', {}, 'Адрес'), g.address = h('input', { class: 'input' })),
+      h('label', { class: 'field' }, h('span', {}, 'Телефон для гостей'), g.phone = h('input', { class: 'input', type: 'tel' }))),
+    h('h3', { style: { margin: '4px 0 10px' } }, 'Номера'),
+    list,
+    h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', margin: '4px 0' } },
+      h('button', { class: 'btn small', type: 'button', onclick: () => { types.push({ name: '', count: 1, capacity: 2, base_price: 3000 }); drawTypes(); } }, icon('plus'), 'Категория'),
+      h('label', { class: 'check small' }, 'Первый номер', g.first = h('input', { class: 'input', type: 'number', value: 101, style: { width: '90px', height: '32px' } })))),
+  [h('span', { class: 'spacer' }), save]);
+}
+
 // ---------- настройки ----------
 async function viewSettings(main) {
   const content = h('div', { class: 'stack' });
@@ -933,6 +1009,13 @@ async function viewSettings(main) {
     const f = {};
     const field = (key, label, attrs = {}) => h('label', { class: 'field' }, h('span', {}, label), f[key] = h('input', { class: 'input', value: prop[key] ?? '', ...attrs }));
     f.booking_enabled = h('input', { type: 'checkbox', checked: prop.booking_enabled });
+    content.append(h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', {}, 'Объекты'),
+        h('button', { class: 'btn small', onclick: addPropertyDrawer }, icon('plus'), 'Добавить объект')),
+      h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, h('tbody', {},
+        state.me.properties.map((p) => h('tr', { class: 'click', onclick: () => switchProperty(p.id) },
+          h('td', {}, p.id === state.propertyId ? h('b', {}, p.name) : p.name),
+          h('td', { style: { textAlign: 'right' } }, p.id === state.propertyId ? h('span', { class: 'pill ok' }, 'выбран') : null))))))));
     content.append(h('div', { class: 'grid-2' },
       h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '14px' } }, 'Объект'),
         field('name', 'Название'), field('address', 'Адрес'), field('phone', 'Телефон для гостей', { type: 'tel' }),
