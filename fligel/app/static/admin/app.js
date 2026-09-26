@@ -35,6 +35,9 @@ const ICONS = {
   close: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
   sync: '<path d="M20 11a8 8 0 0 0-14.3-4.9L4 8M4 4v4h4M4 13a8 8 0 0 0 14.3 4.9L20 16M20 20v-4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   copy: '<rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V5a1 1 0 0 1 1-1h10" fill="none" stroke="currentColor" stroke-width="1.8"/>',
+  expenses: '<rect x="2.5" y="6" width="19" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M2.5 10h19" stroke="currentColor" stroke-width="1.7"/><circle cx="7" cy="14.5" r="1.4" fill="currentColor"/>',
+  trash: '<path d="M4 7h16M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  download: '<path d="M12 3v13M7 11l5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
 };
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
 
@@ -113,11 +116,12 @@ const ROUTES = {
   bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager' },
   rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager' },
   channels: { title: 'Площадки', icon: 'channels', view: viewChannels, role: 'manager' },
+  expenses: { title: 'Расходы', icon: 'expenses', view: viewExpenses, role: 'manager' },
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
 };
 const RANK = { housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['board', 'today', 'bookings', 'channels', 'settings', 'rates', 'stats'];
+const MOBILE_ORDER = ['board', 'today', 'bookings', 'expenses', 'channels', 'settings', 'rates', 'stats'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
 const currentRoute = () => { const r = location.hash.replace(/^#\/?/, '').split('?')[0] || 'board'; return ROUTES[r] ? r : 'board'; };
 
@@ -951,6 +955,259 @@ async function viewStats(main) {
             h('td', { style: { width: '35%' } }, h('div', { class: 'bar-h' }, h('i', { style: { width: `${(Number(x.revenue) / maxRev) * 100}%`, background: `var(--src-${x.source})` } }))))))) :
           h('div', { class: 'empty' }, 'За этот период броней нет')),
       h('p', { class: 'muted small' }, 'Выручка считается по ночам внутри периода: бронь, которая начинается в одном месяце и заканчивается в другом, делится пропорционально.'));
+  }
+  load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
+}
+
+// ---------- расходы ----------
+async function downloadCsv(path, filename) {
+  try {
+    const res = await fetch(path, { headers: { Authorization: `Bearer ${store.get('token')}` } });
+    if (!res.ok) throw new Error('Не удалось скачать файл');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = h('a', { href: url, download: filename });
+    document.body.append(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch (ex) { toast(ex.message, true); }
+}
+
+function categoryDrawer(cat) {
+  const g = {};
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  const COLORS = ['#23767E', '#4A5A6A', '#6E4A93', '#B4562E', '#B7791F', '#2F5D50', '#5E6B5A', '#7A3418', '#8A5A12', '#69755F'];
+  let color = cat.color || COLORS[0];
+  const swatches = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' } });
+  const drawSwatches = () => {
+    swatches.innerHTML = '';
+    COLORS.forEach((c) => swatches.append(h('button', {
+      type: 'button', onclick: () => { color = c; drawSwatches(); },
+      style: { width: '26px', height: '26px', borderRadius: '7px', background: c, border: color === c ? '2px solid var(--ink)' : '2px solid transparent', cursor: 'pointer' },
+    })));
+  };
+  drawSwatches();
+  const save = h('button', { class: 'btn primary', onclick: async () => {
+    save.disabled = true; err.style.display = 'none';
+    try {
+      const payload = { name: g.name.value, color };
+      if (cat.id) await api('PATCH', `/api/expense-categories/${cat.id}`, payload);
+      else await api('POST', '/api/expense-categories', payload);
+      closeDrawer(); toast('Сохранено'); cat.onSaved?.();
+    } catch (ex) { err.textContent = ex.message; err.style.display = ''; } finally { save.disabled = false; }
+  } }, 'Сохранить');
+  const foot = [h('span', { class: 'spacer' }), save];
+  if (cat.id) {
+    foot.unshift(h('button', { class: 'btn ghost danger', onclick: async () => {
+      if (!confirm(`Архивировать категорию «${cat.name}»? Старые расходы останутся, но выбрать её для новых будет нельзя.`)) return;
+      try { await api('PATCH', `/api/expense-categories/${cat.id}`, { archived: true }); closeDrawer(); toast('Категория архивирована'); cat.onSaved?.(); }
+      catch (ex) { toast(ex.message, true); }
+    } }, 'Архивировать'));
+  }
+  openDrawer(cat.id ? 'Категория расходов' : 'Новая категория', h('div', {}, err,
+    h('label', { class: 'field' }, h('span', {}, 'Название'), g.name = h('input', { class: 'input', value: cat.name || '', required: true })),
+    h('div', { class: 'field' }, h('span', {}, 'Цвет'), swatches)), foot);
+}
+
+function recurringDrawer(cats, rule, propertyOptions, onSaved) {
+  const g = {};
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  g.category_id = h('select', { class: 'input' }, cats.map((c) => h('option', { value: c.id, selected: c.id === rule.category_id }, c.name)));
+  g.amount = h('input', { class: 'input', type: 'number', min: 0, value: rule.amount ? Math.round(rule.amount) : '' });
+  g.day_of_month = h('input', { class: 'input', type: 'number', min: 1, max: 28, value: rule.day_of_month || 1 });
+  g.property_id = h('select', { class: 'input' }, h('option', { value: '' }, 'Общий — по всем объектам'),
+    propertyOptions.map((p) => h('option', { value: p.id, selected: p.id === rule.property_id }, p.name)));
+  g.comment = h('input', { class: 'input', value: rule.comment || '', placeholder: 'Например: аренда помещения' });
+  const save = h('button', { class: 'btn primary', onclick: async () => {
+    save.disabled = true; err.style.display = 'none';
+    try {
+      const payload = {
+        category_id: g.category_id.value, amount: g.amount.value, day_of_month: g.day_of_month.value,
+        property_id: g.property_id.value || null, comment: g.comment.value,
+      };
+      if (rule.id) await api('PATCH', `/api/expense-recurring/${rule.id}`, payload);
+      else await api('POST', '/api/expense-recurring', payload);
+      closeDrawer(); toast('Сохранено'); onSaved();
+    } catch (ex) { err.textContent = ex.message; err.style.display = ''; } finally { save.disabled = false; }
+  } }, 'Сохранить');
+  const foot = [h('span', { class: 'spacer' }), save];
+  if (rule.id) {
+    foot.unshift(h('button', { class: 'btn ghost danger', onclick: async () => {
+      if (!confirm('Удалить повторяющийся расход? Уже созданные записи расходов останутся.')) return;
+      try { await api('DELETE', `/api/expense-recurring/${rule.id}`); closeDrawer(); toast('Удалено'); onSaved(); }
+      catch (ex) { toast(ex.message, true); }
+    } }, 'Удалить'));
+  }
+  openDrawer(rule.id ? 'Повторяющийся расход' : 'Новый повторяющийся расход', h('div', {}, err,
+    h('label', { class: 'field' }, h('span', {}, 'Категория'), g.category_id),
+    h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Сумма, ₽'), g.amount),
+      h('label', { class: 'field' }, h('span', {}, 'Число месяца (1—28)'), g.day_of_month)),
+    h('label', { class: 'field' }, h('span', {}, 'Объект'), g.property_id),
+    h('label', { class: 'field' }, h('span', {}, 'Комментарий'), g.comment),
+    h('p', { class: 'muted small' }, 'В нужный день месяца расход создастся сам — в том же фоновом режиме, что и синхронизация площадок.')),
+  foot);
+}
+
+function expenseDrawer(cats, propertyOptions, exp, onSaved) {
+  const readOnly = !can('manager');
+  const g = {};
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  g.date = h('input', { class: 'input', type: 'date', value: exp.date || todayISO(), disabled: readOnly });
+  g.amount = h('input', { class: 'input', type: 'number', min: 0, value: exp.amount != null ? Math.round(exp.amount) : '', disabled: readOnly });
+  g.category_id = h('select', { class: 'input', disabled: readOnly }, cats.map((c) => h('option', { value: c.id, selected: c.id === exp.category_id }, c.name)));
+  g.property_id = h('select', { class: 'input', disabled: readOnly }, h('option', { value: '' }, 'Общий — по всем объектам'),
+    propertyOptions.map((p) => h('option', { value: p.id, selected: p.id === exp.property_id }, p.name)));
+  g.comment = h('textarea', { class: 'input', disabled: readOnly }, exp.comment || '');
+  const save = h('button', { class: 'btn primary', onclick: async () => {
+    save.disabled = true; err.style.display = 'none';
+    try {
+      const payload = { date: g.date.value, amount: g.amount.value, category_id: g.category_id.value,
+        property_id: g.property_id.value || null, comment: g.comment.value };
+      if (exp.id) await api('PATCH', `/api/expenses/${exp.id}`, payload);
+      else await api('POST', '/api/expenses', payload);
+      closeDrawer(); toast(exp.id ? 'Сохранено' : 'Расход добавлен'); onSaved();
+    } catch (ex) { err.textContent = ex.message; err.style.display = ''; } finally { save.disabled = false; }
+  } }, exp.id ? 'Сохранить' : 'Добавить');
+  const foot = readOnly ? null : [h('span', { class: 'spacer' }), save];
+  if (exp.id && can('owner')) {
+    foot.unshift(h('button', { class: 'btn ghost danger', onclick: async () => {
+      if (!confirm('Удалить расход?')) return;
+      try { await api('DELETE', `/api/expenses/${exp.id}`); closeDrawer(); toast('Удалено'); onSaved(); }
+      catch (ex) { toast(ex.message, true); }
+    } }, 'Удалить'));
+  }
+  openDrawer(exp.id ? 'Расход' : 'Новый расход', h('div', {}, err,
+    h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Дата'), g.date),
+      h('label', { class: 'field' }, h('span', {}, 'Сумма, ₽'), g.amount)),
+    h('label', { class: 'field' }, h('span', {}, 'Категория'), g.category_id),
+    h('label', { class: 'field' }, h('span', {}, 'Объект'), g.property_id),
+    h('label', { class: 'field' }, h('span', {}, 'Комментарий'), g.comment)),
+  foot);
+}
+
+async function viewExpenses(main) {
+  const filters = { from: addDays(todayISO(), -30), to: addDays(todayISO(), 1), property_id: state.propertyId, category_id: '' };
+  let cats = [];
+  let quickCat = null;
+  const content = h('div', { class: 'stack' });
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Расходы'),
+    h('button', { class: 'btn', onclick: () => downloadCsv('/api/expenses/export.csv?' + qs(filters), `expenses_${filters.from}_${filters.to}.csv`) },
+      icon('download'), 'Выгрузить CSV')), content);
+
+  async function load() {
+    const [catsData, data] = await Promise.all([
+      api('GET', '/api/expense-categories'), api('GET', '/api/expenses?' + qs(filters))]);
+    cats = catsData;
+    content.innerHTML = '';
+
+    // быстрое добавление: сумма → категория → сохранить
+    const amountInp = h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Сумма, ₽', style: { width: '160px' } });
+    const dateInp = h('input', { class: 'input', type: 'date', value: todayISO(), style: { width: '150px' } });
+    const chips = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
+    const quickSave = h('button', { class: 'btn primary', disabled: true, onclick: async () => {
+      quickSave.disabled = true;
+      try {
+        await api('POST', '/api/expenses', {
+          amount: amountInp.value, category_id: quickCat, date: dateInp.value,
+          property_id: filters.property_id && filters.property_id !== 'none' ? filters.property_id : null,
+        });
+        amountInp.value = ''; quickCat = null; drawChips(); toast('Расход добавлен'); load();
+      } catch (ex) { toast(ex.message, true); } finally { quickSave.disabled = false; }
+    } }, 'Сохранить');
+    const drawChips = () => {
+      chips.innerHTML = '';
+      cats.forEach((c) => chips.append(h('button', {
+        type: 'button', class: 'btn small' + (quickCat === c.id ? ' primary' : ''),
+        style: quickCat === c.id ? {} : { borderColor: c.color, color: c.color },
+        onclick: () => { quickCat = c.id; drawChips(); quickSave.disabled = false; },
+      }, h('i', { class: 'dot', style: { background: c.color } }), c.name)));
+    };
+    drawChips();
+    if (can('manager')) {
+      content.append(h('div', { class: 'card card-pad' },
+        h('h3', { style: { marginBottom: '10px' } }, 'Быстрое добавление'),
+        h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' } }, amountInp, dateInp, quickSave),
+        chips));
+    }
+
+    // фильтры
+    const propSel = h('select', { class: 'input', style: { width: '190px' } },
+      h('option', { value: '', selected: !filters.property_id }, 'Все объекты'),
+      state.me.properties.map((p) => h('option', { value: p.id, selected: p.id === filters.property_id }, p.name)),
+      h('option', { value: 'none', selected: filters.property_id === 'none' }, 'Общие (без объекта)'));
+    propSel.addEventListener('change', () => { filters.property_id = propSel.value; load(); });
+    const catSel = h('select', { class: 'input', style: { width: '190px' } }, h('option', { value: '' }, 'Все категории'),
+      cats.map((c) => h('option', { value: c.id, selected: c.id === filters.category_id }, c.name)));
+    catSel.addEventListener('change', () => { filters.category_id = catSel.value; load(); });
+    const fromInp = h('input', { class: 'input', type: 'date', value: filters.from, style: { width: '150px' } });
+    const toInp = h('input', { class: 'input', type: 'date', value: filters.to, style: { width: '150px' } });
+    fromInp.addEventListener('change', () => { filters.from = fromInp.value; load(); });
+    toInp.addEventListener('change', () => { filters.to = toInp.value; load(); });
+    content.append(h('div', { class: 'board-tools' }, fromInp, '—', toInp, propSel, catSel,
+      can('manager') ? h('button', { class: 'btn primary', style: { marginLeft: 'auto' },
+        onclick: () => expenseDrawer(cats, state.me.properties, {}, load) }, icon('plus'), 'Расход') : null));
+
+    // список
+    const table = h('div', { class: 'card' });
+    if (!data.rows.length) {
+      table.append(h('div', { class: 'empty' }, h('h3', {}, 'Расходов не найдено'), 'Измените период или фильтры.'));
+    } else {
+      table.append(h('div', { class: 'card-head' }, h('h2', {}, 'Расходы за период'), h('b', {}, fmtMoney(data.total))),
+        h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
+          h('thead', {}, h('tr', {}, ['Дата', 'Категория', 'Объект', 'Сумма', 'Комментарий', 'Добавил'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, data.rows.map((r) => h('tr', { class: 'click', onclick: () => expenseDrawer(cats, state.me.properties, r, load) },
+            h('td', { class: 'num' }, fmtShort(r.date)),
+            h('td', {}, h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, h('i', { class: 'dot', style: { background: r.category_color } }), r.category_name)),
+            h('td', { class: 'muted small' }, r.property_name || 'Общий', r.room_name ? ` · ${r.room_name}` : ''),
+            h('td', { class: 'num' }, fmtMoney(r.amount)),
+            h('td', { class: 'muted small' }, r.comment),
+            h('td', { class: 'muted small' }, r.created_by_name || '—')))))));
+    }
+    content.append(table);
+
+    // итоги по категориям
+    if (data.by_category.length) {
+      const maxAmt = Math.max(1, ...data.by_category.map((x) => Number(x.amount)));
+      const catRow = (x) => {
+        const dot = h('i', { class: 'dot', style: { background: x.category_color } });
+        const label = h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, dot, x.category_name);
+        const barFill = h('i', { style: { width: `${(Number(x.amount) / maxAmt) * 100}%`, background: x.category_color } });
+        const bar = h('div', { class: 'bar-h' }, barFill);
+        return h('tr', {}, h('td', {}, label), h('td', { class: 'num' }, x.count),
+          h('td', { class: 'num' }, fmtMoney(x.amount)), h('td', { style: { width: '35%' } }, bar));
+      };
+      const rows = data.by_category.map(catRow);
+      const tbody = h('tbody', {}, rows);
+      const table = h('table', { class: 'list' }, tbody);
+      const head = h('div', { class: 'card-head' }, h('h2', {}, 'По категориям'));
+      content.append(h('div', { class: 'card' }, head, table));
+    }
+
+    // категории (владелец управляет, остальные видят список)
+    const catsCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'Категории расходов'),
+      can('owner') ? h('button', { class: 'btn small', onclick: () => categoryDrawer({ onSaved: load }) }, icon('plus'), 'Категория') : null),
+      h('div', { class: 'card-pad', style: { display: 'flex', gap: '8px', flexWrap: 'wrap', paddingTop: '10px' } },
+        cats.map((c) => h('button', { class: 'btn small' + (can('owner') ? '' : ' ghost'), style: { borderColor: c.color, color: c.color },
+          onclick: () => can('owner') && categoryDrawer({ ...c, onSaved: load }) }, h('i', { class: 'dot', style: { background: c.color } }), c.name))));
+    content.append(catsCard);
+
+    // повторяющиеся расходы
+    {
+      const recurring = await api('GET', '/api/expense-recurring');
+      const recCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'Повторяющиеся расходы'),
+        can('owner') ? h('button', { class: 'btn small', onclick: () => recurringDrawer(cats, {}, state.me.properties, load) }, icon('plus'), 'Добавить') : null));
+      if (!recurring.length) {
+        recCard.append(h('div', { class: 'empty' }, 'Пока нет ни одного шаблона. Например: аренда 1-го числа или интернет 10-го.'));
+      } else {
+        recCard.append(h('table', { class: 'list' }, h('tbody', {}, recurring.map((r) => h('tr', { class: can('owner') ? 'click' : '', onclick: () => can('owner') && recurringDrawer(cats, r, state.me.properties, load) },
+          h('td', {}, h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, h('i', { class: 'dot', style: { background: r.category_color } }), r.category_name),
+            !r.active ? h('span', { class: 'pill none', style: { marginLeft: '8px' } }, 'выключен') : null),
+          h('td', { class: 'muted small' }, r.property_name || 'Общий'),
+          h('td', { class: 'num' }, fmtMoney(r.amount)),
+          h('td', { class: 'muted small' }, `${r.day_of_month}-го числа`),
+          h('td', { class: 'muted small' }, r.comment))))));
+      }
+      content.append(recCard);
+    }
   }
   load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
 }

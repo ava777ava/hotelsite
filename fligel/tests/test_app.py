@@ -18,7 +18,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 import psycopg  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from app import db, ical, sync  # noqa: E402
+from app import db, expenses, ical, sync  # noqa: E402
 from app.main import app  # noqa: E402
 
 
@@ -244,6 +244,141 @@ class MultiPropertyTests(Base):
         bookings1 = self.client.get("/api/bookings", headers=ctx["h"],
                                      params={"from": d(0), "property_id": ctx["prop"]["id"]}).json()
         self.assertEqual(len(bookings1), 1)
+
+
+class ExpensesTests(Base):
+    def test_default_categories_created_on_register(self):
+        ctx = self.register("exp1@example.ru")
+        cats = self.client.get("/api/expense-categories", headers=ctx["h"]).json()
+        self.assertEqual(len(cats), 10)
+        self.assertIn("Прочее", [c["name"] for c in cats])
+
+    def test_manager_can_add_but_not_manage_categories(self):
+        ctx = self.register("exp2@example.ru")
+        self.client.post("/api/users", headers=ctx["h"], json={
+            "name": "Мария", "email": "mgr2@example.ru", "role": "manager", "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": "mgr2@example.ru", "password": "password123"})
+        mh = {"Authorization": f"Bearer {tok.json()['token']}"}
+        cats = self.client.get("/api/expense-categories", headers=mh).json()
+        cat_id = cats[0]["id"]
+        r = self.client.post("/api/expenses", headers=mh, json={
+            "category_id": cat_id, "amount": 1500, "date": d(0), "comment": "Стирка полотенец"})
+        self.assertEqual(r.status_code, 200, r.text)
+        exp_id = r.json()["id"]
+        # категориями управляет только владелец
+        r = self.client.post("/api/expense-categories", headers=mh, json={"name": "Новая"})
+        self.assertEqual(r.status_code, 403)
+        # удаляет расход тоже только владелец
+        r = self.client.delete(f"/api/expenses/{exp_id}", headers=mh)
+        self.assertEqual(r.status_code, 403)
+        r = self.client.delete(f"/api/expenses/{exp_id}", headers=ctx["h"])
+        self.assertEqual(r.status_code, 200, r.text)
+
+    def test_housekeeper_has_no_access(self):
+        ctx = self.register("exp3@example.ru")
+        self.client.post("/api/users", headers=ctx["h"], json={
+            "name": "Оля", "email": "maid3@example.ru", "role": "housekeeper", "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": "maid3@example.ru", "password": "password123"})
+        hh = {"Authorization": f"Bearer {tok.json()['token']}"}
+        self.assertEqual(self.client.get("/api/expenses", headers=hh).status_code, 403)
+        self.assertEqual(self.client.get("/api/expense-categories", headers=hh).status_code, 403)
+
+    def test_shared_and_property_expenses_with_totals_and_filters(self):
+        ctx = self.register("exp4@example.ru")
+        cats = self.client.get("/api/expense-categories", headers=ctx["h"]).json()
+        cleaning = next(c for c in cats if c["name"] == "Уборка и прачечная")
+        utilities = next(c for c in cats if c["name"] == "Коммунальные услуги")
+        self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": cleaning["id"], "amount": 1000, "date": d(0), "property_id": ctx["prop"]["id"]})
+        self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": cleaning["id"], "amount": 500, "date": d(0), "property_id": ctx["prop"]["id"]})
+        self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": utilities["id"], "amount": 3000, "date": d(0)})  # общий расход, без объекта
+        s = self.client.get("/api/expenses", headers=ctx["h"], params={"from": d(-1), "to": d(1)}).json()
+        self.assertEqual(len(s["rows"]), 3)
+        self.assertEqual(float(s["total"]), 4500)
+        by_cat = {b["category_name"]: float(b["amount"]) for b in s["by_category"]}
+        self.assertEqual(by_cat["Уборка и прачечная"], 1500)
+        self.assertEqual(by_cat["Коммунальные услуги"], 3000)
+        only_shared = self.client.get("/api/expenses", headers=ctx["h"],
+                                       params={"from": d(-1), "to": d(1), "property_id": "none"}).json()
+        self.assertEqual(len(only_shared["rows"]), 1)
+        only_prop = self.client.get("/api/expenses", headers=ctx["h"], params={
+            "from": d(-1), "to": d(1), "property_id": ctx["prop"]["id"]}).json()
+        self.assertEqual(len(only_prop["rows"]), 2)
+        by_category_filter = self.client.get("/api/expenses", headers=ctx["h"], params={
+            "from": d(-1), "to": d(1), "category_id": cleaning["id"]}).json()
+        self.assertEqual(len(by_category_filter["rows"]), 2)
+
+    def test_room_expense_inherits_property_and_rejects_mismatch(self):
+        ctx = self.register("exp5@example.ru")
+        p2 = self.client.post("/api/setup", headers=ctx["h"], json={
+            "name": "Второй объект", "room_types": [{"name": "Студия", "count": 1, "base_price": 1000}]}).json()
+        cats = self.client.get("/api/expense-categories", headers=ctx["h"]).json()
+        cat = cats[0]["id"]
+        other_room = self.client.get(f"/api/properties/{p2['id']}", headers=ctx["h"]).json()["room_types"][0]["rooms"][0]
+        r = self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": cat, "amount": 100, "room_id": ctx["rooms"][0]["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["property_id"], ctx["prop"]["id"])
+        r = self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": cat, "amount": 100, "room_id": ctx["rooms"][0]["id"], "property_id": p2["id"]})
+        self.assertEqual(r.status_code, 422)
+
+    def test_csv_export_has_bom_and_rows(self):
+        ctx = self.register("exp6@example.ru")
+        cat = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]["id"]
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat, "amount": 777, "date": d(0)})
+        r = self.client.get("/api/expenses/export.csv", headers=ctx["h"], params={"from": d(-1), "to": d(1)})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.text.startswith("﻿"))
+        self.assertIn("777", r.text)
+
+    def test_tenant_isolation(self):
+        a = self.register("exp7a@example.ru")
+        b = self.register("exp7b@example.ru")
+        cat = self.client.get("/api/expense-categories", headers=a["h"]).json()[0]["id"]
+        exp = self.client.post("/api/expenses", headers=a["h"], json={"category_id": cat, "amount": 200}).json()
+        self.assertEqual(self.client.get("/api/expenses", headers=b["h"]).json()["rows"], [])
+        self.assertEqual(self.client.delete(f"/api/expenses/{exp['id']}", headers=b["h"]).status_code, 404)
+        cat_b = self.client.get("/api/expense-categories", headers=b["h"]).json()[0]["id"]
+        r = self.client.post("/api/expenses", headers=b["h"], json={"category_id": cat, "amount": 1})
+        self.assertEqual(r.status_code, 404)  # категория другого аккаунта
+        self.assertNotEqual(cat, cat_b)
+
+    def test_recurring_rule_generates_without_duplicates(self):
+        ctx = self.register("exp8@example.ru")
+        cat = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]["id"]
+        r = self.client.post("/api/expense-recurring", headers=ctx["h"], json={
+            "category_id": cat, "amount": 25000, "day_of_month": 1, "comment": "Аренда"})
+        self.assertEqual(r.status_code, 200, r.text)
+        today = date.today()
+        created = expenses.generate_due_expenses(today)
+        self.assertEqual(created, 1 if today.day >= 1 else 0)
+        created_again = expenses.generate_due_expenses(today)
+        self.assertEqual(created_again, 0)  # без дублей при повторном запуске
+        rows = self.client.get("/api/expenses", headers=ctx["h"], params={
+            "from": today.replace(day=1).isoformat(), "to": d(1)}).json()["rows"]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["recurring_rule_id"], r.json()["id"])
+        # владелец может отключить шаблон
+        r2 = self.client.patch(f"/api/expense-recurring/{r.json()['id']}", headers=ctx["h"], json={"active": False})
+        self.assertEqual(r2.status_code, 200)
+        self.assertFalse(r2.json()["active"])
+
+    def test_archive_category_keeps_history_but_blocks_new_expenses(self):
+        ctx = self.register("exp9@example.ru")
+        cats = self.client.get("/api/expense-categories", headers=ctx["h"]).json()
+        cat = cats[0]
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat["id"], "amount": 50})
+        r = self.client.patch(f"/api/expense-categories/{cat['id']}", headers=ctx["h"], json={"archived": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        active = self.client.get("/api/expense-categories", headers=ctx["h"]).json()
+        self.assertNotIn(cat["id"], [c["id"] for c in active])
+        r = self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat["id"], "amount": 10})
+        self.assertEqual(r.status_code, 422)
+        rows = self.client.get("/api/expenses", headers=ctx["h"], params={"from": d(-1), "to": d(1)}).json()["rows"]
+        self.assertEqual(len(rows), 1)  # старый расход остался
 
 
 class ICalTests(unittest.TestCase):

@@ -13,7 +13,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from . import config, db
-from .api import account, bookings, channels, public
+from .api import account, bookings, channels, expenses, public
 from .migrate import migrate
 from .sync import Scheduler
 from .util import Json
@@ -63,6 +63,7 @@ routes = [
     *account.routes,
     *bookings.routes,
     *channels.routes,
+    *expenses.routes,
     *public.routes,
     Mount("/static", StaticFiles(directory=STATIC), name="static"),
 ]

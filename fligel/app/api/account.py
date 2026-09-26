@@ -4,6 +4,7 @@ from starlette.routing import Route
 from ..auth import hash_password, make_token, new_ical_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
+from ..expenses import create_default_categories
 from ..util import opt_str, parse_int, parse_money, parse_uuid, req_str, slugify
 from .base import Ctx, api
 
@@ -40,6 +41,7 @@ def register(c: Ctx):
             " VALUES (%s, %s, %s, %s, 'owner') RETURNING id",
             (acc["id"], email, hash_password(password), name),
         )
+        create_default_categories(conn, acc["id"])
     return {"token": make_token(user["id"], acc["id"], "owner")}
 
 

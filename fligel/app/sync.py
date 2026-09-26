@@ -20,6 +20,7 @@ import psycopg
 
 from . import config, ical
 from .db import all_, one, run, tx
+from .expenses import generate_due_expenses
 
 log = logging.getLogger("fligel.sync")
 
@@ -269,6 +270,7 @@ def expire_holds() -> int:
 
 def run_once() -> int:
     expire_holds()
+    generate_due_expenses()
     ids = claim_due_feeds()
     for fid in ids:
         try:

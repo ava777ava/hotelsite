@@ -4,7 +4,8 @@ import random
 from datetime import date, timedelta
 
 from .auth import hash_password, new_ical_token
-from .db import one, run, tx
+from .db import all_, one, run, tx
+from .expenses import create_default_categories
 from .migrate import migrate
 
 GUESTS = ["Анна Ковалёва", "Игорь Петров", "Семья Смирновых", "Ольга Белова", "Дмитрий Орлов", "Марина Фролова",
@@ -99,6 +100,50 @@ def main() -> None:
                      f"+7 9{rnd.randint(10, 99)} {rnd.randint(100, 999)}-{rnd.randint(10, 99)}-{rnd.randint(10, 99)}",
                      rnd.choice([1, 2]), total, total if status == "confirmed" and rnd.random() < 0.6 else 0))
                 d += timedelta(days=nights)
+
+        # расходы за последние 6 месяцев по разным категориям
+        create_default_categories(conn, acc)
+        cats = {c["name"]: c["id"] for c in all_(conn, "SELECT id, name FROM expense_categories WHERE account_id = %s",
+                                                 (acc,))}
+        month_start = today.replace(day=1)
+        for i in range(6):
+            m = month_start
+            for _ in range(i):
+                m = (m - timedelta(days=1)).replace(day=1)
+            for prop_id, base_cleaning, base_utilities in ((prop, 9000, 14000), (prop2, 4000, 6000)):
+                run(conn, "INSERT INTO expenses (account_id, property_id, category_id, date, amount, comment)"
+                          " VALUES (%s, %s, %s, %s, %s, %s)",
+                    (acc, prop_id, cats["Уборка и прачечная"], m + timedelta(days=rnd.randint(1, 5)),
+                     base_cleaning + rnd.randint(-1000, 2000), "Клининг номеров"))
+                run(conn, "INSERT INTO expenses (account_id, property_id, category_id, date, amount, comment)"
+                          " VALUES (%s, %s, %s, %s, %s, %s)",
+                    (acc, prop_id, cats["Коммунальные услуги"], m + timedelta(days=rnd.randint(5, 10)),
+                     base_utilities + rnd.randint(-2000, 3000), "Свет, вода, отопление"))
+                run(conn, "INSERT INTO expenses (account_id, property_id, category_id, date, amount, comment)"
+                          " VALUES (%s, %s, %s, %s, %s, %s)",
+                    (acc, prop_id, cats["Комиссии площадок"], m + timedelta(days=rnd.randint(10, 20)),
+                     rnd.randint(3000, 9000), "Комиссия Авито/Яндекс за месяц"))
+                if rnd.random() < 0.4:
+                    run(conn, "INSERT INTO expenses (account_id, property_id, category_id, date, amount, comment)"
+                              " VALUES (%s, %s, %s, %s, %s, %s)",
+                        (acc, prop_id, cats["Ремонт и обслуживание"], m + timedelta(days=rnd.randint(1, 25)),
+                         rnd.randint(2000, 15000), "Мелкий ремонт"))
+            # общие расходы аккаунта, без привязки к объекту
+            run(conn, "INSERT INTO expenses (account_id, property_id, category_id, date, amount, comment)"
+                      " VALUES (%s, NULL, %s, %s, %s, %s)",
+                (acc, cats["Зарплата"], m + timedelta(days=3), 65000, "Зарплата администратора"))
+            run(conn, "INSERT INTO expenses (account_id, property_id, category_id, date, amount, comment)"
+                      " VALUES (%s, NULL, %s, %s, %s, %s)",
+                (acc, cats["Аренда/ипотека"], m + timedelta(days=1), 45000, "Аренда офиса"))
+            if rnd.random() < 0.5:
+                run(conn, "INSERT INTO expenses (account_id, property_id, category_id, date, amount, comment)"
+                          " VALUES (%s, NULL, %s, %s, %s, %s)",
+                    (acc, cats["Реклама"], m + timedelta(days=rnd.randint(1, 28)), rnd.randint(3000, 12000),
+                     "Продвижение объявлений"))
+        # шаблон повторяющегося расхода — аренда 1-го числа каждого месяца
+        run(conn, "INSERT INTO expense_recurring_rules (account_id, category_id, amount, day_of_month, comment)"
+                  " VALUES (%s, %s, %s, %s, %s)",
+            (acc, cats["Аренда/ипотека"], 45000, 1, "Аренда офиса (автоматически)"))
     print("Готово: войдите как demo@fligel.ru / demo12345, страница бронирования — /book/demo")
 
 
