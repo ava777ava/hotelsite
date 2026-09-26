@@ -19,6 +19,7 @@ import psycopg  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
 from app import db, expenses, ical, sync  # noqa: E402
+from app.api.reports import _shift_years  # noqa: E402
 from app.main import app  # noqa: E402
 
 
@@ -105,7 +106,7 @@ class AccountTests(Base):
         r = self.client.post("/api/bookings", headers=h, json={
             "room_id": ctx["rooms"][0]["id"], "check_in": d(1), "check_out": d(2)})
         self.assertEqual(r.status_code, 403)
-        self.assertEqual(self.client.get("/api/stats", headers=h).status_code, 403)
+        self.assertEqual(self.client.get("/api/reports", headers=h).status_code, 403)
 
 
 class BookingTests(Base):
@@ -181,7 +182,7 @@ class BookingTests(Base):
         ctx = self.register("st@example.ru", rooms=(("Стандарт", 2, 1000),))
         self.book(ctx, ctx["rooms"][0], d(0), d(5), total_price=5000)
         self.book(ctx, ctx["rooms"][1], d(0), d(10), total_price=10000, status="blocked")
-        s = self.client.get("/api/stats", headers=ctx["h"], params={"from": d(0), "days": 10}).json()
+        s = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(10)}).json()["totals"]
         self.assertEqual(s["room_nights"], 20)
         self.assertEqual(s["sold_nights"], 5)
         self.assertEqual(s["occupancy"], 25.0)
@@ -232,11 +233,11 @@ class MultiPropertyTests(Base):
         today_all = self.client.get("/api/today", headers=ctx["h"]).json()
         self.assertEqual(len(today_all["arrivals"]), 2)
         self.assertEqual({r["property_name"] for r in today_all["arrivals"]}, {ctx["prop"]["name"], p2["prop"]["name"]})
-        stats1 = self.client.get("/api/stats", headers=ctx["h"],
-                                  params={"property_id": ctx["prop"]["id"], "from": d(0), "days": 2}).json()
+        stats1 = self.client.get("/api/reports", headers=ctx["h"],
+                                  params={"property_id": ctx["prop"]["id"], "from": d(0), "to": d(2)}).json()["totals"]
         self.assertEqual(stats1["rooms"], 1)
         self.assertEqual(float(stats1["revenue"]), 6000)
-        stats_all = self.client.get("/api/stats", headers=ctx["h"], params={"from": d(0), "days": 2}).json()
+        stats_all = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(2)}).json()["totals"]
         self.assertEqual(stats_all["rooms"], 2)
         self.assertEqual(float(stats_all["revenue"]), 10000)
         bookings_all = self.client.get("/api/bookings", headers=ctx["h"], params={"from": d(0)}).json()
@@ -379,6 +380,96 @@ class ExpensesTests(Base):
         self.assertEqual(r.status_code, 422)
         rows = self.client.get("/api/expenses", headers=ctx["h"], params={"from": d(-1), "to": d(1)}).json()["rows"]
         self.assertEqual(len(rows), 1)  # старый расход остался
+
+
+class ReportsTests(Base):
+    def test_revenue_expenses_profit_margin(self):
+        ctx = self.register("rep1@example.ru", rooms=(("Стандарт", 2, 1000),))
+        self.book(ctx, ctx["rooms"][0], d(0), d(5), total_price=5000)
+        cats = self.client.get("/api/expense-categories", headers=ctx["h"]).json()
+        self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": cats[0]["id"], "amount": 2000, "date": d(1), "property_id": ctx["prop"]["id"]})
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cats[0]["id"], "amount": 1000, "date": d(1)})
+        r = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(5)}).json()
+        t = r["totals"]
+        self.assertEqual(float(t["revenue"]), 5000)
+        self.assertEqual(float(t["expenses"]), 3000)  # общий расход при одном объекте достаётся ему целиком
+        self.assertEqual(float(t["profit"]), 2000)
+        self.assertEqual(t["margin"], 40.0)
+        self.assertEqual(r["share_note"][:7], "Общие р")
+
+    def test_shared_expense_split_by_room_count(self):
+        ctx = self.register("rep2@example.ru", rooms=(("Стандарт", 2, 1000),))
+        p2 = self.client.post("/api/setup", headers=ctx["h"], json={
+            "name": "Второй объект", "room_types": [{"name": "Студия", "count": 1, "base_price": 1000}]}).json()
+        cat = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]["id"]
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat, "amount": 300, "date": d(1)})
+        ra = self.client.get("/api/reports", headers=ctx["h"],
+                             params={"property_id": ctx["prop"]["id"], "from": d(0), "to": d(3)}).json()
+        rb = self.client.get("/api/reports", headers=ctx["h"],
+                             params={"property_id": p2["id"], "from": d(0), "to": d(3)}).json()
+        r_all = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(3)}).json()
+        self.assertAlmostEqual(float(ra["totals"]["expenses"]), 200)  # 2 из 3 номеров
+        self.assertAlmostEqual(float(rb["totals"]["expenses"]), 100)  # 1 из 3 номеров
+        self.assertAlmostEqual(float(r_all["totals"]["expenses"]), 300)
+        self.assertEqual(len(r_all["by_property"]), 2)
+
+    def test_by_room_includes_idle_rooms(self):
+        ctx = self.register("rep3@example.ru", rooms=(("Стандарт", 2, 1000),))
+        self.book(ctx, ctx["rooms"][0], d(0), d(3), total_price=3000)
+        r = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(3)}).json()
+        by_id = {x["room_id"]: x for x in r["by_room"]}
+        self.assertEqual(by_id[ctx["rooms"][0]["id"]]["nights"], 3)
+        self.assertEqual(by_id[ctx["rooms"][1]["id"]]["nights"], 0)  # простаивал, но виден в отчёте
+        self.assertEqual(float(by_id[ctx["rooms"][1]["id"]]["revenue"]), 0)
+        self.assertEqual(len(r["by_room_type"]), 1)
+
+    def test_compare_prev_period_and_prev_year(self):
+        ctx = self.register("rep4@example.ru", rooms=(("Стандарт", 1, 1000),))
+        today = date.today()
+        py_start = _shift_years(today, -1)
+        self.book(ctx, ctx["rooms"][0], d(0), d(2), total_price=2000)
+        self.book(ctx, ctx["rooms"][0], d(-2), d(-1), total_price=500)
+        self.book(ctx, ctx["rooms"][0], py_start.isoformat(), (py_start + timedelta(days=1)).isoformat(),
+                  total_price=100)
+        r = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(2)}).json()
+        self.assertEqual(float(r["compare_prev_period"]["revenue"]), 500)
+        self.assertEqual(r["compare_prev_period"]["revenue_delta"], 300.0)  # (2000-500)/500*100
+        self.assertEqual(float(r["compare_prev_year"]["revenue"]), 100)
+
+    def test_by_source_with_commission(self):
+        ctx = self.register("rep5@example.ru", rooms=(("Стандарт", 1, 1000),))
+        r = self.client.put("/api/channel-commissions", headers=ctx["h"], json={
+            "items": [{"channel": "avito", "percent": 20}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.book(ctx, ctx["rooms"][0], d(0), d(2), total_price=2000, source="avito")
+        rep = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(2)}).json()
+        avito = next(s for s in rep["by_source"] if s["source"] == "avito")
+        self.assertEqual(float(avito["commission_percent"]), 20)
+        self.assertEqual(float(avito["commission_amount"]), 400)
+        self.assertEqual(float(avito["net_revenue"]), 1600)
+        commissions = self.client.get("/api/channel-commissions", headers=ctx["h"]).json()
+        self.assertEqual(float(next(x["percent"] for x in commissions if x["channel"] == "avito")), 20)
+
+    def test_monthly_and_weekday_shape(self):
+        ctx = self.register("rep6@example.ru")
+        r = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(3)}).json()
+        self.assertEqual(len(r["monthly"]), 12)
+        self.assertEqual(len(r["weekday_occupancy"]), 7)
+        self.assertEqual({x["weekday"] for x in r["weekday_occupancy"]}, set(range(7)))
+
+    def test_csv_export_has_bom(self):
+        ctx = self.register("rep7@example.ru")
+        r = self.client.get("/api/reports/export.csv", headers=ctx["h"], params={"from": d(0), "to": d(3)})
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.text.startswith("﻿"))
+        self.assertIn("Выручка", r.text)
+
+    def test_tenant_isolation(self):
+        a = self.register("rep8a@example.ru")
+        b = self.register("rep8b@example.ru")
+        r = self.client.get("/api/reports", headers=b["h"], params={"property_id": a["prop"]["id"]})
+        self.assertEqual(r.status_code, 404)
 
 
 class ICalTests(unittest.TestCase):

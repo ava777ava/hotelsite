@@ -1,6 +1,5 @@
 """Брони, шахматка, цены по датам, статистика."""
 from datetime import date, timedelta
-from decimal import Decimal
 
 import psycopg
 from starlette.routing import Route
@@ -320,55 +319,7 @@ def set_rates(c: Ctx):
     return {"updated": count}
 
 
-# ---------- статистика и день ----------
-
-@api("manager")
-def stats(c: Ctx):
-    start, end = _date_range(c, 30)
-    prop_id = parse_uuid(c.q["property_id"], "Объект") if c.q.get("property_id") else None
-    with tx() as conn:
-        if prop_id:
-            selected_property(conn, c.account_id, prop_id)
-        prop_filter = " AND property_id = %s" if prop_id else ""
-        prop_params = (prop_id,) if prop_id else ()
-        rooms = one(conn, f"SELECT count(*) AS n FROM rooms WHERE account_id = %s{prop_filter}",
-                    (c.account_id, *prop_params))["n"]
-        rows = all_(
-            conn,
-            "SELECT source, status,"
-            " (least(check_out, %s::date) - greatest(check_in, %s::date)) AS nights_in,"
-            " (check_out - check_in) AS nights, total_price, paid_amount"
-            f" FROM bookings WHERE account_id = %s AND status IN ('confirmed', 'pending', 'blocked')"
-            f" AND check_in < %s AND check_out > %s{prop_filter}",
-            (end, start, c.account_id, end, start, *prop_params),
-        )
-    days = (end - start).days
-    sold = blocked = 0
-    revenue = Decimal("0")
-    by_source: dict[str, dict] = {}
-    for r in rows:
-        if r["status"] == "blocked":
-            blocked += r["nights_in"]
-            continue
-        share = Decimal(r["total_price"]) * r["nights_in"] / r["nights"]
-        sold += r["nights_in"]
-        revenue += share
-        s = by_source.setdefault(r["source"], {"source": r["source"], "nights": 0, "revenue": Decimal("0"),
-                                               "bookings": 0})
-        s["nights"] += r["nights_in"]
-        s["revenue"] += share
-        s["bookings"] += 1
-    available = rooms * days
-    return {
-        "from": start, "to": end, "rooms": rooms,
-        "room_nights": available, "sold_nights": sold, "blocked_nights": blocked,
-        "occupancy": round(sold * 100 / available, 1) if available else 0,
-        "revenue": revenue.quantize(Decimal("1")),
-        "adr": (revenue / sold).quantize(Decimal("1")) if sold else 0,
-        "revpar": (revenue / available).quantize(Decimal("1")) if available else 0,
-        "by_source": sorted(by_source.values(), key=lambda s: -s["revenue"]),
-    }
-
+# ---------- день ----------
 
 @api()
 def today(c: Ctx):
@@ -404,6 +355,5 @@ routes = [
     Route("/api/bookings/{id}", delete_booking, methods=["DELETE"]),
     Route("/api/board", board),
     Route("/api/rates", set_rates, methods=["PUT"]),
-    Route("/api/stats", stats),
     Route("/api/today", today),
 ]
