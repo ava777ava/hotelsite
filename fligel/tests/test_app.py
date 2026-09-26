@@ -247,6 +247,45 @@ class MultiPropertyTests(Base):
         self.assertEqual(len(bookings1), 1)
 
 
+class GuestHistoryTests(Base):
+    def test_history_across_properties_and_returning_flag(self):
+        ctx = self.register("guest1@example.ru", rooms=(("Стандарт", 1, 1000),))
+        p2 = self.client.post("/api/setup", headers=ctx["h"], json={
+            "name": "Второй объект", "room_types": [{"name": "Студия", "count": 1, "base_price": 2000}]}).json()
+        room2 = self.client.get(f"/api/properties/{p2['id']}", headers=ctx["h"]).json()["room_types"][0]["rooms"][0]
+        phone = "+7 900 111-22-33"
+        self.book(ctx, ctx["rooms"][0], d(1), d(3), guest="Ольга", guest_phone=phone, total_price=2000, paid_amount=2000)
+        self.book(ctx, room2, d(10), d(11), guest="Ольга", guest_phone=phone, total_price=2000, paid_amount=1000)
+        r = self.client.get("/api/guests", headers=ctx["h"], params={"phone": phone}).json()
+        self.assertEqual(r["visits"], 2)
+        self.assertTrue(r["returning"])
+        self.assertEqual(float(r["total_spent"]), 4000)
+        self.assertEqual(float(r["total_paid"]), 3000)
+        self.assertEqual({s["property_name"] for s in r["stays"]}, {ctx["prop"]["name"], "Второй объект"})
+
+    def test_single_visit_is_not_returning(self):
+        ctx = self.register("guest2@example.ru")
+        self.book(ctx, ctx["rooms"][0], d(1), d(2), guest="Игорь", guest_phone="+79995554433")
+        r = self.client.get("/api/guests", headers=ctx["h"], params={"phone": "+79995554433"}).json()
+        self.assertEqual(r["visits"], 1)
+        self.assertFalse(r["returning"])
+
+    def test_cancelled_booking_excluded_and_requires_phone(self):
+        ctx = self.register("guest3@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], d(1), d(2), guest="Павел", guest_phone="+79995554400").json()
+        self.client.delete(f"/api/bookings/{b['id']}", headers=ctx["h"])
+        r = self.client.get("/api/guests", headers=ctx["h"], params={"phone": "+79995554400"}).json()
+        self.assertEqual(r["visits"], 0)
+        self.assertEqual(self.client.get("/api/guests", headers=ctx["h"]).status_code, 422)
+
+    def test_tenant_isolation(self):
+        a = self.register("guest4a@example.ru")
+        b = self.register("guest4b@example.ru")
+        self.book(a, a["rooms"][0], d(1), d(2), guest="Клиент А", guest_phone="+79990001122")
+        r = self.client.get("/api/guests", headers=b["h"], params={"phone": "+79990001122"}).json()
+        self.assertEqual(r["visits"], 0)
+
+
 class ExpensesTests(Base):
     def test_default_categories_created_on_register(self):
         ctx = self.register("exp1@example.ru")

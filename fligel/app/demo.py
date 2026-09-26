@@ -17,6 +17,12 @@ def main() -> None:
     migrate()
     rnd = random.Random(7)
     today = date.today()
+    # один и тот же гость всегда с одним и тем же телефоном — иначе в «Истории гостя»
+    # никогда не наберётся больше одного визита и «постоянных гостей» не появится
+    guest_phones = {
+        name: f"+7 9{rnd.randint(10, 99)} {rnd.randint(100, 999)}-{rnd.randint(10, 99)}-{rnd.randint(10, 99)}"
+        for name in GUESTS
+    }
     with tx() as conn:
         if one(conn, "SELECT 1 FROM users WHERE email = 'demo@fligel.ru'"):
             print("Демо-аккаунт уже есть: demo@fligel.ru / demo12345")
@@ -62,8 +68,7 @@ def main() -> None:
                 run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source,"
                           " guest_name, guest_phone, guests_count, total_price, paid_amount)"
                           " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (acc, prop, rid, d, d + timedelta(days=nights), status, src, guest,
-                     f"+7 9{rnd.randint(10, 99)} {rnd.randint(100, 999)}-{rnd.randint(10, 99)}-{rnd.randint(10, 99)}",
+                    (acc, prop, rid, d, d + timedelta(days=nights), status, src, guest, guest_phones[guest],
                      rnd.choice([1, 2, 2]), total, total if status == "confirmed" and rnd.random() < 0.6 else 0))
                 d += timedelta(days=nights)
         # ремонт в одном номере
@@ -97,8 +102,7 @@ def main() -> None:
                 run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source,"
                           " guest_name, guest_phone, guests_count, total_price, paid_amount)"
                           " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (acc, prop2, rid, d, d + timedelta(days=nights), status, src, guest,
-                     f"+7 9{rnd.randint(10, 99)} {rnd.randint(100, 999)}-{rnd.randint(10, 99)}-{rnd.randint(10, 99)}",
+                    (acc, prop2, rid, d, d + timedelta(days=nights), status, src, guest, guest_phones[guest],
                      rnd.choice([1, 2]), total, total if status == "confirmed" and rnd.random() < 0.6 else 0))
                 d += timedelta(days=nights)
 

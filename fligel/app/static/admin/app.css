@@ -212,6 +212,8 @@ table.list tr.click:hover td { background: var(--surface-2); }
 .bar.blocked { color: #fff; background: var(--src-blocked); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.25) 0 4px, transparent 4px 8px) !important; }
 .bar.cut-left { border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .bar.cut-right { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.bar.draggable { cursor: grab; }
+.bar.draggable.dragging { cursor: grabbing; opacity: .88; box-shadow: 0 6px 18px rgba(0,0,0,.28); z-index: 6; transition: none; }
 
 .legend { display: flex; gap: 14px; flex-wrap: wrap; padding: 11px 16px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -319,3 +321,10 @@ table.list tr.click:hover td { background: var(--surface-2); }
 }
 @media (min-width: 861px) { .mobile-nav { display: none; } }
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------- печатный лист «Заезды и выезды» ---------- */
+#print-sheet { display: none; }
+@media print {
+  body > *:not(#print-sheet) { display: none !important; }
+  #print-sheet { display: block !important; position: static; color: #000; background: #fff; padding: 12px; }
+}

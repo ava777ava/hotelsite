@@ -1,5 +1,6 @@
 """Брони, шахматка, цены по датам, статистика."""
 from datetime import date, timedelta
+from decimal import Decimal
 
 import psycopg
 from starlette.routing import Route
@@ -346,6 +347,33 @@ def today(c: Ctx):
     }
 
 
+# ---------- карточка гостя ----------
+
+@api("manager")
+def guest_history(c: Ctx):
+    """История проживаний гостя по телефону — по всем объектам аккаунта."""
+    phone = (c.q.get("phone") or "").strip()
+    if not phone:
+        raise ApiError(422, "Укажите телефон гостя")
+    with tx() as conn:
+        rows = all_(
+            conn,
+            f"SELECT {BOOKING_COLS}, r.name AS room_name, p.name AS property_name FROM bookings b"
+            " JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
+            " WHERE b.account_id = %s AND b.guest_phone = %s AND b.status <> 'cancelled'"
+            " ORDER BY b.check_in DESC LIMIT 200",
+            (c.account_id, phone),
+        )
+    return {
+        "phone": phone,
+        "visits": len(rows),
+        "returning": len(rows) >= 2,
+        "total_spent": sum((r["total_price"] for r in rows), Decimal("0")),
+        "total_paid": sum((r["paid_amount"] for r in rows), Decimal("0")),
+        "stays": rows,
+    }
+
+
 routes = [
     Route("/api/bookings", list_bookings),
     Route("/api/bookings", create_booking, methods=["POST"]),
@@ -356,4 +384,5 @@ routes = [
     Route("/api/board", board),
     Route("/api/rates", set_rates, methods=["PUT"]),
     Route("/api/today", today),
+    Route("/api/guests", guest_history),
 ]

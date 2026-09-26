@@ -38,6 +38,8 @@ const ICONS = {
   expenses: '<rect x="2.5" y="6" width="19" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M2.5 10h19" stroke="currentColor" stroke-width="1.7"/><circle cx="7" cy="14.5" r="1.4" fill="currentColor"/>',
   trash: '<path d="M4 7h16M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
   download: '<path d="M12 3v13M7 11l5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+  search: '<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  print: '<path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
 };
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
 
@@ -151,23 +153,68 @@ function render() {
   def.view(main);
 }
 
+// Переход к брони из поиска: переключаемся на её объект, открываем шахматку на нужных датах
+// и сразу показываем карточку брони.
+async function jumpToBooking(b) {
+  closeDrawer();
+  state.propertyId = b.property_id; store.set('propertyId', b.property_id);
+  state.boardFrom = addDays(b.check_in, -2);
+  location.hash = '#/board';
+  render();
+  boardData = null;
+  try { await ensureBoardData(); } catch { /* карточка всё равно откроется */ }
+  bookingDrawer(b, () => render());
+}
+
+function guestSearchDrawer() {
+  const input = h('input', { class: 'input', placeholder: 'Имя, телефон или email гостя', autocomplete: 'off' });
+  const results = h('div', { style: { marginTop: '12px' } });
+  let timer;
+  const search = async () => {
+    const q = input.value.trim();
+    if (q.length < 2) { results.innerHTML = ''; return; }
+    results.innerHTML = '';
+    results.append(h('div', { class: 'muted small' }, 'Ищу…'));
+    try {
+      const rows = await api('GET', '/api/bookings?' + qs({
+        q, from: addDays(todayISO(), -365), to: addDays(todayISO(), 35),
+      }));
+      results.innerHTML = '';
+      if (!rows.length) { results.append(h('div', { class: 'empty' }, 'Ничего не найдено')); return; }
+      results.append(...rows.slice(0, 30).map((b) => h('div', {
+        class: 'item', style: { cursor: 'pointer', padding: '10px 2px', borderBottom: '1px solid var(--line)' },
+        onclick: () => jumpToBooking(b),
+      }, h('div', { style: { fontWeight: 600 } }, b.guest_name || `Гость с площадки ${SOURCE[b.source]}`),
+        h('div', { class: 'muted small' }, `${b.property_name} · ${b.room_name} · ${fmtShort(b.check_in)} — ${fmtShort(b.check_out)}`,
+          b.guest_phone ? ` · ${b.guest_phone}` : ''))));
+    } catch (ex) { results.innerHTML = ''; results.append(h('div', { class: 'empty' }, ex.message)); }
+  };
+  input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(search, 250); });
+  openDrawer('Поиск гостя', h('div', {}, input, results));
+  setTimeout(() => input.focus(), 60);
+}
+
 function layout(route, main) {
   const visible = Object.entries(ROUTES).filter(([, d]) => !d.role || can(d.role));
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
     key === 'channels' && state.conflicts ? h('span', { class: 'badge' }, state.conflicts) : null);
   const prop = state.me.properties.find((p) => p.id === state.propertyId);
+  const sideSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', style: { color: '#C3CCC0' }, onclick: guestSearchDrawer }, icon('search')) : null;
+  const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', style: { marginLeft: 'auto', color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
   return h('div', { class: 'shell' },
     h('aside', { class: 'side' },
       h('div', { class: 'brand' }, h('div', { class: 'brand-mark' }),
-        h('div', {}, h('div', { class: 'brand-name' }, 'Флигель'),
-        propertySwitcher('prop-switch') || h('div', { class: 'brand-sub' }, prop ? prop.name : ''))),
+        h('div', { style: { flex: 1, minWidth: 0 } }, h('div', { class: 'brand-name' }, 'Флигель'),
+        propertySwitcher('prop-switch') || h('div', { class: 'brand-sub' }, prop ? prop.name : '')),
+        sideSearchBtn),
       h('nav', { class: 'nav' }, visible.map(link)),
       h('div', { class: 'side-foot' }, h('b', {}, state.me.name), ROLE[state.me.role],
         h('br'), h('button', { onclick: logout }, 'Выйти'))),
     h('div', {},
       h('div', { class: 'mobile-top' }, h('div', { class: 'brand-mark' }),
         propertySwitcher('prop-switch') || h('div', { class: 'brand-name' }, prop ? prop.name : 'Флигель'),
-        h('button', { class: 'btn small ghost', style: { marginLeft: 'auto', color: '#fff' }, onclick: logout }, 'Выйти')),
+        mobileSearchBtn,
+        h('button', { class: 'btn small ghost', style: { color: '#fff' }, onclick: logout }, 'Выйти')),
       main),
     h('nav', { class: 'mobile-nav' }, MOBILE_ORDER.map((k) => visible.find(([v]) => v === k)).filter(Boolean).slice(0, 5).map(link)));
 }
@@ -378,6 +425,82 @@ async function viewBoard(main) {
   load();
 }
 
+// Перенос брони перетаскиванием (в другой номер и/или на другие даты) и изменение длины за
+// край полоски. Брони с площадок (b.feed_id) не перетаскиваются — их даты меняются на площадке.
+function bindBarDrag(bar, b, room, draggable, ctx) {
+  const { days, cellW, roomRows, reload } = ctx;
+  let st = null;
+  let justDragged = false;
+  bar.addEventListener('pointerdown', (ev) => {
+    ev.stopPropagation();
+    if (!draggable || ev.button !== 0 || ev.pointerType !== 'mouse') return;
+    const rect = bar.getBoundingClientRect();
+    const edge = 10;
+    const mode = ev.clientX - rect.left < edge ? 'left' : rect.right - ev.clientX < edge ? 'right' : 'move';
+    st = {
+      mode, startX: ev.clientX, moved: false, startCheckIn: b.check_in, startCheckOut: b.check_out,
+      roomId: b.room_id, curRoomId: b.room_id, resultCheckIn: b.check_in, resultCheckOut: b.check_out,
+    };
+    bar.setPointerCapture(ev.pointerId);
+  });
+  bar.addEventListener('pointermove', (ev) => {
+    if (!st) return;
+    const dx = ev.clientX - st.startX;
+    const dayDelta = Math.round(dx / cellW);
+    let curCheckIn = st.startCheckIn, curCheckOut = st.startCheckOut;
+    if (st.mode === 'move') {
+      curCheckIn = addDays(st.startCheckIn, dayDelta);
+      curCheckOut = addDays(st.startCheckOut, dayDelta);
+    } else if (st.mode === 'left') {
+      curCheckIn = addDays(st.startCheckIn, dayDelta);
+      if (diffDays(curCheckIn, st.startCheckOut) < 1) curCheckIn = addDays(st.startCheckOut, -1);
+    } else {
+      curCheckOut = addDays(st.startCheckOut, dayDelta);
+      if (diffDays(st.startCheckIn, curCheckOut) < 1) curCheckOut = addDays(st.startCheckIn, 1);
+    }
+    let curRoomId = st.curRoomId;
+    if (st.mode === 'move') {
+      const hit = roomRows.find((rr) => { const r = rr.track.getBoundingClientRect(); return ev.clientY >= r.top && ev.clientY < r.bottom; });
+      if (hit) curRoomId = hit.room.id;
+    }
+    if (Math.abs(dx) > 3 || curRoomId !== st.roomId) st.moved = true;
+    if (!st.moved) return;
+    bar.classList.add('dragging');
+    const ns = diffDays(days[0], curCheckIn), ne = diffDays(days[0], curCheckOut);
+    bar.style.left = `${(ns + 0.5) * cellW + 2}px`;
+    bar.style.width = `${Math.max((ne - ns) * cellW - 4, 12)}px`;
+    if (curRoomId !== st.curRoomId) {
+      const hit = roomRows.find((rr) => rr.room.id === curRoomId);
+      if (hit) hit.track.append(bar);
+    }
+    st.curRoomId = curRoomId;
+    st.resultCheckIn = curCheckIn;
+    st.resultCheckOut = curCheckOut;
+  });
+  const finish = (ev) => {
+    if (!st) return;
+    const done = st; st = null;
+    bar.classList.remove('dragging');
+    try { bar.releasePointerCapture(ev.pointerId); } catch { /* уже отпущено */ }
+    if (!done.moved) return;
+    justDragged = true;
+    const payload = {};
+    if (done.resultCheckIn !== done.startCheckIn) payload.check_in = done.resultCheckIn;
+    if (done.resultCheckOut !== done.startCheckOut) payload.check_out = done.resultCheckOut;
+    if (done.curRoomId !== done.roomId) payload.room_id = done.curRoomId;
+    if (!Object.keys(payload).length) return;
+    api('PATCH', `/api/bookings/${b.id}`, payload)
+      .then(() => { toast('Бронь изменена'); reload(); })
+      .catch((ex) => { toast(ex.message, true); reload(); });
+  };
+  bar.addEventListener('pointerup', finish);
+  bar.addEventListener('pointercancel', finish);
+  bar.addEventListener('click', (ev) => {
+    if (justDragged) { justDragged = false; ev.preventDefault(); return; }
+    bookingDrawer(b, reload);
+  });
+}
+
 function drawBoard(data, reload) {
   const days = data.days;
   const today = todayISO();
@@ -423,6 +546,7 @@ function drawBoard(data, reload) {
   window.__boardPointerUp = finishSel;
   document.addEventListener('pointerup', finishSel);
 
+  const roomRows = [];
   data.room_types.forEach((t) => {
     const roomIds = new Set(t.rooms.map((r) => r.id));
     const typeRow = h('div', { class: 'b-row b-type' },
@@ -442,6 +566,7 @@ function drawBoard(data, reload) {
 
     t.rooms.forEach((room) => {
       const track = h('div', { class: 'b-track' });
+      roomRows.push({ room, track });
       const cells = days.map((d, i) => {
         const c = h('div', { class: 'b-cell ' + dayClass(d, i), 'data-i': i });
         c.addEventListener('click', (e) => {
@@ -466,14 +591,15 @@ function drawBoard(data, reload) {
         const right = cutR ? days.length * cellW : (e + 0.5) * cellW;
         const nights = diffDays(b.check_in, b.check_out);
         const label = b.status === 'blocked' ? 'Закрыто' : (b.guest_name || SOURCE[b.source]);
+        const draggable = can('manager') && !b.feed_id;
         const bar = h('div', {
-          class: `bar ${b.status}${cutL ? ' cut-left' : ''}${cutR ? ' cut-right' : ''}`,
+          class: `bar ${b.status}${cutL ? ' cut-left' : ''}${cutR ? ' cut-right' : ''}${draggable ? ' draggable' : ''}`,
           style: { left: `${left + 2}px`, width: `${Math.max(right - left - 4, 12)}px`, background: `var(--src-${b.source})` },
-          title: `${label} · ${SOURCE[b.source]} · ${STATUS[b.status]}\n${fmtDate(b.check_in)} — ${fmtDate(b.check_out)}, ${nights} ${nightsWord(nights)}`,
-          onpointerdown: (ev) => ev.stopPropagation(),
-          onclick: () => bookingDrawer(b, reload),
+          title: `${label} · ${SOURCE[b.source]} · ${STATUS[b.status]}\n${fmtDate(b.check_in)} — ${fmtDate(b.check_out)}, ${nights} ${nightsWord(nights)}`
+            + (draggable ? '\nПеретащите, чтобы перенести, или потяните за край, чтобы изменить длину' : ''),
         }, h('span', { class: 'ttl' }, label),
         b.status !== 'blocked' && b.guest_name && right - left > 120 ? h('span', { class: 'src' }, SOURCE[b.source]) : null);
+        bindBarDrag(bar, b, room, draggable, { days, cellW, roomRows, reload });
         track.append(bar);
       });
       board.append(h('div', { class: 'b-row b-room' },
@@ -585,9 +711,29 @@ async function bookingDrawer(b, onSaved) {
     h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Заезд'), f.check_in), h('label', { class: 'field' }, h('span', {}, 'Выезд'), f.check_out)),
     guestBox,
     h('label', { class: 'field' }, h('span', {}, 'Комментарий'), f.notes));
+  const guestHistoryBox = h('div', { style: { display: 'none', marginBottom: '14px' } });
+  const showGuestHistory = async () => {
+    const phone = f.guest_phone.value.trim();
+    if (!phone) { toast('Введите телефон гостя', true); return; }
+    try {
+      const gh = await api('GET', '/api/guests?' + qs({ phone }));
+      guestHistoryBox.innerHTML = '';
+      guestHistoryBox.style.display = '';
+      if (!gh.visits) { guestHistoryBox.append(h('div', { class: 'note' }, 'Раньше не останавливался(ась)')); return; }
+      guestHistoryBox.append(
+        h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' } },
+          gh.returning ? h('span', { class: 'pill ok' }, 'Постоянный гость') : null,
+          h('span', { class: 'muted small' }, `${gh.visits} ${gh.visits === 1 ? 'визит' : 'визита'} · всего ${fmtMoney(gh.total_spent)}`)),
+        h('div', {}, gh.stays.slice(0, 10).map((s) => h('div', {
+          class: 'muted small', style: { padding: '4px 0', borderBottom: '1px solid var(--line)' },
+        }, `${fmtShort(s.check_in)} — ${fmtShort(s.check_out)} · ${s.property_name}, ${s.room_name} · ${fmtMoney(s.total_price)}`))));
+    } catch (ex) { toast(ex.message, true); }
+  };
   guestBox.append(
     inp('guest_name', 'Гость', { autocomplete: 'off', placeholder: 'Имя и фамилия' }),
     h('div', { class: 'row2' }, inp('guest_phone', 'Телефон', { type: 'tel', placeholder: '+7' }), inp('guest_email', 'Email', { type: 'email' })),
+    h('button', { type: 'button', class: 'btn small ghost', style: { marginBottom: '14px' }, onclick: showGuestHistory }, 'История гостя по телефону'),
+    guestHistoryBox,
     h('div', { class: 'row3' },
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1 }),
       inp('total_price', 'Стоимость, ₽', { type: 'number', min: 0, value: b.total_price != null ? Math.round(b.total_price) : '', oninput: () => { priceTouched = true; updateTotal(); } }),
@@ -659,6 +805,7 @@ function rateDrawer(t, day, reload) {
 // ---------- сегодня ----------
 async function viewToday(main) {
   let day = todayISO();
+  let lastData = null;
   const scope = { value: 'current' };
   const content = h('div');
   const dateInput = h('input', { class: 'input', type: 'date', value: day, style: { width: '160px' }, onchange: (e) => { day = e.target.value || todayISO(); load(); } });
@@ -666,7 +813,8 @@ async function viewToday(main) {
     h('button', { class: 'btn icon', onclick: () => { day = addDays(day, -1); dateInput.value = day; load(); } }, icon('left')),
     dateInput,
     h('button', { class: 'btn icon', onclick: () => { day = addDays(day, 1); dateInput.value = day; load(); } }, icon('right')),
-    scopeSeg(scope, () => load())), content);
+    scopeSeg(scope, () => load()),
+    h('button', { class: 'btn', onclick: () => lastData && printDaySheet(day, lastData) }, icon('print'), 'Печать')), content);
   const item = (b, kind) => {
     const due = Number(b.total_price) - Number(b.paid_amount);
     return h('div', { class: 'item', onclick: () => bookingDrawer(b, load) },
@@ -685,6 +833,7 @@ async function viewToday(main) {
   const load = async () => {
     try {
       const d = await api('GET', '/api/today?' + qs({ date: day, property_id: scope.value === 'current' ? state.propertyId : undefined }));
+      lastData = d;
       content.innerHTML = '';
       content.append(
         h('p', { class: 'muted', style: { marginTop: '-6px' } }, `${fmtDate(day)}, ${WD[parseISO(day).getDay()].toLowerCase()}`),
@@ -695,6 +844,33 @@ async function viewToday(main) {
     } catch (ex) { content.innerHTML = ''; content.append(h('div', { class: 'card empty' }, ex.message)); }
   };
   load();
+}
+
+// ---------- печатный лист ----------
+function printDaySheet(day, data) {
+  document.getElementById('print-sheet')?.remove();
+  const th = (t) => h('th', { style: { textAlign: 'left', borderBottom: '2px solid #000', padding: '5px 6px', fontSize: '13px' } }, t);
+  const td = (t) => h('td', { style: { borderBottom: '1px solid #999', padding: '6px', fontSize: '13px' } }, t);
+  const section = (title, list, withDue) => {
+    const cols = ['Номер', 'Гость', 'Телефон', 'Гостей', withDue ? 'К оплате' : null, 'Отметка'].filter(Boolean);
+    const rows = list.length
+      ? list.map((b) => h('tr', {}, td(b.room_name), td(b.guest_name || `Гость (${SOURCE[b.source]})`), td(b.guest_phone || '—'),
+          td(String(b.guests_count)), withDue ? td(fmtMoney(Number(b.total_price) - Number(b.paid_amount))) : null,
+          h('td', { style: { borderBottom: '1px solid #999', width: '70px' } })))
+      : [h('tr', {}, h('td', { colspan: String(cols.length), style: { padding: '6px', color: '#666' } }, 'Нет'))];
+    return h('div', { style: { marginBottom: '26px' } },
+      h('h2', { style: { margin: '0 0 8px', fontSize: '16px' } }, title),
+      h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+        h('thead', {}, h('tr', {}, cols.map(th))), h('tbody', {}, rows)));
+  };
+  const sheet = h('div', { id: 'print-sheet' },
+    h('h1', { style: { fontSize: '20px', marginBottom: '4px' } }, 'Заезды и выезды'),
+    h('p', { style: { marginTop: 0, marginBottom: '18px', color: '#333' } }, `${fmtDate(day)}, ${WD[parseISO(day).getDay()].toLowerCase()}`),
+    section('Заезды', data.arrivals, true),
+    section('Выезды', data.departures, true),
+    section('Проживают', data.staying, false));
+  document.body.append(sheet);
+  window.print();
 }
 
 // ---------- список броней ----------
