@@ -126,7 +126,9 @@ textarea.input { height: auto; min-height: 72px; padding: 9px 11px; resize: vert
 .card-pad { padding: 18px 20px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+.grid-2 > * { min-width: 0; }
 .stack { display: flex; flex-direction: column; gap: 18px; }
+.stack > * { min-width: 0; }
 
 .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 20px; white-space: nowrap; }
 .pill.ok { background: var(--pine-soft); color: var(--pine); }

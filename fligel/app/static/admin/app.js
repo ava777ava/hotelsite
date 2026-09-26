@@ -1268,22 +1268,22 @@ async function viewStats(main) {
     if (r.by_property && r.by_property.length) {
       content.append(h('div', { class: 'card' },
         h('div', { class: 'card-head' }, h('h2', {}, 'По объектам')),
-        h('table', { class: 'list' },
+        h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
           h('thead', {}, h('tr', {}, ['Объект', 'Номеров', 'Выручка', 'Расходы', 'Прибыль', 'Загрузка'].map((x) => h('th', {}, x)))),
           h('tbody', {}, r.by_property.map((p) => h('tr', {},
             h('td', {}, p.property_name), h('td', { class: 'num' }, p.rooms),
             h('td', { class: 'num' }, money(p.revenue)), h('td', { class: 'num' }, money(p.expenses)),
-            h('td', { class: 'num' }, money(p.profit)), h('td', { class: 'num' }, `${String(p.occupancy).replace('.', ',')}%`)))))));
+            h('td', { class: 'num' }, money(p.profit)), h('td', { class: 'num' }, `${String(p.occupancy).replace('.', ',')}%`))))))));
     }
 
     if (r.by_room_type.length) {
       content.append(h('div', { class: 'card' },
         h('div', { class: 'card-head' }, h('h2', {}, 'По категориям номеров')),
-        h('table', { class: 'list' },
+        h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
           h('thead', {}, h('tr', {}, ['Категория', 'Номеров', 'Ночей', 'Выручка'].map((x) => h('th', {}, x)))),
           h('tbody', {}, r.by_room_type.map((x) => h('tr', {},
             h('td', {}, x.room_type_name), h('td', { class: 'num' }, x.rooms),
-            h('td', { class: 'num' }, x.nights), h('td', { class: 'num' }, money(x.revenue))))))));
+            h('td', { class: 'num' }, x.nights), h('td', { class: 'num' }, money(x.revenue)))))))));
     }
 
     let roomSort = { key: 'revenue', dir: -1 };
@@ -1293,8 +1293,7 @@ async function viewStats(main) {
       const th = (key, label) => h('th', { style: { cursor: 'pointer' }, onclick: () => { roomSort.dir = roomSort.key === key ? -roomSort.dir : -1; roomSort.key = key; drawRoomTable(); } },
         label, roomSort.key === key ? (roomSort.dir === -1 ? ' ↓' : ' ↑') : '');
       roomCard.innerHTML = '';
-      roomCard.append(h('div', { class: 'card-head' }, h('h2', {}, 'По номерам'), h('span', { class: 'muted small' }, 'нажмите на заголовок для сортировки')),
-        h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
+      const roomTableBody = rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
           h('thead', {}, h('tr', {}, th('room_name', 'Номер'), th('room_type_name', 'Категория'),
             state.me.properties.length > 1 ? th('property_name', 'Объект') : null, th('nights', 'Ночей продано'),
             th('occupancy', 'Загрузка'), th('revenue', 'Выручка'))),
@@ -1302,7 +1301,9 @@ async function viewStats(main) {
             h('td', {}, x.room_name), h('td', { class: 'muted small' }, x.room_type_name),
             state.me.properties.length > 1 ? h('td', { class: 'muted small' }, x.property_name) : null,
             h('td', { class: 'num' }, x.nights), h('td', { class: 'num' }, `${String(x.occupancy).replace('.', ',')}%`),
-            h('td', { class: 'num' }, money(x.revenue))))))));
+            h('td', { class: 'num' }, money(x.revenue))))))) : h('div', { class: 'empty' }, 'В этом объекте пока нет номеров');
+      roomCard.append(h('div', { class: 'card-head' }, h('h2', {}, 'По номерам'), h('span', { class: 'muted small' }, 'нажмите на заголовок для сортировки')),
+        roomTableBody);
     };
     drawRoomTable();
     content.append(roomCard);
@@ -1502,8 +1503,9 @@ async function viewExpenses(main) {
     if (can('manager')) {
       content.append(h('div', { class: 'card card-pad' },
         h('h3', { style: { marginBottom: '10px' } }, 'Быстрое добавление'),
-        h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' } }, amountInp, dateInp, quickSave),
-        chips));
+        cats.length
+          ? [h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' } }, amountInp, dateInp, quickSave), chips]
+          : h('div', { class: 'empty' }, 'Нет ни одной активной категории расходов — добавьте хотя бы одну ниже')));
     }
 
     // фильтры
@@ -1520,7 +1522,7 @@ async function viewExpenses(main) {
     fromInp.addEventListener('change', () => { filters.from = fromInp.value; load(); });
     toInp.addEventListener('change', () => { filters.to = toInp.value; load(); });
     content.append(h('div', { class: 'board-tools' }, fromInp, '—', toInp, propSel, catSel,
-      can('manager') ? h('button', { class: 'btn primary', style: { marginLeft: 'auto' },
+      can('manager') && cats.length ? h('button', { class: 'btn primary', style: { marginLeft: 'auto' },
         onclick: () => expenseDrawer(cats, state.me.properties, {}, load) }, icon('plus'), 'Расход') : null));
 
     // список
@@ -1554,7 +1556,7 @@ async function viewExpenses(main) {
       };
       const rows = data.by_category.map(catRow);
       const tbody = h('tbody', {}, rows);
-      const table = h('table', { class: 'list' }, tbody);
+      const table = h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, tbody));
       const head = h('div', { class: 'card-head' }, h('h2', {}, 'По категориям'));
       content.append(h('div', { class: 'card' }, head, table));
     }
@@ -1575,13 +1577,13 @@ async function viewExpenses(main) {
       if (!recurring.length) {
         recCard.append(h('div', { class: 'empty' }, 'Пока нет ни одного шаблона. Например: аренда 1-го числа или интернет 10-го.'));
       } else {
-        recCard.append(h('table', { class: 'list' }, h('tbody', {}, recurring.map((r) => h('tr', { class: can('owner') ? 'click' : '', onclick: () => can('owner') && recurringDrawer(cats, r, state.me.properties, load) },
+        recCard.append(h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, h('tbody', {}, recurring.map((r) => h('tr', { class: can('owner') ? 'click' : '', onclick: () => can('owner') && recurringDrawer(cats, r, state.me.properties, load) },
           h('td', {}, h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, h('i', { class: 'dot', style: { background: r.category_color } }), r.category_name),
             !r.active ? h('span', { class: 'pill none', style: { marginLeft: '8px' } }, 'выключен') : null),
           h('td', { class: 'muted small' }, r.property_name || 'Общий'),
           h('td', { class: 'num' }, fmtMoney(r.amount)),
           h('td', { class: 'muted small' }, `${r.day_of_month}-го числа`),
-          h('td', { class: 'muted small' }, r.comment))))));
+          h('td', { class: 'muted small' }, r.comment)))))));
       }
       content.append(recCard);
     }
