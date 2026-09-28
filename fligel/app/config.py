@@ -27,3 +27,11 @@ SYNC_ENABLED = os.environ.get("SYNC_ENABLED", "1") == "1"
 # Сколько минут держать номер за неоплаченной прямой бронью (когда подключена оплата)
 HOLD_MINUTES = int(os.environ.get("HOLD_MINUTES", "30"))
 DB_POOL_MAX = int(os.environ.get("DB_POOL_MAX", "10"))
+
+# Уведомления в Telegram: полностью выключены, пока не задан токен бота (см. app/telegram.py).
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+# Секрет вебхука (X-Telegram-Bot-Api-Secret-Token) — необязателен, но без него любой в интернете
+# может слать запросы на /api/telegram/webhook. Задаётся при подключении вебхука в Telegram.
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
+# Час (0-23) по времени сервера, после которого можно отправить утренний дайджест
+TELEGRAM_DIGEST_HOUR = int(os.environ.get("TELEGRAM_DIGEST_HOUR", "8"))

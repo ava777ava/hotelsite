@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import httpx
 import psycopg
 
-from . import config, ical
+from . import config, ical, telegram
 from .db import all_, one, run, tx
 from .expenses import generate_due_expenses
 
@@ -109,6 +109,11 @@ def _place(conn, feed: dict, rooms: list[dict], ev: ical.Event, uid: str, existi
                         " VALUES (%s, %s, %s, %s, %s, 'confirmed', %s, %s, %s, %s)",
                         (feed["account_id"], feed["property_id"], room_id, ev.start, ev.end,
                          feed["channel"], ev.summary[:500], feed["id"], uid))
+                    telegram.notify(
+                        conn, feed["account_id"], "new_booking",
+                        f"Новая бронь с площадки {CHANNEL_LABELS[feed['channel']]}: "
+                        f"{ev.start.strftime('%d.%m')}–{ev.end.strftime('%d.%m')}.",
+                    )
             return True
         except psycopg.errors.ExclusionViolation:
             continue
@@ -190,11 +195,22 @@ def apply_events(conn, feed: dict, events: list[ical.Event], today: date | None 
         res.conflicts += 1
         if inserted:
             res.conflict_details.append({"check_in": ev.start, "check_out": ev.end})
+            telegram.notify(
+                conn, feed["account_id"], "conflict",
+                f"Двойное бронирование! Площадка {CHANNEL_LABELS[feed['channel']]} прислала бронь на "
+                f"{ev.start.strftime('%d.%m')}–{ev.end.strftime('%d.%m')}, но эти даты уже заняты. "
+                "Проверьте раздел «Конфликты».",
+            )
     # Исчезнувшие из календаря будущие брони — отменены на площадке
     for uid, b in existing.items():
         if uid not in seen and b["status"] != "cancelled" and b["check_out"] >= today:
             run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (b["id"],))
             res.removed += 1
+            telegram.notify(
+                conn, feed["account_id"], "cancellation",
+                f"Бронь с площадки {CHANNEL_LABELS[feed['channel']]} отменена: "
+                f"{b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}.",
+            )
     if res.conflicts:
         res.message = f"Даты заняты другой бронью: {res.conflicts}. Проверьте конфликты."
     if res.echoes:
@@ -227,6 +243,13 @@ def sync_feed(feed_id, fetcher=None) -> SyncResult:
                       " WHERE id = %s", (res.message, feed_id))
             run(conn, "INSERT INTO sync_log (account_id, feed_id, status, message) VALUES (%s, %s, 'error', %s)",
                 (feed["account_id"], feed_id, res.message))
+            # Уведомляем только при переходе в «сломан» — иначе каждый тик планировщика слал бы
+            # то же самое сообщение повторно, пока площадка не ответит снова.
+            if feed.get("last_status") != "error":
+                telegram.notify(
+                    conn, feed["account_id"], "sync_error",
+                    f"Не удалось обновить календарь с площадки {CHANNEL_LABELS[feed['channel']]}: {res.message}",
+                )
         log.warning("Синхронизация %s (%s) не удалась: %s", feed_id, feed["channel"], res.message)
         return res
     with tx() as conn:
@@ -263,14 +286,24 @@ def claim_due_feeds(limit: int = 20) -> list:
 def expire_holds() -> int:
     """Неоплаченные прямые брони с истёкшим сроком удержания освобождают номер."""
     with tx() as conn:
-        return run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now(),"
-                         " notes = notes || ' [снято: не оплачено вовремя]'"
-                         " WHERE status = 'pending' AND hold_expires_at IS NOT NULL AND hold_expires_at < now()")
+        rows = all_(conn, "SELECT id, account_id, guest_name FROM bookings WHERE status = 'pending'"
+                          " AND hold_expires_at IS NOT NULL AND hold_expires_at < now()")
+        if not rows:
+            return 0
+        run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now(),"
+                  " notes = notes || ' [снято: не оплачено вовремя]' WHERE id = ANY(%s::uuid[])",
+            ([r["id"] for r in rows],))
+        for r in rows:
+            telegram.notify(conn, r["account_id"], "cancellation",
+                            f"Бронь «{r['guest_name'] or 'без имени'}» снята: не оплачена вовремя.")
+    return len(rows)
 
 
 def run_once() -> int:
     expire_holds()
     generate_due_expenses()
+    telegram.process_outbox()
+    telegram.maybe_send_digests()
     ids = claim_due_feeds()
     for fid in ids:
         try:

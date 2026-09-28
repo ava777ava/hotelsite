@@ -5,12 +5,14 @@ from decimal import Decimal
 import psycopg
 from starlette.routing import Route
 
+from .. import telegram
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..pricing import quote
 from ..util import opt_str, parse_date, parse_int, parse_money, parse_uuid
 from .base import Ctx, api
 from .common import selected_property
+from .reports import SOURCE_LABELS
 
 STATUSES = ("confirmed", "pending", "blocked", "cancelled")
 SOURCES = ("manual", "direct", "avito", "yandex", "sutochno", "ostrovok", "other")
@@ -124,7 +126,7 @@ def create_booking(c: Ctx):
             total = parse_money(d.get("total_price"), "Стоимость")
         try:
             with conn.transaction():
-                return one(
+                booking = one(
                     conn,
                     "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
                     " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes)"
@@ -137,6 +139,14 @@ def create_booking(c: Ctx):
                 )
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, room["id"], check_in, check_out, None), {"code": "overlap"})
+        if status != "blocked":
+            telegram.notify(
+                conn, c.account_id, "new_booking",
+                f"Новая бронь ({SOURCE_LABELS.get(source, source)}): номер {room['name']}, "
+                f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}"
+                + (f", {booking['guest_name']}" if booking["guest_name"] else "") + ".",
+            )
+        return booking
 
 
 @api("manager")
@@ -192,7 +202,7 @@ def update_booking(c: Ctx):
             new["paid_amount"] = parse_money(d["paid_amount"], "Оплачено")
         try:
             with conn.transaction():
-                return one(
+                updated = one(
                     conn,
                     "UPDATE bookings SET room_id=%s, check_in=%s, check_out=%s, status=%s, source=%s,"
                     " guest_name=%s, guest_phone=%s, guest_email=%s, guests_count=%s, total_price=%s,"
@@ -204,6 +214,11 @@ def update_booking(c: Ctx):
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, new["room_id"], new["check_in"], new["check_out"], bid),
                            {"code": "overlap"})
+        if new["status"] == "cancelled" and b["status"] != "cancelled":
+            telegram.notify(conn, c.account_id, "cancellation",
+                            f"Бронь «{updated['guest_name'] or 'без имени'}» отменена "
+                            f"({updated['check_in'].strftime('%d.%m')}–{updated['check_out'].strftime('%d.%m')}).")
+        return updated
 
 
 @api("manager")
@@ -211,13 +226,18 @@ def delete_booking(c: Ctx):
     """Физически удаляем только ручные закрытия дат; брони гостей отменяются (остаются в истории)."""
     bid = parse_uuid(c.path["id"])
     with tx() as conn:
-        b = one(conn, "SELECT status, feed_id FROM bookings WHERE id = %s AND account_id = %s", (bid, c.account_id))
+        b = one(conn, "SELECT status, feed_id, guest_name, check_in, check_out FROM bookings"
+                     " WHERE id = %s AND account_id = %s", (bid, c.account_id))
         if not b:
             raise ApiError(404, "Бронь не найдена")
         if b["status"] == "blocked" and not b["feed_id"]:
             run(conn, "DELETE FROM bookings WHERE id = %s", (bid,))
         else:
             run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (bid,))
+            if b["status"] != "cancelled":
+                telegram.notify(conn, c.account_id, "cancellation",
+                                f"Бронь «{b['guest_name'] or 'без имени'}» отменена "
+                                f"({b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}).")
 
 
 @api()

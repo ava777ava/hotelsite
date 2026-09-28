@@ -40,6 +40,7 @@ const ICONS = {
   download: '<path d="M12 3v13M7 11l5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   search: '<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   print: '<path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+  bell: '<path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6.5H4c.5-1 2-2.5 2-6.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7"/>',
 };
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
 
@@ -120,6 +121,7 @@ const ROUTES = {
   channels: { title: 'Площадки', icon: 'channels', view: viewChannels, role: 'manager' },
   expenses: { title: 'Расходы', icon: 'expenses', view: viewExpenses, role: 'manager' },
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
+  notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
 };
 const RANK = { housekeeper: 0, manager: 1, owner: 2 };
@@ -1751,6 +1753,68 @@ async function viewSettings(main) {
         } catch (ex) { toast(ex.message, true); }
       } }, 'Сохранить'));
     content.append(commissionsCard);
+  }
+  load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
+}
+
+// ---------- уведомления в Telegram ----------
+async function viewNotifications(main) {
+  const content = h('div', { class: 'stack' });
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Уведомления')), content);
+  async function load() {
+    content.innerHTML = '';
+    const s = await api('GET', '/api/telegram/status');
+    if (!s.enabled) {
+      content.append(h('div', { class: 'card card-pad' },
+        h('h2', { style: { marginBottom: '6px' } }, 'Telegram-уведомления'),
+        h('p', { class: 'muted small', style: { marginTop: 0 } },
+          'Не настроены на сервере: администратору нужно создать бота через @BotFather и указать',
+          h('code', {}, ' TELEGRAM_BOT_TOKEN '), 'в файле .env (см. deploy/DEPLOY.md).')));
+      return;
+    }
+    const card = h('div', { class: 'card card-pad' });
+    card.append(h('h2', { style: { marginBottom: '6px' } }, 'Telegram-уведомления'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } },
+        'Каждый сотрудник подключает свой личный чат и сам выбирает, какие уведомления получать.'));
+    if (s.linked) {
+      card.append(h('p', {}, h('span', { class: 'pill ok' }, 'Подключено'),
+        s.linked_at ? ` · с ${fmtDateTime(s.linked_at)}` : ''),
+        h('button', { class: 'btn small ghost danger', onclick: async () => {
+          if (!confirm('Отключить уведомления в этом чате?')) return;
+          await api('POST', '/api/telegram/unlink'); load();
+        } }, 'Отвязать чат'));
+    } else {
+      const codeBox = h('div');
+      const draw = () => {
+        codeBox.innerHTML = '';
+        if (s.pending_code) {
+          codeBox.append(
+            h('p', {}, 'Напишите боту в Telegram сообщение:'),
+            h('div', { class: 'copy-line' },
+              h('input', { class: 'input', readonly: true, value: `/start ${s.pending_code}` }),
+              h('button', { class: 'btn small', onclick: () => navigator.clipboard?.writeText(`/start ${s.pending_code}`).then(() => toast('Скопировано')) }, icon('copy'))),
+            h('p', { class: 'muted small' }, `Код действует 30 минут (до ${fmtDateTime(s.pending_code_expires_at)}). Обновите страницу после отправки, чтобы увидеть статус.`));
+        }
+      };
+      draw();
+      card.append(codeBox, h('button', { class: 'btn primary', style: { marginTop: '8px' }, onclick: async () => {
+        const r = await api('POST', '/api/telegram/link'); Object.assign(s, r); draw();
+      } }, s.pending_code ? 'Получить новый код' : 'Подключить Telegram'));
+    }
+    content.append(card);
+
+    const eventsCard = h('div', { class: 'card card-pad' },
+      h('h2', { style: { marginBottom: '10px' } }, 'Какие события присылать мне'));
+    const boxes = {};
+    s.available_events.forEach((e) => {
+      eventsCard.append(h('label', { class: 'check', style: { display: 'block', marginBottom: '8px' } },
+        boxes[e.key] = h('input', { type: 'checkbox', checked: s.events.includes(e.key) }), ' ' + e.label));
+    });
+    eventsCard.append(h('button', { class: 'btn primary', onclick: async () => {
+      const events = Object.entries(boxes).filter(([, el]) => el.checked).map(([k]) => k);
+      try { await api('PUT', '/api/telegram/events', { events }); toast('Сохранено'); } catch (ex) { toast(ex.message, true); }
+    } }, 'Сохранить'));
+    content.append(eventsCard);
   }
   load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
 }

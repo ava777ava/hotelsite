@@ -7,7 +7,7 @@ import os
 import threading
 import time
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from urllib.parse import urlparse
 
@@ -20,7 +20,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 import psycopg  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from app import db, expenses, ical, sync  # noqa: E402
+from app import config, db, expenses, ical, sync, telegram  # noqa: E402
 from app.api.reports import _shift_years  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -893,6 +893,183 @@ class PublicBookingTests(Base):
         for t in threads:
             t.join()
         self.assertEqual(sorted(codes).count(200), 1, codes)
+
+
+class TelegramTests(Base):
+    """Уведомления в Telegram выключены по умолчанию (нет TELEGRAM_BOT_TOKEN); здесь мы явно
+    включаем их и подменяем реальную отправку (telegram.send_message) моком — как в SyncTests
+    для площадок (sync.fetch)."""
+
+    def setUp(self):
+        self.ctx = self.register(f"tg{id(self)}@example.ru")
+        self._orig_token = config.TELEGRAM_BOT_TOKEN
+        config.TELEGRAM_BOT_TOKEN = "test-token"
+        self.sent = []
+        self._orig_send = telegram.send_message
+        telegram.send_message = lambda chat_id, text: self.sent.append((chat_id, text))
+
+    def tearDown(self):
+        config.TELEGRAM_BOT_TOKEN = self._orig_token
+        telegram.send_message = self._orig_send
+
+    def link(self, chat_id=None):
+        # Свой chat_id на тест (не общий 555111 для всех) — иначе тесты этого класса, использующие
+        # общую тестовую БД, видели бы чужие сообщения на «один и тот же» chat_id.
+        chat_id = chat_id or (id(self) % 900000000 + 100000000)
+        code = self.client.post("/api/telegram/link", headers=self.ctx["h"]).json()["pending_code"]
+        r = self.client.post("/api/telegram/webhook", json={"message": {"text": f"/start {code}", "chat": {"id": chat_id}}})
+        self.assertTrue(r.json()["linked"], r.text)
+        return chat_id
+
+    def test_disabled_by_default(self):
+        config.TELEGRAM_BOT_TOKEN = ""
+        status = self.client.get("/api/telegram/status", headers=self.ctx["h"]).json()
+        self.assertFalse(status["enabled"])
+        self.assertEqual(self.client.post("/api/telegram/link", headers=self.ctx["h"]).status_code, 422)
+        with db.tx() as conn:
+            n = telegram.notify(conn, self.ctx["prop"]["account_id"], "new_booking", "x")
+        self.assertEqual(n, 0)  # выключено — очередь не наполняется, даже если событие произошло
+        self.assertEqual(telegram.process_outbox(), {"sent": 0, "failed": 0})
+
+    def test_link_flow_via_webhook_and_confirmation_message(self):
+        code = self.client.post("/api/telegram/link", headers=self.ctx["h"]).json()["pending_code"]
+        self.assertEqual(len(code), 8)
+        status = self.client.get("/api/telegram/status", headers=self.ctx["h"]).json()
+        self.assertFalse(status["linked"])
+        self.assertEqual(status["pending_code"], code)
+        # неверный код не привязывает чат
+        wrong = self.client.post("/api/telegram/webhook", json={"message": {"text": "/start WRONGCODE", "chat": {"id": 1}}})
+        self.assertFalse(wrong.json()["linked"])
+        ok = self.client.post("/api/telegram/webhook", json={"message": {"text": f"/start {code}", "chat": {"id": 555111}}})
+        self.assertTrue(ok.json()["linked"])
+        status = self.client.get("/api/telegram/status", headers=self.ctx["h"]).json()
+        self.assertTrue(status["linked"])
+        self.assertIsNone(status["pending_code"])
+        res = telegram.process_outbox()
+        self.assertEqual(res, {"sent": 1, "failed": 0})
+        self.assertIn("подключены", self.sent[0][1])
+
+    def test_unlink_and_choose_events(self):
+        self.link()
+        r = self.client.put("/api/telegram/events", headers=self.ctx["h"], json={"events": ["new_booking", "bogus"]})
+        self.assertEqual(r.json()["events"], ["new_booking"])  # неизвестное значение отброшено
+        r = self.client.post("/api/telegram/unlink", headers=self.ctx["h"])
+        self.assertFalse(r.json()["linked"])
+
+    def test_manual_booking_and_cancellation_notify(self):
+        self.link()
+        telegram.process_outbox()  # смахнуть сообщение о привязке
+        self.sent.clear()
+        room = self.ctx["rooms"][0]
+        b = self.book(self.ctx, room, d(5), d(7), guest="Марина").json()
+        self.assertEqual(telegram.process_outbox(), {"sent": 1, "failed": 0})
+        self.assertIn("Новая бронь", self.sent[-1][1])
+        self.assertIn("Марина", self.sent[-1][1])
+        self.client.delete(f"/api/bookings/{b['id']}", headers=self.ctx["h"])
+        self.assertEqual(telegram.process_outbox(), {"sent": 1, "failed": 0})
+        self.assertIn("отменена", self.sent[-1][1])
+        # закрытие дат (blocked) — это не бронь гостя, уведомления быть не должно
+        self.client.post("/api/bookings", headers=self.ctx["h"], json={
+            "room_id": room["id"], "check_in": d(20), "check_out": d(22), "status": "blocked"})
+        self.assertEqual(telegram.process_outbox(), {"sent": 0, "failed": 0})
+
+    def test_site_booking_notifies(self):
+        self.link()
+        telegram.process_outbox()
+        self.sent.clear()
+        slug = self.ctx["prop"]["public_slug"]
+        rt = self.ctx["prop"]["room_types"][0]["id"]
+        r = self.client.post(f"/api/public/{slug}/book", json={
+            "room_type_id": rt, "check_in": d(3), "check_out": d(5), "guest_name": "Пётр",
+            "guest_phone": "+79001234567", "consent": True})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(telegram.process_outbox(), {"sent": 1, "failed": 0})
+        self.assertIn("заявка с сайта", self.sent[-1][1])
+
+    def test_event_preferences_are_respected(self):
+        self.link()
+        telegram.process_outbox()
+        self.sent.clear()
+        self.client.put("/api/telegram/events", headers=self.ctx["h"], json={"events": ["cancellation"]})
+        self.book(self.ctx, self.ctx["rooms"][0], d(5), d(7))
+        self.assertEqual(telegram.process_outbox(), {"sent": 0, "failed": 0})  # new_booking отписан
+
+    def test_outbox_retries_then_gives_up(self):
+        self.link()
+
+        def failing(chat_id, text):
+            raise RuntimeError("сеть недоступна")
+
+        telegram.send_message = failing
+        res = telegram.process_outbox()
+        self.assertEqual(res, {"sent": 0, "failed": 0})
+        with db.tx() as conn:
+            row = db.one(conn, "SELECT status, attempts, next_attempt_at > now() AS delayed FROM telegram_outbox"
+                               " ORDER BY created_at DESC LIMIT 1")
+        self.assertEqual((row["status"], row["attempts"], row["delayed"]), ("pending", 1, True))
+        for _ in range(telegram.MAX_ATTEMPTS):
+            with db.tx() as conn:
+                db.run(conn, "UPDATE telegram_outbox SET next_attempt_at = now() WHERE status = 'pending'")
+            telegram.process_outbox()
+        with db.tx() as conn:
+            row = db.one(conn, "SELECT status, attempts, last_error FROM telegram_outbox ORDER BY created_at DESC LIMIT 1")
+        self.assertEqual(row["status"], "failed")
+        self.assertGreaterEqual(row["attempts"], telegram.MAX_ATTEMPTS)
+        self.assertIn("сеть", row["last_error"])
+
+    def test_conflict_and_sync_error_notify(self):
+        self.link()
+        room = self.ctx["rooms"][0]
+        self.book(self.ctx, room, d(10), d(12), guest="Прямой гость")
+        orig_fetch = sync.fetch
+        try:
+            sync.fetch = lambda url: feed_text(("av-1", d(11), d(13)))
+            r = self.client.post("/api/feeds", headers=self.ctx["h"], json={
+                "room_id": room["id"], "channel": "avito", "url": "https://www.avito.ru/calendar/1.ics"})
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(r.json()["conflicts"], 1)
+        finally:
+            sync.fetch = orig_fetch
+        telegram.process_outbox()
+        self.assertTrue(any("Двойное бронирование" in t for _, t in self.sent))
+        other_room = self.ctx["rooms"][1]
+
+        def broken(url):
+            raise RuntimeError("Площадка не отвечает")
+
+        orig_fetch = sync.fetch
+        try:
+            sync.fetch = broken
+            r2 = self.client.post("/api/feeds", headers=self.ctx["h"], json={
+                "room_id": other_room["id"], "channel": "yandex", "url": "https://path.example/2.ics"})
+            self.assertEqual(r2.status_code, 200, r2.text)
+            self.assertEqual(r2.json()["status"], "error")
+            # повторная (сломанная) синхронизация того же календаря не должна слать уведомление дважды
+            self.client.post(f"/api/feeds/{r2.json()['id']}/sync", headers=self.ctx["h"])
+        finally:
+            sync.fetch = orig_fetch
+        telegram.process_outbox()
+        error_msgs = [t for _, t in self.sent if "обновить календарь" in t]
+        self.assertEqual(len(error_msgs), 1)
+
+    def test_morning_digest_once_per_day(self):
+        # Другие тесты этого класса тоже привязывают Telegram (свои аккаунты) и по умолчанию
+        # подписаны на дайджест, так что общее число отправленных дайджестов здесь может быть
+        # больше одного — проверяем не общий счётчик, а именно наш чат.
+        chat_id = self.link()
+        self.book(self.ctx, self.ctx["rooms"][0], d(0), d(2), guest="Заезжает сегодня")
+        before_hour = telegram.maybe_send_digests(now=datetime(2026, 1, 1, config.TELEGRAM_DIGEST_HOUR - 1))
+        self.assertEqual(before_hour, 0)
+        n = telegram.maybe_send_digests(now=datetime(2026, 1, 1, config.TELEGRAM_DIGEST_HOUR))
+        self.assertGreaterEqual(n, 1)
+        telegram.process_outbox()
+        my_digests = [t for c, t in self.sent if c == chat_id and "Доброе утро" in t]
+        self.assertEqual(len(my_digests), 1)
+        self.sent.clear()
+        again = telegram.maybe_send_digests(now=datetime(2026, 1, 1, config.TELEGRAM_DIGEST_HOUR + 2))
+        self.assertEqual(again, 0)  # в тот же день дайджест уже отправлен всем, кому положено
+        telegram.process_outbox()
+        self.assertFalse(any(c == chat_id and "Доброе утро" in t for c, t in self.sent))
 
 
 if __name__ == "__main__":

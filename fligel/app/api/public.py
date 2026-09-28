@@ -4,6 +4,7 @@ from datetime import date
 import psycopg
 from starlette.routing import Route
 
+from .. import telegram
 from ..db import all_, one, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -125,6 +126,9 @@ def create_request(c: Ctx):
                 continue
         else:
             raise ApiError(409, "Пока вы оформляли заявку, свободные номера этой категории закончились")
+        telegram.notify(conn, prop["account_id"], "new_booking",
+                        f"Новая заявка с сайта: {t['name']}, {check_in.strftime('%d.%m')}–"
+                        f"{check_out.strftime('%d.%m')}, {name}, {phone}.")
     return {
         "booking_id": b["id"], "reference": str(b["id"])[:8].upper(), "room_type": t["name"],
         "check_in": b["check_in"], "check_out": b["check_out"], "total": b["total_price"],

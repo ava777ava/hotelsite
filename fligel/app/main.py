@@ -14,6 +14,7 @@ from starlette.staticfiles import StaticFiles
 
 from . import config, db, sync
 from .api import account, bookings, channels, expenses, public, reports
+from .api import telegram as telegram_api
 from .migrate import migrate
 from .sync import Scheduler
 from .util import Json
@@ -76,6 +77,7 @@ routes = [
     *expenses.routes,
     *reports.routes,
     *public.routes,
+    *telegram_api.routes,
     Mount("/static", StaticFiles(directory=STATIC), name="static"),
 ]
 
