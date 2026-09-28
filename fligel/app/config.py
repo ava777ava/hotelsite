@@ -35,3 +35,16 @@ TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
 # Час (0-23) по времени сервера, после которого можно отправить утренний дайджест
 TELEGRAM_DIGEST_HOUR = int(os.environ.get("TELEGRAM_DIGEST_HOUR", "8"))
+
+# Восстановление пароля по email через SMTP. Без SMTP_HOST письма не отправляются —
+# ссылка на восстановление просто пишется в лог сервера (см. app/mail.py).
+SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
+SMTP_USER = os.environ.get("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.environ.get("SMTP_FROM", "").strip() or SMTP_USER
+SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "1") == "1"
+
+# Блокировка входа после подбора пароля
+LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))

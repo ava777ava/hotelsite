@@ -86,3 +86,7 @@ def verify_active(conn, p: Principal) -> None:
 
 def new_ical_token() -> str:
     return secrets.token_urlsafe(18)
+
+
+def new_reset_token() -> str:
+    return secrets.token_urlsafe(32)

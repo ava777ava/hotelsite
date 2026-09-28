@@ -4,6 +4,7 @@
 Тестовая база пересоздаётся при каждом запуске.
 """
 import os
+import re
 import threading
 import time
 import unittest
@@ -20,7 +21,7 @@ os.environ["SECRET_KEY"] = "test-secret"
 import psycopg  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from app import config, db, expenses, ical, sync, telegram  # noqa: E402
+from app import config, db, expenses, ical, mail, sync, telegram  # noqa: E402
 from app.api.reports import _shift_years  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -1070,6 +1071,113 @@ class TelegramTests(Base):
         self.assertEqual(again, 0)  # в тот же день дайджест уже отправлен всем, кому положено
         telegram.process_outbox()
         self.assertFalse(any(c == chat_id and "Доброе утро" in t for c, t in self.sent))
+
+
+class AuthSecurityTests(Base):
+    """Восстановление пароля (мок SMTP — как telegram.send_message/sync.fetch в других тестах)
+    и блокировка входа после подбора пароля."""
+
+    def setUp(self):
+        self.email = f"authsec{id(self)}@example.ru"
+        self.ctx = self.register(self.email)
+        self.outgoing = []
+        self._orig_send = mail.send
+        self._orig_smtp_host = config.SMTP_HOST
+        config.SMTP_HOST = "smtp.test.local"  # "включаем" SMTP, чтобы send_or_log не ушёл в лог
+        mail.send = lambda to, subject, body: self.outgoing.append((to, subject, body))
+
+    def tearDown(self):
+        mail.send = self._orig_send
+        config.SMTP_HOST = self._orig_smtp_host
+
+    def login(self, password):
+        return self.client.post("/api/auth/login", json={"email": self.email, "password": password})
+
+    def test_login_lockout_after_max_attempts(self):
+        for _ in range(config.LOGIN_MAX_ATTEMPTS):
+            r = self.login("неверный-пароль")
+            self.assertEqual(r.status_code, 401)
+        # лимит исчерпан — теперь даже верный пароль блокируется на время
+        r = self.login("password123")
+        self.assertEqual(r.status_code, 429)
+        # снимаем блокировку «руками» (как будто прошло 15 минут) — верный пароль снова работает
+        with db.tx() as conn:
+            db.run(conn, "UPDATE users SET locked_until = now() - interval '1 minute' WHERE lower(email) = %s",
+                   (self.email,))
+        r = self.login("password123")
+        self.assertEqual(r.status_code, 200, r.text)
+        # успешный вход сбрасывает счётчик неудач
+        with db.tx() as conn:
+            row = db.one(conn, "SELECT failed_attempts, locked_until FROM users WHERE lower(email) = %s", (self.email,))
+        self.assertEqual((row["failed_attempts"], row["locked_until"]), (0, None))
+
+    def test_wrong_password_below_limit_does_not_lock(self):
+        for _ in range(config.LOGIN_MAX_ATTEMPTS - 1):
+            self.assertEqual(self.login("неверный").status_code, 401)
+        r = self.login("password123")
+        self.assertEqual(r.status_code, 200, r.text)  # ещё не заблокирован
+
+    def test_forgot_password_unknown_email_is_generic_and_silent(self):
+        r = self.client.post("/api/auth/forgot-password", json={"email": "no-such-user@example.ru"})
+        self.assertEqual(r.status_code, 200)
+        known = self.client.post("/api/auth/forgot-password", json={"email": self.email})
+        self.assertEqual(known.json()["message"], r.json()["message"])  # ответ не выдаёт, есть ли email
+        self.assertEqual(len(self.outgoing), 1)  # письмо ушло только для реального email
+
+    def _extract_token(self, body: str) -> str:
+        m = re.search(r"token=([\w\-]+)", body)
+        self.assertIsNotNone(m, body)
+        return m.group(1)
+
+    def test_reset_password_flow(self):
+        r = self.client.post("/api/auth/forgot-password", json={"email": self.email})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(self.outgoing), 1)
+        to, subject, body = self.outgoing[0]
+        self.assertEqual(to, self.email)
+        token = self._extract_token(body)
+        # слабый пароль отклоняется
+        self.assertEqual(self.client.post("/api/auth/reset-password", json={"token": token, "password": "123"}).status_code, 422)
+        # верный токен и нормальный пароль — успех
+        r = self.client.post("/api/auth/reset-password", json={"token": token, "password": "new-password-1"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.login("password123").status_code, 401)  # старый пароль больше не работает
+        self.assertEqual(self.login("new-password-1").status_code, 200)
+        # токен одноразовый
+        r = self.client.post("/api/auth/reset-password", json={"token": token, "password": "another-pass-1"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_dev_mode_logs_reset_link_when_smtp_not_configured(self):
+        config.SMTP_HOST = ""  # по умолчанию SMTP не настроен — это и проверяем
+        with self.assertLogs("fligel.mail", level="INFO") as logs:
+            r = self.client.post("/api/auth/forgot-password", json={"email": self.email})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.outgoing, [])  # mail.send не вызывался вовсе
+        self.assertTrue(any("token=" in msg for msg in logs.output))
+
+    def test_reset_password_bad_or_expired_token(self):
+        self.assertEqual(self.client.post("/api/auth/reset-password",
+                                          json={"token": "wrong", "password": "new-password-1"}).status_code, 422)
+        self.client.post("/api/auth/forgot-password", json={"email": self.email})
+        token = self._extract_token(self.outgoing[0][2])
+        with db.tx() as conn:
+            db.run(conn, "UPDATE password_resets SET expires_at = now() - interval '1 minute' WHERE token = %s",
+                   (token,))
+        r = self.client.post("/api/auth/reset-password", json={"token": token, "password": "new-password-1"})
+        self.assertEqual(r.status_code, 422)
+
+    def test_change_password_from_profile(self):
+        r = self.client.post("/api/auth/change-password", headers=self.ctx["h"],
+                             json={"current_password": "wrong", "new_password": "new-password-1"})
+        self.assertEqual(r.status_code, 401)
+        r = self.client.post("/api/auth/change-password", headers=self.ctx["h"],
+                             json={"current_password": "password123", "new_password": "short"})
+        self.assertEqual(r.status_code, 422)
+        r = self.client.post("/api/auth/change-password", headers=self.ctx["h"],
+                             json={"current_password": "password123", "new_password": "new-password-1"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.login("password123").status_code, 401)
+        self.assertEqual(self.login("new-password-1").status_code, 200)
 
 
 if __name__ == "__main__":

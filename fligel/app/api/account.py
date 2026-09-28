@@ -1,14 +1,21 @@
 """Регистрация, вход, сотрудники, настройка объекта и номеров."""
+import logging
+from datetime import datetime, timezone
+
 from starlette.routing import Route
 
-from ..auth import hash_password, make_token, new_ical_token, verify_password
+from .. import config, mail
+from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..expenses import create_default_categories
 from ..util import opt_str, parse_int, parse_money, parse_uuid, req_str, slugify
 from .base import Ctx, api
 
+log = logging.getLogger("fligel.auth")
+
 ROLE_LABELS = {"owner": "Владелец", "manager": "Администратор", "housekeeper": "Горничная"}
+RESET_TOKEN_TTL_HOURS = 1
 
 
 def _unique_slug(conn, base: str) -> str:
@@ -45,22 +52,111 @@ def register(c: Ctx):
     return {"token": make_token(user["id"], acc["id"], "owner")}
 
 
+def _minutes_left(until) -> int:
+    return max(1, int((until - datetime.now(timezone.utc)).total_seconds() // 60) + 1)
+
+
 @api(public=True)
 def login(c: Ctx):
+    """Счётчик неудачных попыток должен сохраниться, даже если сам ответ — ошибка: нельзя
+    поднимать ApiError изнутри блока tx(), иначе db.tx() откатит транзакцию вместе с только
+    что записанным счётчиком (тот же откат, что и для настоящих ошибок). Поэтому сначала
+    решаем внутри транзакции, что ответить, копим это в error/token, транзакция спокойно
+    коммитится, и только потом — уже снаружи — поднимаем ошибку, если она есть."""
     email = str(c.data.get("email") or "").strip().lower()
     password = str(c.data.get("password") or "")
+    error: ApiError | None = None
+    token: str | None = None
     with tx() as conn:
+        # Блокируем строку сотрудника: параллельные попытки подобрать пароль одного и того же
+        # аккаунта не должны обходить счётчик неудач гонкой запросов.
         user = one(
             conn,
-            "SELECT u.id, u.account_id, u.role, u.password_hash, a.status FROM users u"
-            " JOIN accounts a ON a.id = u.account_id WHERE lower(u.email) = %s",
+            "SELECT u.id, u.account_id, u.role, u.password_hash, u.failed_attempts, u.locked_until,"
+            " a.status FROM users u JOIN accounts a ON a.id = u.account_id"
+            " WHERE lower(u.email) = %s FOR UPDATE OF u",
             (email,),
         )
-    if not user or not verify_password(password, user["password_hash"]):
-        raise ApiError(401, "Неверный email или пароль")
-    if user["status"] != "active":
-        raise ApiError(403, "Аккаунт приостановлен. Свяжитесь с поддержкой")
-    return {"token": make_token(user["id"], user["account_id"], user["role"])}
+        if user and user["locked_until"] and user["locked_until"] > datetime.now(timezone.utc):
+            error = ApiError(429, "Слишком много неудачных попыток входа. Попробуйте через "
+                                  f"{_minutes_left(user['locked_until'])} мин.")
+        elif not user or not verify_password(password, user["password_hash"]):
+            if user:
+                attempts = user["failed_attempts"] + 1
+                if attempts >= config.LOGIN_MAX_ATTEMPTS:
+                    run(conn, "UPDATE users SET failed_attempts = 0,"
+                              " locked_until = now() + make_interval(mins => %s) WHERE id = %s",
+                        (config.LOGIN_LOCKOUT_MINUTES, user["id"]))
+                else:
+                    run(conn, "UPDATE users SET failed_attempts = %s WHERE id = %s", (attempts, user["id"]))
+            error = ApiError(401, "Неверный email или пароль")
+        elif user["status"] != "active":
+            error = ApiError(403, "Аккаунт приостановлен. Свяжитесь с поддержкой")
+        else:
+            if user["failed_attempts"] or user["locked_until"]:
+                run(conn, "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = %s", (user["id"],))
+            token = make_token(user["id"], user["account_id"], user["role"])
+    if error:
+        raise error
+    return {"token": token}
+
+
+@api(public=True)
+def forgot_password(c: Ctx):
+    """Всегда отвечает одинаково, есть такой email в системе или нет — иначе по ответу можно
+    было бы угадывать, какие email зарегистрированы."""
+    email = str(c.data.get("email") or "").strip().lower()
+    message = "Если такой email зарегистрирован, на него отправлена ссылка для восстановления пароля."
+    if email:
+        with tx() as conn:
+            user = one(conn, "SELECT id, name FROM users WHERE lower(email) = %s", (email,))
+            if user:
+                token = new_reset_token()
+                run(conn, "INSERT INTO password_resets (user_id, token, expires_at)"
+                          " VALUES (%s, %s, now() + make_interval(hours => %s))",
+                    (user["id"], token, RESET_TOKEN_TTL_HOURS))
+                link = f"{config.PUBLIC_BASE_URL}/app/#/reset-password?token={token}"
+                mail.send_or_log(
+                    email, "Восстановление пароля — Флигель",
+                    f"Здравствуйте, {user['name']}!\n\nЧтобы задать новый пароль, перейдите по ссылке "
+                    f"(действует 1 час):\n{link}\n\nЕсли вы не запрашивали восстановление пароля, "
+                    "просто проигнорируйте это письмо.",
+                )
+    return {"message": message}
+
+
+@api(public=True)
+def reset_password(c: Ctx):
+    token = str(c.data.get("token") or "").strip()
+    password = str(c.data.get("password") or "")
+    if not token:
+        raise ApiError(422, "Ссылка недействительна")
+    if len(password) < 8:
+        raise ApiError(422, "Пароль должен быть не короче 8 символов", {"field": "password"})
+    with tx() as conn:
+        row = one(conn, "SELECT id, user_id FROM password_resets WHERE token = %s"
+                        " AND used_at IS NULL AND expires_at > now()", (token,))
+        if not row:
+            raise ApiError(422, "Ссылка недействительна или срок её действия истёк")
+        run(conn, "UPDATE users SET password_hash = %s, failed_attempts = 0, locked_until = NULL WHERE id = %s",
+            (hash_password(password), row["user_id"]))
+        run(conn, "UPDATE password_resets SET used_at = now() WHERE id = %s", (row["id"],))
+    return {"message": "Пароль изменён. Теперь можно войти с новым паролем."}
+
+
+@api()
+def change_password(c: Ctx):
+    current = str(c.data.get("current_password") or "")
+    new = str(c.data.get("new_password") or "")
+    if len(new) < 8:
+        raise ApiError(422, "Новый пароль должен быть не короче 8 символов", {"field": "new_password"})
+    with tx() as conn:
+        user = one(conn, "SELECT password_hash FROM users WHERE id = %s AND account_id = %s",
+                   (c.p.user_id, c.account_id))
+        if not user or not verify_password(current, user["password_hash"]):
+            raise ApiError(401, "Текущий пароль указан неверно", {"field": "current_password"})
+        run(conn, "UPDATE users SET password_hash = %s WHERE id = %s", (hash_password(new), c.p.user_id))
+    return {"message": "Пароль изменён."}
 
 
 @api()
@@ -316,6 +412,9 @@ def delete_room(c: Ctx):
 routes = [
     Route("/api/auth/register", register, methods=["POST"]),
     Route("/api/auth/login", login, methods=["POST"]),
+    Route("/api/auth/forgot-password", forgot_password, methods=["POST"]),
+    Route("/api/auth/reset-password", reset_password, methods=["POST"]),
+    Route("/api/auth/change-password", change_password, methods=["POST"]),
     Route("/api/me", me),
     Route("/api/users", list_users),
     Route("/api/users", create_user, methods=["POST"]),

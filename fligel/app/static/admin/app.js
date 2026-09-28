@@ -41,6 +41,7 @@ const ICONS = {
   search: '<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   print: '<path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   bell: '<path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6.5H4c.5-1 2-2.5 2-6.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7"/>',
+  user: '<circle cx="12" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 20c1.2-4 4-6 7.5-6s6.3 2 7.5 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
 };
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
 
@@ -123,9 +124,10 @@ const ROUTES = {
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
+  profile: { title: 'Профиль', icon: 'user', view: viewProfile },
 };
 const RANK = { housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['board', 'today', 'bookings', 'expenses', 'channels', 'settings', 'rates', 'stats'];
+const MOBILE_ORDER = ['board', 'today', 'bookings', 'expenses', 'channels', 'settings', 'rates', 'stats', 'profile'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
 const currentRoute = () => { const r = location.hash.replace(/^#\/?/, '').split('?')[0] || 'board'; return ROUTES[r] ? r : 'board'; };
 
@@ -141,6 +143,7 @@ async function boot() {
 function render() {
   closeDrawer();
   $app.innerHTML = '';
+  if (location.hash.startsWith('#/reset-password')) return $app.append(viewResetPassword());
   if (!state.me) return $app.append(viewAuth());
   if (!state.me.properties.length) return $app.append(viewWizard());
   if (!state.me.properties.find((p) => p.id === state.propertyId)) state.propertyId = state.me.properties[0].id;
@@ -308,6 +311,8 @@ function viewAuth() {
     field('email', 'Email', 'email', 'email'),
     field('password', mode === 'login' ? 'Пароль' : 'Пароль (не короче 8 символов)', 'password', mode === 'login' ? 'current-password' : 'new-password'),
     submit,
+    mode === 'login' ? h('div', { class: 'switch' },
+      h('button', { type: 'button', onclick: () => forgotPasswordDrawer(f.email?.value) }, 'Забыли пароль?')) : null,
     h('div', { class: 'switch' }, mode === 'login' ? 'Ещё нет аккаунта? ' : 'Уже есть аккаунт? ',
       h('button', { type: 'button', onclick: () => { mode = mode === 'login' ? 'register' : 'login'; draw(); } },
         mode === 'login' ? 'Зарегистрироваться' : 'Войти')));
@@ -315,6 +320,45 @@ function viewAuth() {
   };
   draw();
   wrap.append(art, formBox);
+  return wrap;
+}
+
+function forgotPasswordDrawer(prefillEmail) {
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  const ok = h('div', { class: 'note ok', style: { display: 'none' } });
+  const email = h('input', { class: 'input', type: 'email', required: true, value: prefillEmail || '' });
+  const submit = h('button', { class: 'btn primary', onclick: async () => {
+    submit.disabled = true; err.style.display = 'none';
+    try {
+      const r = await api('POST', '/api/auth/forgot-password', { email: email.value });
+      ok.textContent = r.message; ok.style.display = 'block'; email.disabled = true; submit.disabled = true;
+    } catch (ex) { err.textContent = ex.message; err.style.display = 'block'; submit.disabled = false; }
+  } }, 'Отправить ссылку');
+  openDrawer('Восстановление пароля', h('div', {}, err, ok,
+    h('label', { class: 'field' }, h('span', {}, 'Email'), email)), [h('span', { class: 'spacer' }), submit]);
+}
+
+function viewResetPassword() {
+  const token = new URLSearchParams(location.hash.split('?')[1] || '').get('token') || '';
+  const wrap = h('div', { class: 'auth' });
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  const ok = h('div', { class: 'note ok', style: { display: 'none' } });
+  const password = h('input', { class: 'input', type: 'password', autocomplete: 'new-password', required: true });
+  const form = h('form', { class: 'auth-form', onsubmit: async (e) => {
+    e.preventDefault(); err.style.display = 'none';
+    try {
+      const r = await api('POST', '/api/auth/reset-password', { token, password: password.value });
+      ok.textContent = r.message; ok.style.display = 'block'; form.style.display = 'none';
+      setTimeout(() => { location.hash = ''; render(); }, 2500);
+    } catch (ex) { err.textContent = ex.message; err.style.display = 'block'; }
+  } },
+  h('h1', {}, 'Новый пароль'),
+  h('p', { class: 'muted', style: { marginTop: 0, marginBottom: '20px' } }, 'Придумайте новый пароль для входа.'),
+  err, ok,
+  h('label', { class: 'field' }, h('span', {}, 'Новый пароль (не короче 8 символов)'), password),
+  h('button', { class: 'btn primary', type: 'submit', style: { width: '100%', height: '40px', marginTop: '14px' } }, 'Сохранить'));
+  wrap.append(h('div', {}, h('div', { class: 'brand auth-mobile-brand' }, h('div', { class: 'brand-mark' }), h('div', { class: 'brand-name' }, 'Флигель')), form));
+  if (!token) { err.textContent = 'Ссылка неверна: не хватает кода. Запросите восстановление пароля заново.'; err.style.display = 'block'; form.querySelector('button').disabled = true; }
   return wrap;
 }
 
@@ -1817,6 +1861,31 @@ async function viewNotifications(main) {
     content.append(eventsCard);
   }
   load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
+}
+
+// ---------- профиль ----------
+async function viewProfile(main) {
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Профиль')));
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  const ok = h('div', { class: 'note ok', style: { display: 'none' } });
+  const current = h('input', { class: 'input', type: 'password', autocomplete: 'current-password', required: true });
+  const next = h('input', { class: 'input', type: 'password', autocomplete: 'new-password', required: true });
+  const submit = h('button', { class: 'btn primary', type: 'submit' }, 'Сменить пароль');
+  const form = h('form', { onsubmit: async (e) => {
+    e.preventDefault(); submit.disabled = true; err.style.display = 'none'; ok.style.display = 'none';
+    try {
+      const r = await api('POST', '/api/auth/change-password', { current_password: current.value, new_password: next.value });
+      ok.textContent = r.message; ok.style.display = 'block'; current.value = ''; next.value = '';
+    } catch (ex) { err.textContent = ex.message; err.style.display = 'block'; } finally { submit.disabled = false; }
+  } },
+  h('label', { class: 'field' }, h('span', {}, 'Текущий пароль'), current),
+  h('label', { class: 'field' }, h('span', {}, 'Новый пароль (не короче 8 символов)'), next),
+  submit);
+  main.append(
+    h('div', { class: 'card card-pad', style: { marginBottom: '16px' } },
+      h('h2', { style: { marginBottom: '6px' } }, state.me.name),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, state.me.email, ' · ', ROLE[state.me.role], ' · ', state.me.account_name)),
+    h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '14px' } }, 'Сменить пароль'), err, ok, form));
 }
 
 boot();
