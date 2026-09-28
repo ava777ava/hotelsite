@@ -1,8 +1,16 @@
 # Запуск всего сервиса одной командой: docker compose up -d
+x-logging: &default-logging
+  # Ротация логов контейнеров: без нее json-логи Docker растут неограниченно.
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_DB: fligel
       POSTGRES_USER: fligel
@@ -17,6 +25,7 @@ services:
   app:
     build: .
     restart: unless-stopped
+    logging: *default-logging
     depends_on:
       db:
         condition: service_healthy
@@ -25,6 +34,12 @@ services:
       DATABASE_URL: postgresql://fligel:${POSTGRES_PASSWORD}@db:5432/fligel
     ports:
       - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   pgdata:

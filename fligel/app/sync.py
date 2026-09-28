@@ -280,6 +280,21 @@ def run_once() -> int:
     return len(ids)
 
 
+_last_tick_at: float | None = None
+# Насколько старым может быть последний «удар сердца» планировщика, чтобы /health всё ещё
+# считал его живым. Один проход (run_once) может занять заметно дольше tick_seconds, если
+# календарей много и площадка отвечает медленно (sync_feed идут по очереди, не параллельно) —
+# порог сознательно с большим запасом, чтобы не мигать «нездоров» на обычной медленной площадке.
+SCHEDULER_STALE_AFTER = 300.0
+
+
+def scheduler_alive() -> bool:
+    """Для /health: жив ли фоновый планировщик синхронизации (не завис ли поток)."""
+    if not config.SYNC_ENABLED:
+        return True
+    return _last_tick_at is not None and (time.monotonic() - _last_tick_at) < SCHEDULER_STALE_AFTER
+
+
 class Scheduler:
     """Фоновый поток: раз в 30 секунд проверяет, каким календарям пора обновиться."""
 
@@ -289,6 +304,8 @@ class Scheduler:
         self._thread: threading.Thread | None = None
 
     def start(self) -> None:
+        global _last_tick_at
+        _last_tick_at = time.monotonic()  # чтобы /health не мигал «нездоров» до первого прохода
         self._thread = threading.Thread(target=self._loop, name="ical-sync", daemon=True)
         self._thread.start()
 
@@ -298,12 +315,14 @@ class Scheduler:
             self._thread.join(timeout=5)
 
     def _loop(self) -> None:
+        global _last_tick_at
         log.info("Синхронизация календарей запущена, интервал %s мин", config.SYNC_INTERVAL_MINUTES)
         while not self._stop.is_set():
             try:
                 run_once()
             except Exception:
                 log.exception("Сбой планировщика синхронизации")
+            _last_tick_at = time.monotonic()
             self._stop.wait(self.tick)
 
 

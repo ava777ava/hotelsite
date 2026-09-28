@@ -5,6 +5,7 @@
 """
 import os
 import threading
+import time
 import unittest
 from datetime import date, timedelta
 from decimal import Decimal
@@ -626,6 +627,26 @@ def feed_text(*events) -> str:
         lines += ["BEGIN:VEVENT", f"UID:{uid}", f"DTSTART;VALUE=DATE:{ci.replace('-', '')}",
                   f"DTEND;VALUE=DATE:{co.replace('-', '')}", "SUMMARY:Бронирование", "END:VEVENT"]
     return "\r\n".join(lines + ["END:VCALENDAR"])
+
+
+class HealthTests(Base):
+    def test_health_ok(self):
+        r = self.client.get("/health")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["db"])
+        self.assertIsNone(body["scheduler"])  # SYNC_ENABLED=0 в тестах
+
+    def test_scheduler_alive_logic(self):
+        from unittest.mock import patch
+        with patch.object(sync.config, "SYNC_ENABLED", True):
+            with patch.object(sync, "_last_tick_at", None):
+                self.assertFalse(sync.scheduler_alive())  # ни разу не тикал
+            with patch.object(sync, "_last_tick_at", time.monotonic()):
+                self.assertTrue(sync.scheduler_alive())  # только что тикнул
+            with patch.object(sync, "_last_tick_at", time.monotonic() - sync.SCHEDULER_STALE_AFTER - 1):
+                self.assertFalse(sync.scheduler_alive())  # завис
 
 
 class SyncTests(Base):

@@ -12,7 +12,7 @@ from starlette.responses import FileResponse, RedirectResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import config, db
+from . import config, db, sync
 from .api import account, bookings, channels, expenses, public, reports
 from .migrate import migrate
 from .sync import Scheduler
@@ -33,9 +33,19 @@ def booking_page(request: Request):
 
 
 def health(request: Request):
-    with db.tx() as conn:
-        db.one(conn, "SELECT 1")
-    return Json({"ok": True})
+    """Для мониторинга и docker-compose healthcheck: проверяет БД и живость планировщика
+    синхронизации площадок (не завис ли фоновый поток). Отдаёт 503, если что-то не так —
+    monitoring и Docker понимают только код ответа, поэтому он должен быть верным."""
+    try:
+        with db.tx() as conn:
+            db.one(conn, "SELECT 1")
+        db_ok = True
+    except Exception:
+        db_ok = False
+    scheduler_ok = sync.scheduler_alive()
+    body = {"ok": db_ok and scheduler_ok, "db": db_ok,
+            "scheduler": scheduler_ok if config.SYNC_ENABLED else None}
+    return Json(body, status_code=200 if body["ok"] else 503)
 
 
 @asynccontextmanager
