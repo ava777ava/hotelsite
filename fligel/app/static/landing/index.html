@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Флигель — сервис управления бронированиями</title>
+<meta name="description" content="Шахматка броней, синхронизация с Авито и Яндекс Путешествиями, приём заявок на сайте и финансовые отчёты для мини-гостиниц и посуточной аренды.">
+<meta name="theme-color" content="#1C2420">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='6' y='6' width='20' height='20' rx='3' transform='rotate(45 16 16)' fill='%23C1852B'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/landing/landing.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap row">
+    <div class="brand"><span class="brand-mark"></span> Флигель</div>
+    <nav>
+      <a href="#features">Возможности</a>
+      <a href="#pricing">Тарифы</a>
+    </nav>
+    <span class="spacer"></span>
+    <div class="actions">
+      <a class="btn ghost" href="/app/"><span class="full">Войти</span><span class="short">Вход</span></a>
+      <a class="btn primary" href="/app/#register"><span class="full">Попробовать бесплатно</span><span class="short">Начать</span></a>
+    </div>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap grid">
+    <div>
+      <h1>Все брони с Авито, Яндекса и сайта — в одной шахматке</h1>
+      <p class="lead">«Флигель» — сервис для мини-гостиниц и посуточной аренды: календари площадок
+        синхронизируются сами, а занять номер дважды система не даст. Плюс финансовые отчёты, приём
+        заявок на своём сайте и уведомления в Telegram.</p>
+      <div class="cta">
+        <a class="btn primary lg" href="/app/#register">Начать бесплатно на 14 дней</a>
+        <a class="btn ghost lg" href="#features">Что умеет сервис</a>
+      </div>
+      <p class="trust">Без банковской карты · Отмена в любой момент · Данные хранятся на серверах в России</p>
+    </div>
+    <div class="mock-card" aria-hidden="true">
+      <div class="mock-head"><i class="mock-dot"></i><i class="mock-dot"></i><i class="mock-dot"></i>
+        <span class="mock-title">Шахматка — демо-данные</span></div>
+      <div class="mock-board">
+        <div class="mock-row">
+          <div class="rn">101</div>
+          <div class="mock-cell" style="grid-column:2"></div>
+          <div class="mock-cell" style="grid-column:3"></div>
+          <div class="mock-bar" style="grid-column:4 / span 3; background:var(--src-avito)">К. Смирнова</div>
+          <div class="mock-cell" style="grid-column:7"></div>
+          <div class="mock-cell" style="grid-column:8"></div>
+          <div class="mock-cell" style="grid-column:9"></div>
+          <div class="mock-cell" style="grid-column:10"></div>
+          <div class="mock-cell" style="grid-column:11"></div>
+        </div>
+        <div class="mock-row">
+          <div class="rn">102</div>
+          <div class="mock-bar" style="grid-column:2 / span 4; background:var(--src-direct)">И. Волков — сайт</div>
+          <div class="mock-cell" style="grid-column:6"></div>
+          <div class="mock-cell" style="grid-column:7"></div>
+          <div class="mock-cell" style="grid-column:8"></div>
+          <div class="mock-cell" style="grid-column:9"></div>
+          <div class="mock-cell" style="grid-column:10"></div>
+          <div class="mock-cell" style="grid-column:11"></div>
+        </div>
+        <div class="mock-row">
+          <div class="rn">103</div>
+          <div class="mock-cell" style="grid-column:2"></div>
+          <div class="mock-cell" style="grid-column:3"></div>
+          <div class="mock-cell" style="grid-column:4"></div>
+          <div class="mock-cell" style="grid-column:5"></div>
+          <div class="mock-cell" style="grid-column:6"></div>
+          <div class="mock-bar" style="grid-column:7 / span 3; background:var(--src-yandex)">Заезд сегодня</div>
+          <div class="mock-cell" style="grid-column:10"></div>
+          <div class="mock-cell" style="grid-column:11"></div>
+        </div>
+        <div class="mock-row">
+          <div class="rn">201</div>
+          <div class="mock-bar" style="grid-column:2 / span 2; background:var(--src-manual)">Бронь</div>
+          <div class="mock-cell" style="grid-column:4"></div>
+          <div class="mock-cell" style="grid-column:5"></div>
+          <div class="mock-cell" style="grid-column:6"></div>
+          <div class="mock-cell" style="grid-column:7"></div>
+          <div class="mock-cell" style="grid-column:8"></div>
+          <div class="mock-bar" style="grid-column:9 / span 3; background:var(--src-sutochno)">П. Егорова</div>
+        </div>
+      </div>
+      <div class="mock-legend">
+        <span><i style="background:var(--src-direct)"></i> Сайт</span>
+        <span><i style="background:var(--src-avito)"></i> Авито</span>
+        <span><i style="background:var(--src-yandex)"></i> Яндекс</span>
+        <span><i style="background:var(--src-sutochno)"></i> Суточно.ру</span>
+        <span><i style="background:var(--src-manual)"></i> Вручную</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Всё, что нужно для управления бронированиями</h2>
+      <p>От первой брони до финансового отчёта за месяц — в одном сервисе</p>
+    </div>
+    <div class="features">
+      <div class="feature"><div class="ico">⌗</div><h3>Шахматка броней</h3>
+        <p>Наглядный календарь по всем номерам и объектам, перетаскивание броней мышкой, печатная версия на смену.</p></div>
+      <div class="feature"><div class="ico">⇄</div><h3>Синхронизация с площадками</h3>
+        <p>Авито, Яндекс Путешествия, Суточно.ру, Островок — календари обновляются сами через iCal, без двойных броней.</p></div>
+      <div class="feature"><div class="ico">🌐</div><h3>Приём заявок на сайте</h3>
+        <p>Страница бронирования для гостей — свой домен или вставка на существующий сайт через iframe.</p></div>
+      <div class="feature"><div class="ico">₽</div><h3>Финансовые отчёты</h3>
+        <p>Выручка, загрузка, ADR/RevPAR, расходы по категориям — по каждому объекту и в целом по сети.</p></div>
+      <div class="feature"><div class="ico">✆</div><h3>Уведомления в Telegram</h3>
+        <p>Новая бронь, отмена, двойное бронирование, утренний дайджест заездов и выездов — прямо в чат.</p></div>
+      <div class="feature"><div class="ico">⌂</div><h3>Несколько объектов</h3>
+        <p>Гостиница, апарт-отель или сеть квартир — все объекты одного владельца в одном аккаунте.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Наглядные отчёты вместо таблиц в Excel</h2>
+      <p>Загрузка номеров по дням — пример на демо-данных</p>
+    </div>
+    <div class="mock-card">
+      <div class="mock-head"><i class="mock-dot"></i><i class="mock-dot"></i><i class="mock-dot"></i>
+        <span class="mock-title">Загрузка номеров, %  — демо-данные</span></div>
+      <div class="mock-chart">
+        <i style="height:38%"></i><i style="height:52%"></i><i style="height:61%"></i><i style="height:47%"></i>
+        <i style="height:73%"></i><i style="height:88%"></i><i style="height:95%"></i><i style="height:80%"></i>
+        <i style="height:66%"></i><i style="height:58%"></i><i style="height:70%"></i><i style="height:84%"></i>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="trial-badge">🎁 14 дней бесплатно на любом тарифе</span>
+      <h2>Тарифы — по числу объектов размещения</h2>
+      <p>Все функции сервиса доступны на любом тарифе. Оплата помесячная, без скрытых платежей.</p>
+    </div>
+    <div class="pricing">
+      <div class="plan">
+        <div class="name">Старт</div>
+        <div class="objects">1–4 объекта</div>
+        <div class="price">990 ₽<span>/мес</span></div>
+        <ul>
+          <li>Все функции сервиса</li>
+          <li>Неограниченно номеров</li>
+          <li>Синхронизация с площадками</li>
+          <li>Поддержка по email</li>
+        </ul>
+        <a class="btn primary" href="/app/#register">Начать бесплатно</a>
+      </div>
+      <div class="plan featured">
+        <div class="name">Бизнес</div>
+        <div class="objects">5–15 объектов</div>
+        <div class="price">2 490 ₽<span>/мес</span></div>
+        <ul>
+          <li>Всё из тарифа «Старт»</li>
+          <li>Несколько объектов в сети</li>
+          <li>Приоритетная поддержка</li>
+        </ul>
+        <a class="btn primary" href="/app/#register">Начать бесплатно</a>
+      </div>
+      <div class="plan">
+        <div class="name">Профи</div>
+        <div class="objects">16–40 объектов</div>
+        <div class="price">4 490 ₽<span>/мес</span></div>
+        <ul>
+          <li>Всё из тарифа «Бизнес»</li>
+          <li>Персональный менеджер</li>
+          <li>Помощь с переносом данных</li>
+        </ul>
+        <a class="btn primary" href="/app/#register">Начать бесплатно</a>
+      </div>
+      <div class="plan">
+        <div class="name">Более 40 объектов</div>
+        <div class="objects">Сеть гостиниц</div>
+        <div class="price">по запросу</div>
+        <ul>
+          <li>Индивидуальные условия</li>
+          <li>Выделенная поддержка</li>
+          <li>Обсуждаем интеграции</li>
+        </ul>
+        <a class="btn ghost" href="mailto:hello@example.ru">Связаться с нами</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="cta-band">
+      <h2>Готовы навести порядок в бронированиях?</h2>
+      <p>14 дней бесплатно, без банковской карты. Настройка занимает несколько минут.</p>
+      <a class="btn primary lg" href="/app/#register">Создать аккаунт</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap row">
+    <div>© <span id="year"></span> Флигель. Данные хранятся на серверах в России.</div>
+    <div class="links">
+      <a href="/legal/privacy">Политика конфиденциальности</a>
+      <a href="/legal/pdn-consent">Согласие на обработку ПДн</a>
+      <a href="/legal/terms">Условия использования</a>
+    </div>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+  // Если посетитель уже входил в систему (есть токен в этом браузере), ведём его сразу в
+  // приложение, а не заставляем читать лендинг заново.
+  try {
+    if (localStorage.getItem('token')) {
+      const relabel = (a, full, short) => {
+        a.setAttribute('href', '/app/');
+        const fEl = a.querySelector('.full'), sEl = a.querySelector('.short');
+        if (fEl) fEl.textContent = full; else a.textContent = full;
+        if (sEl) sEl.textContent = short;
+      };
+      document.querySelectorAll('a[href="/app/#register"]').forEach((a) => relabel(a, 'Открыть панель', 'Панель'));
+      document.querySelectorAll('header.site a[href="/app/"]').forEach((a) => relabel(a, 'Открыть панель', 'Панель'));
+    }
+  } catch { /* приватный режим браузера — просто показываем лендинг как есть */ }
+</script>
+</body>
+</html>

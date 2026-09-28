@@ -33,6 +33,16 @@ def booking_page(request: Request):
     return FileResponse(STATIC / "book" / "index.html")
 
 
+def landing_page(request: Request):
+    return FileResponse(STATIC / "landing" / "index.html")
+
+
+def legal_page(name: str):
+    def handler(request: Request):
+        return FileResponse(STATIC / "legal" / f"{name}.html")
+    return handler
+
+
 def health(request: Request):
     """Для мониторинга и docker-compose healthcheck: проверяет БД и живость планировщика
     синхронизации площадок (не завис ли фоновый поток). Отдаёт 503, если что-то не так —
@@ -66,10 +76,13 @@ async def lifespan(app: Starlette):
 
 
 routes = [
-    Route("/", lambda r: RedirectResponse("/app/")),
+    Route("/", landing_page),
     Route("/app", lambda r: RedirectResponse("/app/")),
     Route("/app/", admin_page),
     Route("/book/{slug}", booking_page),
+    Route("/legal/privacy", legal_page("privacy")),
+    Route("/legal/pdn-consent", legal_page("pdn-consent")),
+    Route("/legal/terms", legal_page("terms")),
     Route("/health", health),
     *account.routes,
     *bookings.routes,

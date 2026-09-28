@@ -1180,5 +1180,47 @@ class AuthSecurityTests(Base):
         self.assertEqual(self.login("new-password-1").status_code, 200)
 
 
+class LandingAndLegalTests(unittest.TestCase):
+    """Лендинг и юридические черновики — статический контент, но должен реально отдаваться
+    и содержать то, что требовалось (тарифы, предупреждение о черновике, ссылки)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = TestClient(app)
+        cls.client.__enter__()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.client.__exit__(None, None, None)
+
+    def test_landing_page_has_pricing_and_cta(self):
+        r = self.client.get("/")
+        self.assertEqual(r.status_code, 200)
+        for text in ("990", "2 490", "4 490", "14 дней", "/app/#register",
+                     "/legal/privacy", "/legal/pdn-consent", "/legal/terms"):
+            self.assertIn(text, r.text)
+
+    def test_legal_pages_are_marked_as_drafts(self):
+        for path in ("/legal/privacy", "/legal/pdn-consent", "/legal/terms"):
+            r = self.client.get(path)
+            self.assertEqual(r.status_code, 200, path)
+            self.assertIn("ЧЕРНОВИК", r.text)
+        self.assertIn("152-ФЗ", self.client.get("/legal/privacy").text)
+
+    def test_public_booking_page_links_to_legal_pages(self):
+        r = self.client.get("/book/any-slug")  # сам объект может не существовать — страница статическая
+        self.assertEqual(r.status_code, 200)
+        for path in ("/legal/privacy", "/legal/pdn-consent", "/legal/terms"):
+            self.assertIn(path, r.text)
+
+    def test_registration_form_links_to_legal_pages(self):
+        r = self.client.get("/app/")
+        self.assertEqual(r.status_code, 200)
+        # SPA грузит логику из app.js — проверяем, что ссылки на юридические страницы там есть
+        js = self.client.get("/static/admin/app.js").text
+        for path in ("/legal/privacy", "/legal/pdn-consent", "/legal/terms"):
+            self.assertIn(path, js)
+
+
 if __name__ == "__main__":
     unittest.main()

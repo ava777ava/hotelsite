@@ -255,7 +255,7 @@ function scopeSeg(scope, onChange) {
 
 // ---------- вход и регистрация ----------
 function viewAuth() {
-  let mode = 'login';
+  let mode = location.hash === '#register' ? 'register' : 'login';
   const wrap = h('div', { class: 'auth' });
   const colors = ['#2F5D50', '#6E4A93', '#B7791F', '#23767E', '#4A5A6A'];
   const mini = h('div', { class: 'mini-board' });
@@ -311,6 +311,10 @@ function viewAuth() {
     field('email', 'Email', 'email', 'email'),
     field('password', mode === 'login' ? 'Пароль' : 'Пароль (не короче 8 символов)', 'password', mode === 'login' ? 'current-password' : 'new-password'),
     submit,
+    mode === 'register' ? h('p', { class: 'small muted', style: { marginTop: '10px' } },
+      'Регистрируясь, вы принимаете ', h('a', { href: '/legal/terms', target: '_blank', rel: 'noopener' }, 'условия использования'),
+      ', ', h('a', { href: '/legal/privacy', target: '_blank', rel: 'noopener' }, 'политику конфиденциальности'),
+      ' и даёте ', h('a', { href: '/legal/pdn-consent', target: '_blank', rel: 'noopener' }, 'согласие на обработку персональных данных'), '.') : null,
     mode === 'login' ? h('div', { class: 'switch' },
       h('button', { type: 'button', onclick: () => forgotPasswordDrawer(f.email?.value) }, 'Забыли пароль?')) : null,
     h('div', { class: 'switch' }, mode === 'login' ? 'Ещё нет аккаунта? ' : 'Уже есть аккаунт? ',
