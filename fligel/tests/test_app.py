@@ -7,6 +7,7 @@ import os
 import threading
 import unittest
 from datetime import date, timedelta
+from decimal import Decimal
 from urllib.parse import urlparse
 
 TEST_DB = os.environ.get("TEST_DATABASE_URL", "postgresql://postgres@127.0.0.1:5432/fligel_test")
@@ -509,6 +510,80 @@ class ReportsTests(Base):
         b = self.register("rep8b@example.ru")
         r = self.client.get("/api/reports", headers=b["h"], params={"property_id": a["prop"]["id"]})
         self.assertEqual(r.status_code, 404)
+
+
+class SecurityReviewTests(Base):
+    """Регрессионные тесты на находки самопроверки (Этап 1 ветки feature/next)."""
+
+    def test_deleted_user_token_rejected_immediately(self):
+        ctx = self.register("sec1@example.ru")
+        r = self.client.post("/api/users", headers=ctx["h"], json={
+            "name": "Мария", "email": "sec1-mgr@example.ru", "role": "manager", "password": "password123"})
+        uid = r.json()["id"]
+        tok = self.client.post("/api/auth/login", json={"email": "sec1-mgr@example.ru", "password": "password123"})
+        mh = {"Authorization": f"Bearer {tok.json()['token']}"}
+        self.assertEqual(self.client.get("/api/today", headers=mh).status_code, 200)
+        self.assertEqual(self.client.delete(f"/api/users/{uid}", headers=ctx["h"]).status_code, 200)
+        # токен ещё не истёк и подпись верна, но сотрудника уже нет — доступ должен пропасть сразу
+        r = self.client.get("/api/today", headers=mh)
+        self.assertEqual(r.status_code, 401)
+
+    def test_suspended_account_token_rejected_immediately(self):
+        ctx = self.register("sec2@example.ru")
+        account_id = ctx["prop"]["account_id"]
+        self.assertEqual(self.client.get("/api/today", headers=ctx["h"]).status_code, 200)
+        with db.tx() as conn:
+            db.run(conn, "UPDATE accounts SET status = 'suspended' WHERE id = %s", (account_id,))
+        # токен всё ещё валиден и не истёк, но аккаунт уже приостановлен — доступ должен пропасть сразу
+        r = self.client.get("/api/today", headers=ctx["h"])
+        self.assertEqual(r.status_code, 403)
+
+    def test_huge_amount_is_rejected_not_500(self):
+        ctx = self.register("sec3@example.ru")
+        cat = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]["id"]
+        for bad in ("9" * 40, "1E50", "9999999999.999999999999999999"):
+            r = self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat, "amount": bad})
+            self.assertEqual(r.status_code, 422, f"{bad!r}: {r.text}")
+        # обычная сумма с длинным «хвостом» после запятой — не ошибка, просто округляется
+        ok = self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": cat, "amount": "1." + "1" * 40})
+        self.assertEqual(ok.status_code, 200, ok.text)
+        self.assertEqual(float(ok.json()["amount"]), 1.11)
+
+    def test_report_money_fields_are_rounded_to_kopecks(self):
+        ctx = self.register("sec4@example.ru", rooms=(("Стандарт", 1, 100),))
+        # 100 за 3 ночи, из них в отчётном периоде только 1 ночь — 100/3 без округления
+        # даёт периодическую дробь; после округления в ответе не должно быть больше 2 знаков.
+        self.book(ctx, ctx["rooms"][0], d(-1), d(2), total_price=100)
+        r = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(1)}).json()
+        revenue = Decimal(str(r["totals"]["revenue"]))
+        self.assertEqual(revenue, revenue.quantize(Decimal("0.01")))
+        adr = Decimal(str(r["totals"]["adr"]))
+        self.assertEqual(adr, adr.quantize(Decimal("0.01")))
+
+    def test_housekeeper_cannot_list_or_search_bookings(self):
+        ctx = self.register("sec6@example.ru")
+        self.client.post("/api/users", headers=ctx["h"], json={
+            "name": "Оля", "email": "sec6-maid@example.ru", "role": "housekeeper", "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": "sec6-maid@example.ru", "password": "password123"})
+        hh = {"Authorization": f"Bearer {tok.json()['token']}"}
+        b = self.book(ctx, ctx["rooms"][0], d(1), d(2)).json()
+        # горничной хватает шахматки и «Сегодня» — они остаются открытыми
+        self.assertEqual(self.client.get("/api/board", headers=hh).status_code, 200)
+        self.assertEqual(self.client.get("/api/today", headers=hh).status_code, 200)
+        # а список/поиск броней и карточка по id — только менеджеру и владельцу
+        self.assertEqual(self.client.get("/api/bookings", headers=hh).status_code, 403)
+        self.assertEqual(self.client.get(f"/api/bookings/{b['id']}", headers=hh).status_code, 403)
+        self.assertEqual(self.client.get("/api/bookings", headers=ctx["h"]).status_code, 200)
+
+    def test_csv_formula_injection_is_neutralized(self):
+        ctx = self.register("sec5@example.ru")
+        cat = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]["id"]
+        self.client.post("/api/expenses", headers=ctx["h"], json={
+            "category_id": cat, "amount": 10, "comment": "=2+2"})
+        r = self.client.get("/api/expenses/export.csv", headers=ctx["h"], params={"from": d(-1), "to": d(1)})
+        self.assertNotIn(";=2+2", r.text)
+        self.assertIn("'=2+2", r.text)
 
 
 class ICalTests(unittest.TestCase):

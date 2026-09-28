@@ -62,7 +62,10 @@ def _room_type(conn, room: dict) -> dict:
     return one(conn, "SELECT * FROM room_types WHERE id = %s", (room["room_type_id"],))
 
 
-@api()
+# Список и карточка отдельной брони — только менеджер/владелец: горничной для её работы хватает
+# /api/board и /api/today (те и так открыты всем ролям), а полнотекстовый поиск по гостям
+# по всем броням аккаунта выходит за рамки «только шахматка и заезды».
+@api("manager")
 def list_bookings(c: Ctx):
     start, end = _date_range(c, 60)
     where = ["b.account_id = %s", "b.check_in < %s", "b.check_out > %s"]
@@ -89,7 +92,7 @@ def list_bookings(c: Ctx):
         )
 
 
-@api()
+@api("manager")
 def get_booking(c: Ctx):
     with tx() as conn:
         row = one(conn, f"SELECT {BOOKING_COLS}, r.name AS room_name FROM bookings b"

@@ -10,6 +10,7 @@ import jwt
 from starlette.requests import Request
 
 from . import config
+from .db import one
 from .errors import ApiError
 
 ROLES_ORDER = {"housekeeper": 0, "manager": 1, "owner": 2}
@@ -68,6 +69,19 @@ def principal(request: Request, min_role: str = "housekeeper") -> Principal:
     p = Principal(user_id=data["sub"], account_id=data["acc"], role=data["role"])
     p.require(min_role)
     return p
+
+
+def verify_active(conn, p: Principal) -> None:
+    """Токен подписан верно и не истёк, но это не значит, что им ещё можно пользоваться:
+    сотрудника могли удалить, а аккаунт — приостановить уже после того, как токен выдан.
+    Проверяем это на каждый запрос (не только при входе), иначе доступ можно отозвать
+    только сменой SECRET_KEY — сразу у всех клиентов сразу."""
+    row = one(conn, "SELECT a.status FROM users u JOIN accounts a ON a.id = u.account_id"
+                    " WHERE u.id = %s AND u.account_id = %s", (p.user_id, p.account_id))
+    if not row:
+        raise ApiError(401, "Нужно войти в систему")
+    if row["status"] != "active":
+        raise ApiError(403, "Аккаунт приостановлен. Свяжитесь с поддержкой")
 
 
 def new_ical_token() -> str:

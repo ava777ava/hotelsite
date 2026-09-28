@@ -14,7 +14,7 @@ from starlette.routing import Route
 
 from ..db import all_, one, run, tx
 from ..errors import ApiError
-from ..util import opt_str, parse_date, parse_int, parse_money, parse_uuid, req_str
+from ..util import csv_safe, opt_str, parse_date, parse_int, parse_money, parse_uuid, req_str
 from .base import Ctx, api
 
 EXPENSE_COLS_PLAIN = "id, property_id, room_id, category_id, date, amount, comment, recurring_rule_id, created_at"
@@ -156,8 +156,9 @@ def export_expenses(c: Ctx):
     w = csv.writer(buf, delimiter=";")
     w.writerow(["Дата", "Категория", "Объект", "Номер", "Сумма", "Комментарий", "Кто добавил"])
     for r in rows:
-        w.writerow([r["date"].strftime("%d.%m.%Y"), r["category_name"], r["property_name"] or "Общий",
-                    r["room_name"] or "", str(r["amount"]).replace(".", ","), r["comment"], r["created_by_name"] or ""])
+        w.writerow([r["date"].strftime("%d.%m.%Y"), csv_safe(r["category_name"]),
+                    csv_safe(r["property_name"] or "Общий"), csv_safe(r["room_name"] or ""),
+                    str(r["amount"]).replace(".", ","), csv_safe(r["comment"]), csv_safe(r["created_by_name"] or "")])
     return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename=expenses_{start}_{end}.csv"})
 
@@ -202,7 +203,9 @@ def update_expense(c: Ctx):
     eid = parse_uuid(c.path["id"])
     d = c.data
     with tx() as conn:
-        e = one(conn, "SELECT * FROM expenses WHERE id = %s AND account_id = %s", (eid, c.account_id))
+        # FOR UPDATE — чтобы два одновременных PATCH одного расхода не затёрли поля друг друга
+        # (без блокировки оба читают одно и то же старое состояние и пишут поверх один другого).
+        e = one(conn, "SELECT * FROM expenses WHERE id = %s AND account_id = %s FOR UPDATE", (eid, c.account_id))
         if not e:
             raise ApiError(404, "Расход не найден")
         new = dict(e)

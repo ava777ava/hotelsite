@@ -8,7 +8,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.requests import Request
 from starlette.responses import Response
 
-from ..auth import Principal, principal
+from ..auth import Principal, principal, verify_active
+from ..db import tx
 from ..errors import ApiError
 from ..util import Json, body
 
@@ -39,11 +40,19 @@ def api(min_role: str = "housekeeper", public: bool = False) -> Callable:
     """Декоратор: обработчик получает Ctx и выполняется в пуле потоков (работа с БД синхронная)."""
 
     def wrap(fn: Callable[[Ctx], Any]):
+        def run(ctx: Ctx) -> Any:
+            if ctx.p is not None:
+                # Токен может быть ещё действителен, а сотрудника уже удалили или
+                # аккаунт приостановили — проверяем это на каждый запрос, а не только при входе.
+                with tx() as conn:
+                    verify_active(conn, ctx.p)
+            return fn(ctx)
+
         async def handler(request: Request) -> Response:
             try:
                 p = None if public else principal(request, min_role)
                 data = await body(request) if request.method in ("POST", "PUT", "PATCH") else {}
-                result = await run_in_threadpool(fn, Ctx(request, p, data))
+                result = await run_in_threadpool(run, Ctx(request, p, data))
                 if isinstance(result, Response):
                     return result
                 return Json(result if result is not None else {"ok": True})

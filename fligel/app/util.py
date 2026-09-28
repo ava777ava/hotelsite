@@ -66,6 +66,9 @@ def parse_uuid(value: Any, label: str = "Идентификатор") -> str:
         raise ApiError(422, f"{label}: неверный формат")
 
 
+MAX_MONEY = Decimal("9999999999.99")  # предел numeric(12,2) в БД
+
+
 def parse_money(value: Any, label: str = "Сумма") -> Decimal:
     if value in (None, ""):
         return Decimal("0")
@@ -75,7 +78,14 @@ def parse_money(value: Any, label: str = "Сумма") -> Decimal:
         raise ApiError(422, f"{label}: нужно число")
     if d < 0:
         raise ApiError(422, f"{label} не может быть отрицательной")
-    return d.quantize(Decimal("0.01"))
+    if d > MAX_MONEY:
+        raise ApiError(422, f"{label}: слишком большое число")
+    try:
+        return d.quantize(Decimal("0.01"))
+    except InvalidOperation:
+        # аномально много знаков после запятой — Decimal.quantize не укладывается в точность
+        # контекста (28 значащих цифр) и иначе уронит запрос в 500 вместо понятной ошибки
+        raise ApiError(422, f"{label}: нужно число")
 
 
 def parse_int(value: Any, label: str, minimum: int = 0, default: int | None = None) -> int:
@@ -100,3 +110,14 @@ def slugify(text: str) -> str:
     s = text.lower().translate(table)
     s = re.sub(r"[^a-z0-9]+", "-", s).strip("-")
     return s[:40] or "object"
+
+
+def csv_safe(value) -> str:
+    """Защита от CSV-инъекции формул: ячейка, начинающаяся с =, +, -, @ (а также с табуляции
+    или возврата каретки), в Excel/Google Таблицах может выполниться как формула. Добавляем
+    ведущий апостроф — Excel покажет текст как есть, формула не запустится. Только для
+    свободного текста (комментарии, названия) — не применять к числам, где «-» законно."""
+    s = "" if value is None else str(value)
+    if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + s
+    return s

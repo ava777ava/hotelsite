@@ -14,13 +14,21 @@ from starlette.routing import Route
 
 from ..db import all_, one, run, tx
 from ..errors import ApiError
-from ..util import parse_date, parse_money, parse_uuid
+from ..util import csv_safe, parse_date, parse_money, parse_uuid
 from .base import Ctx, api
 from .channels import CHANNELS
 from .common import selected_property
 
 SOURCE_LABELS = {"manual": "Вручную", "direct": "Сайт", "avito": "Авито", "yandex": "Яндекс Путешествия",
                   "sutochno": "Суточно.ру", "ostrovok": "Островок", "other": "Другое"}
+
+PENNY = Decimal("0.01")
+
+
+def _money(v: Decimal) -> Decimal:
+    """Округляет до копеек сразу после деления — иначе доля ночи или доля общего расхода
+    остаётся периодической дробью на 28 значащих цифр (видно в CSV, некрасиво и не по-деньгам)."""
+    return v.quantize(PENNY)
 
 
 # ---------- периоды ----------
@@ -88,12 +96,12 @@ def _booking_metrics(rows: list[dict], rooms: int, days: int) -> dict:
         if r["status"] == "blocked":
             blocked += r["nights_in"]
             continue
-        share = Decimal(r["total_price"]) * r["nights_in"] / r["nights"]
+        share = _money(Decimal(r["total_price"]) * r["nights_in"] / r["nights"])
         sold += r["nights_in"]
         revenue += share
         if r["status"] in ("confirmed", "pending"):
-            due += max((Decimal(r["total_price"]) - Decimal(r["paid_amount"])) * r["nights_in"] / r["nights"],
-                       Decimal("0"))
+            due_share = _money((Decimal(r["total_price"]) - Decimal(r["paid_amount"])) * r["nights_in"] / r["nights"])
+            due += max(due_share, Decimal("0"))
         s = by_source.setdefault(r["source"], {"source": r["source"], "nights": 0, "revenue": Decimal("0"),
                                                "bookings": 0})
         s["nights"] += r["nights_in"]; s["revenue"] += share; s["bookings"] += 1
@@ -104,8 +112,8 @@ def _booking_metrics(rows: list[dict], rooms: int, days: int) -> dict:
         "room_nights": available, "sold_nights": sold, "blocked_nights": blocked,
         "occupancy": round(sold * 100 / available, 1) if available else 0.0,
         "revenue": revenue, "due": due,
-        "adr": (revenue / sold) if sold else Decimal("0"),
-        "revpar": (revenue / available) if available else Decimal("0"),
+        "adr": _money(revenue / sold) if sold else Decimal("0"),
+        "revpar": _money(revenue / available) if available else Decimal("0"),
         "by_source": by_source, "by_room": by_room,
     }
 
@@ -129,7 +137,7 @@ def _expenses_total(conn, account_id: str, property_ids: list[str], scope_rooms:
                 (account_id, property_ids, start, end))["n"]
     shared = one(conn, "SELECT coalesce(sum(amount), 0) AS n FROM expenses WHERE account_id = %s"
                        " AND property_id IS NULL AND date >= %s AND date < %s", (account_id, start, end))["n"]
-    allocated = (Decimal(shared) * scope_rooms / total_rooms) if total_rooms else Decimal("0")
+    allocated = _money(Decimal(shared) * scope_rooms / total_rooms) if total_rooms else Decimal("0")
     return Decimal(direct) + allocated
 
 
@@ -158,7 +166,7 @@ def _expenses_by_category(conn, account_id: str, property_ids: list[str], scope_
         key = str(r["category_id"])
         entry = result.setdefault(key, {"category_id": r["category_id"], "name": r["name"], "color": r["color"],
                                         "amount": Decimal("0")})
-        entry["amount"] += Decimal(r["amount"]) * ratio
+        entry["amount"] += _money(Decimal(r["amount"]) * ratio) if total_rooms else Decimal("0")
     return sorted(result.values(), key=lambda x: -x["amount"])
 
 
@@ -266,7 +274,7 @@ def _build_report(c: Ctx) -> dict:
         by_source = []
         for s in main["by_source_raw"].values():
             pct = Decimal(commissions.get(s["source"], 0))
-            commission_amount = (s["revenue"] * pct / 100) if pct else Decimal("0")
+            commission_amount = _money(s["revenue"] * pct / 100) if pct else Decimal("0")
             by_source.append({**s, "label": SOURCE_LABELS.get(s["source"], s["source"]),
                                "commission_percent": pct, "commission_amount": commission_amount,
                                "net_revenue": s["revenue"] - commission_amount})
@@ -357,12 +365,13 @@ def export_report(c: Ctx):
     w.writerow(["По категориям расходов"])
     w.writerow(["Категория", "Сумма"])
     for x in data["by_expense_category"]:
-        w.writerow([x["name"], _num(x["amount"])])
+        w.writerow([csv_safe(x["name"]), _num(x["amount"])])
     w.writerow([])
     w.writerow(["По номерам"])
     w.writerow(["Номер", "Категория", "Объект", "Ночей", "Загрузка, %", "Выручка"])
     for r in data["by_room"]:
-        w.writerow([r["room_name"], r["room_type_name"], r["property_name"], r["nights"], _num(r["occupancy"]),
+        w.writerow([csv_safe(r["room_name"]), csv_safe(r["room_type_name"]), csv_safe(r["property_name"]),
+                    r["nights"], _num(r["occupancy"]),
                     _num(r["revenue"])])
     return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename=report_{data['from']}_{data['to']}.csv"})
