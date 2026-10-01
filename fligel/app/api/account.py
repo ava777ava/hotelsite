@@ -9,7 +9,7 @@ from ..auth import hash_password, make_token, new_ical_token, new_reset_token, v
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..expenses import create_default_categories
-from ..util import opt_str, parse_int, parse_money, parse_uuid, req_str, slugify
+from ..util import Json, opt_str, parse_int, parse_money, parse_uuid, req_str, slugify
 from .base import Ctx, api
 
 log = logging.getLogger("fligel.auth")
@@ -444,6 +444,72 @@ def delete_room(c: Ctx):
             raise ApiError(404, "Номер не найден")
 
 
+@api()
+def mark_cleaned(c: Ctx):
+    """Отметка «номер убран» — доступна и горничной (это её работа). cleaned=false снимает отметку."""
+    room_id = parse_uuid(c.path["id"])
+    cleaned = c.data.get("cleaned", True)
+    with tx() as conn:
+        row = one(conn, "UPDATE rooms SET cleaned_on = CASE WHEN %s THEN current_date ELSE NULL END"
+                        " WHERE id = %s AND account_id = %s RETURNING id, cleaned_on", (bool(cleaned), room_id, c.account_id))
+    if not row:
+        raise ApiError(404, "Номер не найден")
+    return row
+
+
+# ---------- данные аккаунта: выгрузка и удаление (право владельца по 152-ФЗ) ----------
+
+# Секретные ссылки календарей (ical_token) в выгрузку не входят, пароли — тоже.
+EXPORT_QUERIES = [
+    ("properties", "SELECT id, name, address, phone, timezone, check_in_time, check_out_time, public_slug,"
+                   " booking_enabled, created_at FROM properties WHERE account_id = %s ORDER BY created_at"),
+    ("room_types", "SELECT id, property_id, name, description, capacity, base_price, min_stay FROM room_types"
+                   " WHERE account_id = %s ORDER BY property_id, sort_order"),
+    ("rooms", "SELECT id, property_id, room_type_id, name FROM rooms WHERE account_id = %s ORDER BY property_id, sort_order"),
+    ("bookings", "SELECT id, property_id, room_id, check_in, check_out, status, source, guest_name, guest_phone,"
+                 " guest_email, guests_count, total_price, paid_amount, notes, created_at FROM bookings"
+                 " WHERE account_id = %s ORDER BY check_in"),
+    ("rates", "SELECT room_type_id, date, price, min_stay, closed FROM rates WHERE account_id = %s ORDER BY date"),
+    ("expense_categories", "SELECT id, name, color, archived FROM expense_categories WHERE account_id = %s ORDER BY name"),
+    ("expenses", "SELECT id, property_id, room_id, category_id, date, amount, comment FROM expenses"
+                 " WHERE account_id = %s ORDER BY date"),
+    ("income_categories", "SELECT id, name, color, archived FROM income_categories WHERE account_id = %s ORDER BY name"),
+    ("incomes", "SELECT id, property_id, room_id, category_id, date, amount, comment FROM incomes"
+                " WHERE account_id = %s ORDER BY date"),
+    ("users", "SELECT id, name, email, role, created_at FROM users WHERE account_id = %s ORDER BY created_at"),
+]
+
+
+@api("owner")
+def export_account(c: Ctx):
+    with tx() as conn:
+        acc = one(conn, "SELECT name, plan, created_at FROM accounts WHERE id = %s", (c.account_id,))
+        data = {"account": acc, "exported_at": datetime.now(timezone.utc)}
+        for name, sql in EXPORT_QUERIES:
+            data[name] = all_(conn, sql, (c.account_id,))
+    return Json(data, headers={"Content-Disposition": "attachment; filename=fligel_data.json"})
+
+
+@api("owner")
+def delete_account(c: Ctx):
+    """Полное удаление аккаунта со всеми данными. Нужен пароль владельца — токен входа сам по себе
+    (например, украденный из браузера) для такого необратимого действия недостаточен."""
+    password = str(c.data.get("password") or "")
+    with tx() as conn:
+        user = one(conn, "SELECT password_hash FROM users WHERE id = %s AND account_id = %s", (c.p.user_id, c.account_id))
+        if not user or not verify_password(password, user["password_hash"]):
+            raise ApiError(401, "Пароль указан неверно", {"field": "password"})
+        # Категории расходов защищены от удаления, пока на них ссылаются записи (RESTRICT) —
+        # сначала убираем сами записи, затем аккаунт каскадом.
+        for table in ("expense_recurring_rules", "expenses", "incomes"):
+            run(conn, f"DELETE FROM {table} WHERE account_id = %s", (c.account_id,))
+        run(conn, "DELETE FROM ical_exports WHERE target_id IN (SELECT id FROM rooms WHERE account_id = %s"
+                  " UNION SELECT id FROM room_types WHERE account_id = %s)", (c.account_id, c.account_id))
+        run(conn, "DELETE FROM accounts WHERE id = %s", (c.account_id,))
+    log.info("Аккаунт %s удалён владельцем", c.account_id)
+    return {"ok": True}
+
+
 routes = [
     Route("/api/auth/register", register, methods=["POST"]),
     Route("/api/auth/login", login, methods=["POST"]),
@@ -452,6 +518,8 @@ routes = [
     Route("/api/auth/change-password", change_password, methods=["POST"]),
     Route("/api/me", me),
     Route("/api/onboarding", onboarding),
+    Route("/api/account/export", export_account),
+    Route("/api/account/delete", delete_account, methods=["POST"]),
     Route("/api/users", list_users),
     Route("/api/users", create_user, methods=["POST"]),
     Route("/api/users/{id}", delete_user, methods=["DELETE"]),
@@ -464,4 +532,5 @@ routes = [
     Route("/api/rooms", create_room, methods=["POST"]),
     Route("/api/rooms/{id}", update_room, methods=["PATCH"]),
     Route("/api/rooms/{id}", delete_room, methods=["DELETE"]),
+    Route("/api/rooms/{id}/cleaned", mark_cleaned, methods=["POST"]),
 ]

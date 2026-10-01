@@ -1260,6 +1260,99 @@ class LaunchReadinessTests(Base):
             mail.send, config.SMTP_HOST = orig_send, orig_host
 
 
+class OperationsTests(Base):
+    """История изменений брони, отметка «номер убран», выгрузка и удаление аккаунта."""
+
+    def staff(self, ctx, email, role):
+        self.client.post("/api/users", headers=ctx["h"], json={"name": "Сотрудник", "email": email, "role": role, "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": email, "password": "password123"}).json()["token"]
+        return {"Authorization": f"Bearer {tok}"}
+
+    def test_booking_history_records_who_changed_what(self):
+        ctx = self.register("ops1@example.ru")
+        r0, r1 = ctx["rooms"][0], ctx["rooms"][1]
+        b = self.book(ctx, r0, d(5), d(7), guest="Анна", total_price=7000).json()
+        self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"room_id": r1["id"], "check_in": d(6), "check_out": d(8), "total_price": 8000})
+        self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"status": "cancelled"})
+        log = self.client.get(f"/api/bookings/{b['id']}/log", headers=ctx["h"]).json()
+        self.assertEqual([x["action"] for x in log], ["cancelled", "updated", "created"])
+        moved = {c["field"]: c for c in log[1]["details"]["changes"]}
+        self.assertEqual(set(moved), {"Номер", "Заезд", "Выезд", "Стоимость"})
+        self.assertEqual((moved["Стоимость"]["from"], moved["Стоимость"]["to"]), ("7000 ₽", "8000 ₽"))
+        self.assertIn(r1["name"], moved["Номер"]["to"])
+        self.assertEqual(log[0]["user_name"], "Иван")
+        # пустая правка (те же значения) не засоряет историю
+        self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"guest_name": "Анна"})
+        self.assertEqual(len(self.client.get(f"/api/bookings/{b['id']}/log", headers=ctx["h"]).json()), 3)
+
+    def test_booking_history_access_rules(self):
+        a = self.register("ops2a@example.ru")
+        other = self.register("ops2b@example.ru")
+        b = self.book(a, a["rooms"][0], d(5), d(6)).json()
+        self.assertEqual(self.client.get(f"/api/bookings/{b['id']}/log", headers=other["h"]).status_code, 404)
+        hh = self.staff(a, "ops2h@example.ru", "housekeeper")
+        self.assertEqual(self.client.get(f"/api/bookings/{b['id']}/log", headers=hh).status_code, 403)
+
+    def test_site_booking_and_sync_are_logged_as_system(self):
+        ctx = self.register("ops3@example.ru")
+        slug, rt = ctx["prop"]["public_slug"], ctx["prop"]["room_types"][0]["id"]
+        r = self.client.post(f"/api/public/{slug}/book", json={"room_type_id": rt, "check_in": d(3), "check_out": d(5), "guest_name": "Ольга", "guest_phone": "+79001234567", "consent": True})
+        log = self.client.get(f"/api/bookings/{r.json()['booking_id']}/log", headers=ctx["h"]).json()
+        self.assertEqual((log[0]["action"], log[0]["user_name"]), ("created", "Система"))
+
+    def test_housekeeper_marks_room_cleaned(self):
+        ctx = self.register("ops4@example.ru")
+        room = ctx["rooms"][0]
+        self.book(ctx, room, d(-2), d(0), guest="Уезжает")
+        hh = self.staff(ctx, "ops4h@example.ru", "housekeeper")
+        t = self.client.get("/api/today", headers=hh).json()
+        self.assertIsNone(t["departures"][0]["room_cleaned_on"])
+        r = self.client.post(f"/api/rooms/{room['id']}/cleaned", headers=hh, json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        t = self.client.get("/api/today", headers=hh).json()
+        self.assertEqual(t["departures"][0]["room_cleaned_on"], d(0))
+        self.client.post(f"/api/rooms/{room['id']}/cleaned", headers=hh, json={"cleaned": False})
+        self.assertIsNone(self.client.get("/api/today", headers=hh).json()["departures"][0]["room_cleaned_on"])
+        other = self.register("ops4b@example.ru")
+        self.assertEqual(self.client.post(f"/api/rooms/{room['id']}/cleaned", headers=other["h"], json={}).status_code, 404)
+
+    def test_account_export_has_data_but_no_secrets(self):
+        ctx = self.register("ops5@example.ru")
+        self.book(ctx, ctx["rooms"][0], d(1), d(2), guest="Экспорт")
+        r = self.client.get("/api/account/export", headers=ctx["h"])
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("attachment", r.headers["content-disposition"])
+        data = r.json()
+        self.assertEqual(len(data["rooms"]), 12)
+        self.assertTrue(any(b["guest_name"] == "Экспорт" for b in data["bookings"]))
+        self.assertNotIn("password_hash", r.text)
+        self.assertNotIn("ical_token", r.text)
+        mh = self.staff(ctx, "ops5m@example.ru", "manager")
+        self.assertEqual(self.client.get("/api/account/export", headers=mh).status_code, 403)
+
+    def test_delete_account_requires_password_and_removes_everything(self):
+        keep = self.register("ops6keep@example.ru")
+        ctx = self.register("ops6@example.ru")
+        self.book(ctx, ctx["rooms"][0], d(1), d(2))
+        cat = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]["id"]
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat, "amount": 100})
+        inc = self.client.get("/api/income-categories", headers=ctx["h"]).json()[0]["id"]
+        self.client.post("/api/incomes", headers=ctx["h"], json={"category_id": inc, "amount": 50})
+        self.client.post("/api/expense-recurring", headers=ctx["h"], json={"category_id": cat, "amount": 10, "day_of_month": 1})
+        mh = self.staff(ctx, "ops6m@example.ru", "manager")
+        self.assertEqual(self.client.post("/api/account/delete", headers=mh, json={"password": "password123"}).status_code, 403)
+        self.assertEqual(self.client.post("/api/account/delete", headers=ctx["h"], json={"password": "wrong"}).status_code, 401)
+        r = self.client.post("/api/account/delete", headers=ctx["h"], json={"password": "password123"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.client.get("/api/me", headers=ctx["h"]).status_code, 401)  # токен больше не действует
+        self.assertEqual(self.client.post("/api/auth/login", json={"email": "ops6@example.ru", "password": "password123"}).status_code, 401)
+        with db.tx() as conn:
+            left = db.one(conn, "SELECT (SELECT count(*) FROM bookings WHERE guest_name = 'Гость' AND room_id = ANY(%s::uuid[])) AS n",
+                          ([r["id"] for r in ctx["rooms"]],))["n"]
+        self.assertEqual(left, 0)
+        self.assertEqual(self.client.get("/api/me", headers=keep["h"]).status_code, 200)  # чужой аккаунт цел
+
+
 class AuthSecurityTests(Base):
     """Восстановление пароля (мок SMTP — как telegram.send_message/sync.fetch в других тестах)
     и блокировка входа после подбора пароля."""

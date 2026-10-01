@@ -131,7 +131,7 @@ const ROUTES = {
   profile: { title: 'Профиль', icon: 'user', view: viewProfile },
 };
 const RANK = { housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['board', 'today', 'bookings', 'expenses', 'channels', 'settings', 'rates', 'stats', 'profile'];
+const MOBILE_ORDER = ['board', 'today', 'bookings', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'profile'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
 const currentRoute = () => { const r = location.hash.replace(/^#\/?/, '').split('?')[0] || 'board'; return ROUTES[r] ? r : 'board'; };
 
@@ -473,6 +473,7 @@ async function drawOnboarding(box) {
     h('div', { class: 'onboard-head' }, h('div', {}, h('h3', {}, 'Быстрый старт'), h('div', { class: 'muted small' }, `Настроено ${o.done} из ${o.total} — так сервис начнёт приносить пользу сразу`)),
       h('button', { class: 'btn small ghost', onclick: () => { store.set('onboardHidden', '1'); box.innerHTML = ''; } }, 'Скрыть')),
     h('div', { class: 'bar-h', style: { margin: '10px 0 12px' } }, h('i', { style: { width: `${(o.done / o.total) * 100}%`, background: 'var(--pine)' } })),
+    h('button', { class: 'btn small onboard-toggle', onclick: (e) => { const el = e.target.parentNode.querySelector('.onboard-steps'); el.classList.toggle('open'); e.target.textContent = el.classList.contains('open') ? 'Свернуть шаги' : 'Показать шаги'; } }, 'Показать шаги'),
     h('div', { class: 'onboard-steps' }, o.steps.map((st) => h('a', { class: 'onboard-step' + (st.done ? ' done' : ''), href: `#/${st.route}` },
       h('span', { class: 'chk' }, st.done ? '✓' : ''), h('span', {}, st.title)))),
     bookingUrl ? h('div', { class: 'muted small', style: { marginTop: '10px' } }, 'Ваша страница бронирования для гостей: ', h('a', { href: bookingUrl, target: '_blank', rel: 'noopener' }, bookingUrl)) : null));
@@ -945,6 +946,46 @@ async function bookingDrawer(b, onSaved) {
     h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Заезд'), f.check_in), h('label', { class: 'field' }, h('span', {}, 'Выезд'), f.check_out)),
     guestBox,
     h('label', { class: 'field' }, h('span', {}, 'Комментарий'), f.notes));
+  const changeLogBox = h('div', { style: { display: 'none', marginBottom: '14px' } });
+  const showChangeLog = async () => {
+    try {
+      const rows = await api('GET', `/api/bookings/${b.id}/log`);
+      changeLogBox.innerHTML = ''; changeLogBox.style.display = '';
+      const ACTION = { created: 'Создана', updated: 'Изменена', cancelled: 'Отменена' };
+      changeLogBox.append(h('div', {}, h('h3', { style: { margin: '4px 0 8px' } }, 'История изменений'),
+        rows.length ? rows.map((r) => h('div', { class: 'log-row' },
+          h('div', { class: 'small' }, h('b', {}, ACTION[r.action] || r.action), h('span', { class: 'muted' }, ` · ${r.user_name} · ${fmtDateTime(r.created_at)}`)),
+          r.details.summary ? h('div', { class: 'muted small' }, r.details.summary) : null,
+          r.details.reason ? h('div', { class: 'muted small' }, r.details.reason) : null,
+          (r.details.changes || []).map((c) => h('div', { class: 'small' }, `${c.field}: `, h('span', { class: 'muted' }, c.from), ' → ', h('b', {}, c.to)))))
+          : h('div', { class: 'muted small' }, 'Записей пока нет (бронь создана до появления истории).')));
+    } catch (ex) { toast(ex.message, true); }
+  };
+  const printVoucher = async () => {
+    try {
+      const prop = await api('GET', `/api/properties/${b.property_id}`);
+      const room = allRooms().find((r) => r.id === b.room_id);
+      const total = Number(b.total_price || 0), paidSum = Number(b.paid_amount || 0);
+      const line = (k, v) => h('tr', {}, h('td', { style: { padding: '6px 10px 6px 0', color: '#555', width: '190px' } }, k), h('td', { style: { padding: '6px 0', fontWeight: 600 } }, v));
+      document.getElementById('print-sheet')?.remove();
+      document.body.append(h('div', { id: 'print-sheet' },
+        h('h1', { style: { fontSize: '22px', marginBottom: '2px' } }, 'Подтверждение бронирования'),
+        h('p', { style: { marginTop: 0, color: '#555' } }, `№ ${String(b.id).slice(0, 8).toUpperCase()}`),
+        h('h2', { style: { fontSize: '17px', margin: '18px 0 4px' } }, prop.name),
+        h('p', { style: { margin: '0 0 18px', color: '#333' } }, [prop.address, prop.phone].filter(Boolean).join(' · ')),
+        h('table', { style: { borderCollapse: 'collapse', fontSize: '14px' } }, h('tbody', {},
+          line('Гость', f.guest_name.value || '—'),
+          line('Номер', room ? `№${room.name} (${room.type})` : '—'),
+          line('Заезд', `${fmtDate(f.check_in.value)} ${parseISO(f.check_in.value).getFullYear()}, с ${String(prop.check_in_time).slice(0, 5)}`),
+          line('Выезд', `${fmtDate(f.check_out.value)} ${parseISO(f.check_out.value).getFullYear()}, до ${String(prop.check_out_time).slice(0, 5)}`),
+          line('Гостей', f.guests_count.value || '1'),
+          line('Стоимость', fmtMoney(f.total_price.value || total)),
+          line('Оплачено', fmtMoney(f.paid_amount.value || paidSum)),
+          line('К оплате при заселении', fmtMoney(Math.max(Number(f.total_price.value || total) - Number(f.paid_amount.value || paidSum), 0))))),
+        h('p', { style: { marginTop: '28px', color: '#555' } }, 'Ждём вас в гости!')));
+      window.print();
+    } catch (ex) { toast(ex.message, true); }
+  };
   const guestHistoryBox = h('div', { style: { display: 'none', marginBottom: '14px' } });
   const showGuestHistory = async () => {
     const phone = f.guest_phone.value.trim();
@@ -968,7 +1009,8 @@ async function bookingDrawer(b, onSaved) {
     h('div', { class: 'row2' }, inp('guest_phone', 'Телефон', { type: 'tel', placeholder: '+7' }), inp('guest_email', 'Email', { type: 'email' })),
     h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' } },
       h('button', { type: 'button', class: 'btn small ghost', onclick: showGuestHistory }, 'История гостя по телефону'),
-      readOnly ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => { f.paid_amount.value = f.total_price.value || 0; updateTotal(); } }, 'Оплачено полностью')),
+      readOnly ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => { f.paid_amount.value = f.total_price.value || 0; updateTotal(); } }, 'Оплачено полностью'),
+      isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: printVoucher }, 'Печать подтверждения')),
     guestHistoryBox,
     h('div', { class: 'row3' },
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1 }),
@@ -977,6 +1019,9 @@ async function bookingDrawer(b, onSaved) {
     h('label', { class: 'field' }, h('span', {}, 'Источник'), f.source),
     h('div', { class: 'summary' }, nightsEl, totalEl));
   guestBox.style.display = status.value === 'blocked' ? 'none' : '';
+  if (!isNew && can('manager')) {
+    body.append(h('button', { type: 'button', class: 'btn small ghost', onclick: showChangeLog }, 'История изменений'), changeLogBox);
+  }
 
   const save = h('button', { class: 'btn primary', onclick: async () => {
     save.disabled = true;
@@ -1061,7 +1106,19 @@ async function viewToday(main) {
         h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${b.guests_count} гост. · ${SOURCE[b.source]}`),
         b.guest_phone ? h('a', { class: 'small tel', href: `tel:${b.guest_phone}`, onclick: (e) => e.stopPropagation() }, b.guest_phone) : null),
       kind !== 'staying' && due > 0 && can('manager') ? h('span', { class: 'pill warn num' }, `к оплате ${fmtMoney(due)}`) : null,
-      b.status === 'pending' ? h('span', { class: 'pill warn' }, 'ждёт оплаты') : null);
+      b.status === 'pending' ? h('span', { class: 'pill warn' }, 'ждёт оплаты') : null,
+      kind === 'out' && day === todayISO() ? cleaningControl(b) : null);
+  };
+  // Уборка: номер, из которого сегодня выезжают, «ждёт уборки», пока горничная (или любой сотрудник) не отметит его убранным
+  const cleaningControl = (b) => {
+    const clean = b.room_cleaned_on && b.room_cleaned_on.slice(0, 10) === day;
+    return h('button', {
+      class: 'btn small' + (clean ? ' ok-btn' : ''), title: clean ? 'Нажмите, чтобы снять отметку' : 'Отметить номер убранным',
+      onclick: async (e) => {
+        e.stopPropagation();
+        try { await api('POST', `/api/rooms/${b.room_id}/cleaned`, { cleaned: !clean }); load(); } catch (ex) { toast(ex.message, true); }
+      },
+    }, clean ? '✓ Убран' : 'Убрать');
   };
   const block = (title, list, kind, emptyText) => h('div', { class: 'card' },
     h('div', { class: 'card-head' }, h('h2', {}, title), h('span', { class: 'pill none num' }, list.length)),
@@ -1078,6 +1135,7 @@ async function viewToday(main) {
           kpiCard('Заезды', String(d.arrivals.length)), kpiCard('Выезды', String(d.departures.length)),
           kpiCard('Проживают', String(d.staying.length)),
           kpiCard('Свободно на ночь', `${d.free_tonight}`, `из ${d.rooms_total}`),
+          day === todayISO() ? kpiCard('Ждут уборки', String(d.departures.filter((b) => !(b.room_cleaned_on && b.room_cleaned_on.slice(0, 10) === day)).length)) : null,
           can('manager') ? kpiCard('К доплате по заездам и выездам', fmtMoney(dueToday)) : null),
         h('div', { class: 'grid-2' },
           block('Заезды', d.arrivals, 'in', 'Заездов нет'),
@@ -1286,17 +1344,17 @@ async function viewChannels(main) {
       h('option', { value: 'per_booking', selected: ch.export_mode === 'per_booking' }, 'Каждая бронь — отдельным событием'),
       h('option', { value: 'sold_out', selected: ch.export_mode === 'sold_out' }, 'Только даты, когда мест нет')) : null;
     return h('tr', {},
-      h('td', {}, level === 'type'
+      h('td', { class: 'wide' }, level === 'type'
         ? [h('b', {}, item.name), h('div', { class: 'muted small' }, `${item.rooms_count} ${item.rooms_count === 1 ? 'номер' : 'номеров'}`)]
         : [h('b', { class: 'num' }, item.name), h('div', { class: 'muted small' }, item.room_type)]),
-      h('td', { class: 'ch-cell' },
+      h('td', { class: 'ch-cell wide', 'data-l': 'Наш календарь — вставьте на площадке' },
         h('div', { class: 'copy-line' }, h('input', { class: 'input', readonly: true, value: ch.export_url, onclick: (e) => e.target.select() }),
           h('button', { class: 'btn small icon', title: 'Копировать', onclick: () => copy(ch.export_url) }, icon('copy'))),
         h('div', { class: 'muted small', style: { marginTop: '4px' } }, 'площадка забирала: ', ago(ch.export_last_fetched_at)),
         modeSel),
-      h('td', { class: 'ch-cell' }, h('div', { class: 'copy-line' }, input, saveBtn),
+      h('td', { class: 'ch-cell wide', 'data-l': 'Календарь площадки — вставьте сюда' }, h('div', { class: 'copy-line' }, input, saveBtn),
         feed?.last_status === 'error' ? h('div', { class: 'small', style: { color: 'var(--clay)', marginTop: '4px' } }, feed.last_error) : null),
-      h('td', {}, h('div', { class: 'state' }, status),
+      h('td', { class: 'wide', 'data-l': 'Состояние' }, h('div', { class: 'state' }, status),
         feed ? h('div', { class: 'muted small' }, 'обновлено: ', ago(feed.last_synced_at)) : null,
         feed ? h('div', { class: 'ch-actions', style: { marginTop: '6px' } },
           h('button', { class: 'btn small', onclick: async (e) => {
@@ -1349,7 +1407,7 @@ async function viewChannels(main) {
             ? 'Календарь категории: брони площадки мы сами расставляем по свободным номерам этой категории. Если площадка закрывает всю категорию при первой же брони, переключите способ передачи на «Только даты, когда мест нет».'
             : 'Календарь номера: одно объявление на площадке = один номер у нас.',
           ` Календари площадок обновляются каждые ${data.sync_interval_minutes} минут. Сама площадка забирает наш календарь по своему расписанию. Через iCal передаётся только занятость; цены меняются в кабинете площадки.`)),
-      h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, h('table', { class: 'list ch-table' },
+      h('div', { class: 'card' }, h('div', { class: 'table-wrap' }, h('table', { class: 'list ch-table cards-mobile' },
         h('thead', {}, h('tr', {}, [level === 'type' ? 'Категория' : 'Номер', 'Ссылка для площадки (наш календарь)', 'Ссылка с площадки (их календарь)', 'Состояние'].map((t) => h('th', {}, t)))),
         h('tbody', {}, items.map((it) => row(it, level, data.labels)))))));
   }
@@ -1631,13 +1689,13 @@ async function viewStats(main) {
       const commission = Number(x.commission_percent) ? `${money(x.commission_amount)} (${x.commission_percent}%)` : '—';
       const barFill = h('i', { style: { width: `${(Number(x.revenue) / maxSrc) * 100}%`, background: `var(--src-${x.source})` } });
       const bar = h('div', { class: 'bar-h' }, barFill);
-      return h('tr', {}, h('td', {}, label), h('td', { class: 'num' }, x.bookings), h('td', { class: 'num' }, x.nights),
-        h('td', { class: 'num' }, money(x.revenue)), h('td', { class: 'num muted small' }, commission),
-        h('td', { class: 'num' }, money(x.net_revenue)), h('td', { style: { width: '25%' } }, bar));
+      return h('tr', {}, h('td', { class: 'wide' }, label), h('td', { class: 'num', 'data-l': 'Броней' }, x.bookings), h('td', { class: 'num', 'data-l': 'Ночей' }, x.nights),
+        h('td', { class: 'num', 'data-l': 'Выручка' }, money(x.revenue)), h('td', { class: 'num muted small', 'data-l': 'Комиссия' }, commission),
+        h('td', { class: 'num', 'data-l': 'Чистая выручка' }, money(x.net_revenue)), h('td', { class: 'wide', style: { width: '25%' } }, bar));
     };
     const sourceHead = h('thead', {}, h('tr', {}, ['Источник', 'Броней', 'Ночей', 'Выручка', 'Комиссия', 'Чистая выручка', ''].map((x) => h('th', {}, x))));
     const sourceBody = r.by_source.length
-      ? h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, sourceHead, h('tbody', {}, r.by_source.map(sourceRow))))
+      ? h('div', { class: 'table-wrap' }, h('table', { class: 'list cards-mobile' }, sourceHead, h('tbody', {}, r.by_source.map(sourceRow))))
       : h('div', { class: 'empty' }, 'За этот период броней нет');
     content.append(h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'По источникам броней')), sourceBody));
 
@@ -2141,8 +2199,35 @@ async function viewSettings(main) {
         } catch (ex) { toast(ex.message, true); }
       } }, 'Сохранить'));
     content.append(commissionsCard);
+
+    // данные аккаунта: выгрузка и удаление
+    content.append(h('div', { class: 'card card-pad' },
+      h('h2', { style: { marginBottom: '6px' } }, 'Данные аккаунта'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Вы вправе в любой момент забрать все свои данные или удалить аккаунт целиком — со всеми объектами, бронями, расходами и сотрудниками. Удаление необратимо.'),
+      h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap' } },
+        h('button', { class: 'btn', onclick: () => downloadCsv('/api/account/export', 'fligel_data.json') }, icon('download'), 'Скачать все данные (JSON)'),
+        h('button', { class: 'btn danger', onclick: deleteAccountDialog }, icon('trash'), 'Удалить аккаунт'))));
   }
   load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
+}
+
+function deleteAccountDialog() {
+  const pass = h('input', { class: 'input', type: 'password', autocomplete: 'current-password' });
+  const word = h('input', { class: 'input', placeholder: 'УДАЛИТЬ' });
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  const go = h('button', { class: 'btn primary', disabled: true, style: { background: 'var(--clay)', borderColor: 'var(--clay)' }, onclick: async () => {
+    go.disabled = true;
+    try {
+      await api('POST', '/api/account/delete', { password: pass.value });
+      closeModal(); store.set('token', null); state.me = null; location.hash = ''; render(); toast('Аккаунт удалён');
+    } catch (ex) { err.textContent = ex.message; err.style.display = ''; go.disabled = false; }
+  } }, 'Удалить навсегда');
+  word.addEventListener('input', () => { go.disabled = word.value.trim().toUpperCase() !== 'УДАЛИТЬ'; });
+  openModal('Удалить аккаунт навсегда?', h('div', {}, err,
+    h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Будут удалены все объекты, номера, брони, расходы, доходы, сотрудники и настройки. Отменить это нельзя — сначала скачайте данные, если они могут понадобиться.'),
+    h('label', { class: 'field' }, h('span', {}, 'Ваш пароль'), pass),
+    h('label', { class: 'field' }, h('span', {}, 'Для подтверждения введите слово УДАЛИТЬ'), word)),
+  [h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Отмена'), h('span', { class: 'spacer' }), go]);
 }
 
 // ---------- уведомления в Telegram ----------

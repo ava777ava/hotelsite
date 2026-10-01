@@ -6,7 +6,7 @@ from starlette.routing import Route
 
 import logging
 
-from .. import mail, telegram
+from .. import booklog, mail, telegram
 from ..db import all_, one, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -129,6 +129,9 @@ def create_request(c: Ctx):
                 continue
         else:
             raise ApiError(409, "Пока вы оформляли заявку, свободные номера этой категории закончились")
+        booklog.log(conn, prop["account_id"], b["id"], None, "created",
+                    {"summary": f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}, заявка с сайта",
+                     "source": "direct"})
         telegram.notify(conn, prop["account_id"], "new_booking",
                         f"Новая заявка с сайта: {t['name']}, {check_in.strftime('%d.%m')}–"
                         f"{check_out.strftime('%d.%m')}, {name}, {phone}.")

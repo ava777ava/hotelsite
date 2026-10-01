@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import httpx
 import psycopg
 
-from . import config, ical, telegram
+from . import booklog, config, ical, telegram
 from .db import all_, one, run, tx
 from .expenses import generate_due_expenses
 
@@ -103,12 +103,15 @@ def _place(conn, feed: dict, rooms: list[dict], ev: ical.Event, uid: str, existi
                         " notes = %s, updated_at = now() WHERE id = %s",
                         (room_id, ev.start, ev.end, ev.summary[:500], existing["id"]))
                 else:
-                    run(conn,
+                    created = one(conn,
                         "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
                         " source, notes, feed_id, external_uid)"
-                        " VALUES (%s, %s, %s, %s, %s, 'confirmed', %s, %s, %s, %s)",
+                        " VALUES (%s, %s, %s, %s, %s, 'confirmed', %s, %s, %s, %s) RETURNING id",
                         (feed["account_id"], feed["property_id"], room_id, ev.start, ev.end,
                          feed["channel"], ev.summary[:500], feed["id"], uid))
+                    booklog.log(conn, feed["account_id"], created["id"], None, "created", {
+                        "summary": f"{ev.start.strftime('%d.%m')}–{ev.end.strftime('%d.%m')}, синхронизация с площадки",
+                        "source": feed["channel"]})
                     telegram.notify(
                         conn, feed["account_id"], "new_booking",
                         f"Новая бронь с площадки {CHANNEL_LABELS[feed['channel']]}: "
@@ -205,6 +208,8 @@ def apply_events(conn, feed: dict, events: list[ical.Event], today: date | None 
     for uid, b in existing.items():
         if uid not in seen and b["status"] != "cancelled" and b["check_out"] >= today:
             run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (b["id"],))
+            booklog.log(conn, feed["account_id"], b["id"], None, "cancelled",
+                        {"reason": "Бронь исчезла из календаря площадки"})
             res.removed += 1
             telegram.notify(
                 conn, feed["account_id"], "cancellation",
@@ -294,6 +299,7 @@ def expire_holds() -> int:
                   " notes = notes || ' [снято: не оплачено вовремя]' WHERE id = ANY(%s::uuid[])",
             ([r["id"] for r in rows],))
         for r in rows:
+            booklog.log(conn, r["account_id"], r["id"], None, "cancelled", {"reason": "Не оплачена вовремя"})
             telegram.notify(conn, r["account_id"], "cancellation",
                             f"Бронь «{r['guest_name'] or 'без имени'}» снята: не оплачена вовремя.")
     return len(rows)

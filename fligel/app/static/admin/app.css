@@ -457,3 +457,13 @@ table.list tbody tr { transition: background .1s; }
 .onboard-step.done { color: var(--muted); }
 .onboard-step.done .chk { background: var(--pine); border-color: var(--pine); }
 .day-list .tel { display: inline-block; margin-top: 2px; }
+.onboard-toggle { display: none; margin-bottom: 8px; }
+@media (max-width: 860px) {
+  .onboard-toggle { display: inline-flex; }
+  .onboard-steps { display: none; }
+  .onboard-steps.open { display: grid; }
+}
+@media (max-width: 760px) { .ch-cell { min-width: 0; } }
+.ok-btn { background: var(--pine-soft); border-color: var(--pine); color: var(--pine); }
+.log-row { padding: 7px 0; border-bottom: 1px solid var(--line); }
+.log-row:last-child { border-bottom: 0; }

@@ -8,7 +8,7 @@ import psycopg
 from starlette.responses import Response
 from starlette.routing import Route
 
-from .. import telegram
+from .. import booklog, telegram
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -178,6 +178,9 @@ def create_booking(c: Ctx):
                 )
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, room["id"], check_in, check_out, None), {"code": "overlap"})
+        booklog.log(conn, c.account_id, booking["id"], c.p.user_id, "created", {
+            "summary": f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}, номер {room['name']}",
+            "source": source})
         if status != "blocked":
             telegram.notify(
                 conn, c.account_id, "new_booking",
@@ -253,6 +256,11 @@ def update_booking(c: Ctx):
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, new["room_id"], new["check_in"], new["check_out"], bid),
                            {"code": "overlap"})
+        changes = booklog.diff(conn, b, updated)
+        if changes:
+            cancelled_now = new["status"] == "cancelled" and b["status"] != "cancelled"
+            booklog.log(conn, c.account_id, bid, c.p.user_id, "cancelled" if cancelled_now else "updated",
+                        {"changes": changes})
         if new["status"] == "cancelled" and b["status"] != "cancelled":
             telegram.notify(conn, c.account_id, "cancellation",
                             f"Бронь «{updated['guest_name'] or 'без имени'}» отменена "
@@ -274,9 +282,25 @@ def delete_booking(c: Ctx):
         else:
             run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (bid,))
             if b["status"] != "cancelled":
+                booklog.log(conn, c.account_id, bid, c.p.user_id, "cancelled", {})
                 telegram.notify(conn, c.account_id, "cancellation",
                                 f"Бронь «{b['guest_name'] or 'без имени'}» отменена "
                                 f"({b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}).")
+
+
+@api("manager")
+def booking_history(c: Ctx):
+    """Кто и что менял в брони — от новых записей к старым."""
+    bid = parse_uuid(c.path["id"])
+    with tx() as conn:
+        if not one(conn, "SELECT 1 FROM bookings WHERE id = %s AND account_id = %s", (bid, c.account_id)):
+            raise ApiError(404, "Бронь не найдена")
+        return all_(
+            conn,
+            "SELECT l.id, l.action, l.details, l.created_at, coalesce(u.name, 'Система') AS user_name"
+            " FROM booking_log l LEFT JOIN users u ON u.id = l.user_id"
+            " WHERE l.booking_id = %s AND l.account_id = %s ORDER BY l.created_at DESC, l.id LIMIT 100",
+            (bid, c.account_id))
 
 
 @api()
@@ -395,8 +419,8 @@ def today(c: Ctx):
         prop_params = (prop_id,) if prop_id else ()
         rows = all_(
             conn,
-            f"SELECT {BOOKING_COLS}, r.name AS room_name, p.name AS property_name FROM bookings b"
-            " JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
+            f"SELECT {BOOKING_COLS}, r.name AS room_name, r.cleaned_on AS room_cleaned_on, p.name AS property_name"
+            " FROM bookings b JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
             f" WHERE b.account_id = %s AND b.status IN ('confirmed', 'pending')"
             f" AND b.check_in <= %s AND b.check_out >= %s{prop_filter} ORDER BY r.sort_order",
             (c.account_id, day, day, *prop_params),
@@ -454,6 +478,7 @@ routes = [
     Route("/api/bookings", create_booking, methods=["POST"]),
     Route("/api/bookings/export.csv", export_bookings),
     Route("/api/bookings/quote", quote_booking),
+    Route("/api/bookings/{id}/log", booking_history),
     Route("/api/bookings/{id}", get_booking),
     Route("/api/bookings/{id}", update_booking, methods=["PATCH"]),
     Route("/api/bookings/{id}", delete_booking, methods=["DELETE"]),
