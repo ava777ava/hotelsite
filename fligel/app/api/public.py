@@ -53,6 +53,10 @@ def property_info(c: Ctx):
         prop = _property(conn, c.path["slug"])
         types = all_(conn, "SELECT id, name, description, capacity, base_price, min_stay FROM room_types"
                            " WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
+        photos = all_(conn, "SELECT id, room_type_id FROM room_photos WHERE room_type_id = ANY(%s::uuid[])"
+                            " ORDER BY position, created_at", ([t["id"] for t in types],))
+    for t in types:
+        t["photos"] = [f"/media/photo/{p['id']}" for p in photos if p["room_type_id"] == t["id"]]
     return {"name": prop["name"], "address": prop["address"], "phone": prop["phone"],
             "check_in_time": prop["check_in_time"].strftime("%H:%M"),
             "check_out_time": prop["check_out_time"].strftime("%H:%M"), "room_types": types}

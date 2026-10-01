@@ -11,7 +11,7 @@ from starlette.datastructures import MutableHeaders
 from . import config
 
 CSP_BASE = ("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; "
+            "img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; "
             "object-src 'none'")
 HSTS = "max-age=31536000"
 

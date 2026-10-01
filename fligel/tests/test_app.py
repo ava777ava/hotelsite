@@ -1511,6 +1511,66 @@ class PlatformAdminTests(Base):
         self.assertEqual(admin.main(["stats"]), 0)
 
 
+PNG_1X1 = ("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==")
+
+
+class PhotoTests(Base):
+    """Фото категорий номеров для страницы бронирования."""
+
+    def upload(self, ctx, rt_id, data=PNG_1X1, headers=None):
+        return self.client.post(f"/api/room-types/{rt_id}/photos", headers=headers or ctx["h"], json={"data": data})
+
+    def test_upload_serve_order_delete(self):
+        ctx = self.register("photo1@example.ru")
+        rt = ctx["prop"]["room_types"][0]["id"]
+        a = self.upload(ctx, rt); self.assertEqual(a.status_code, 200, a.text)
+        b = self.upload(ctx, rt, data="data:image/png;base64," + PNG_1X1)  # data-URL тоже понимаем
+        self.assertEqual(b.status_code, 200, b.text)
+        pa, pb = a.json()["id"], b.json()["id"]
+        info = self.client.get(f"/api/public/{ctx['prop']['public_slug']}").json()
+        self.assertEqual(info["room_types"][0]["photos"], [f"/media/photo/{pa}", f"/media/photo/{pb}"])
+        img = self.client.get(f"/media/photo/{pa}")  # публично, без входа
+        self.assertEqual((img.status_code, img.headers["content-type"]), (200, "image/png"))
+        self.assertTrue(img.content.startswith(b"\x89PNG"))
+        self.assertIn("immutable", img.headers["cache-control"])
+        r = self.client.put(f"/api/room-types/{rt}/photos/order", headers=ctx["h"], json={"ids": [pb, pa]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual([p["id"] for p in self.client.get(f"/api/room-types/{rt}/photos", headers=ctx["h"]).json()], [pb, pa])
+        self.assertEqual(self.client.put(f"/api/room-types/{rt}/photos/order", headers=ctx["h"], json={"ids": [pb]}).status_code, 422)
+        self.assertEqual(self.client.delete(f"/api/photos/{pa}", headers=ctx["h"]).status_code, 200)
+        self.assertEqual(self.client.get(f"/media/photo/{pa}").status_code, 404)
+
+    def test_rejects_non_images_and_limits(self):
+        import base64
+        ctx = self.register("photo2@example.ru")
+        rt = ctx["prop"]["room_types"][0]["id"]
+        svg = base64.b64encode(b"<svg xmlns='http://www.w3.org/2000/svg'><script>alert(1)</script></svg>").decode()
+        self.assertEqual(self.upload(ctx, rt, data=svg).status_code, 422)  # SVG с возможным скриптом не принимаем
+        self.assertEqual(self.upload(ctx, rt, data=base64.b64encode(b"just text").decode()).status_code, 422)
+        self.assertEqual(self.upload(ctx, rt, data="!!!не base64!!!").status_code, 422)
+        big = base64.b64encode(b"\xff\xd8\xff" + b"0" * (2 * 1024 * 1024 + 10)).decode()
+        self.assertEqual(self.upload(ctx, rt, data=big).status_code, 413)
+        for _ in range(8):
+            self.assertEqual(self.upload(ctx, rt).status_code, 200)
+        self.assertEqual(self.upload(ctx, rt).status_code, 422)  # потолок 8 фото
+
+    def test_permissions_and_isolation(self):
+        a = self.register("photo3a@example.ru")
+        other = self.register("photo3b@example.ru")
+        rt = a["prop"]["room_types"][0]["id"]
+        self.client.post("/api/users", headers=a["h"], json={"name": "М", "email": "photo3m@example.ru", "role": "manager", "password": "password123"})
+        mh = {"Authorization": "Bearer " + self.client.post("/api/auth/login", json={"email": "photo3m@example.ru", "password": "password123"}).json()["token"]}
+        self.assertEqual(self.upload(a, rt, headers=mh).status_code, 403)  # загружает только владелец
+        self.assertEqual(self.client.get(f"/api/room-types/{rt}/photos", headers=mh).status_code, 200)
+        self.assertEqual(self.upload(other, rt, headers=other["h"]).status_code, 404)  # чужая категория
+        pid = self.upload(a, rt).json()["id"]
+        self.assertEqual(self.client.delete(f"/api/photos/{pid}", headers=other["h"]).status_code, 404)
+        self.assertEqual(self.client.get(f"/api/room-types/{rt}/photos", headers=other["h"]).status_code, 404)
+        # бронирование на сайте выключено — фото не отдаются
+        self.client.patch(f"/api/properties/{a['prop']['id']}", headers=a["h"], json={"booking_enabled": False})
+        self.assertEqual(self.client.get(f"/media/photo/{pid}").status_code, 404)
+
+
 class AuthSecurityTests(Base):
     """Восстановление пароля (мок SMTP — как telegram.send_message/sync.fetch в других тестах)
     и блокировка входа после подбора пароля."""

@@ -470,3 +470,13 @@ table.list tbody tr { transition: background .1s; }
 .row-actions { white-space: nowrap; text-align: right; }
 .row-actions .btn + .btn { margin-left: 6px; }
 @media (max-width: 760px) { .row-actions { text-align: left; } .row-actions:empty { display: none !important; } }
+
+/* ---------- фото категорий ---------- */
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.photo-item { position: relative; aspect-ratio: 4 / 3; border-radius: 10px; overflow: hidden; background: var(--line); border: 2px solid transparent; }
+.photo-item.main { border-color: var(--pine); }
+.photo-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.photo-act { position: absolute; top: 4px; width: 26px; height: 26px; border-radius: 50%; border: 0; background: rgba(28,36,32,.72); color: #fff; cursor: pointer; font-size: 13px; line-height: 26px; padding: 0; }
+.photo-act.del { right: 4px; } .photo-act.first { left: 4px; }
+.photo-act:hover { background: var(--ink); }
+.photo-tag { position: absolute; left: 4px; bottom: 4px; background: var(--pine); color: #fff; font-size: 11px; padding: 1px 7px; border-radius: 10px; }

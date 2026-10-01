@@ -2138,6 +2138,60 @@ function addPropertyDrawer() {
   [h('span', { class: 'spacer' }), save]);
 }
 
+// ---------- фото категории номеров ----------
+// Фото сжимаются прямо в браузере (до 1600 px, JPEG) — на сервер уходит ~200–400 КБ вместо 5–10 МБ с телефона.
+async function compressImage(file, maxSide = 1600, quality = 0.82) {
+  const bmp = await createImageBitmap(file);
+  const scale = Math.min(1, maxSide / Math.max(bmp.width, bmp.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bmp.width * scale); canvas.height = Math.round(bmp.height * scale);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); // прозрачные PNG не должны стать чёрными
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  const blob = await new Promise((res) => canvas.toBlob(res, 'image/jpeg', quality));
+  return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(String(r.result).split(',')[1]); r.onerror = rej; r.readAsDataURL(blob); });
+}
+
+function photoManager(typeId, onChange) {
+  const box = h('div', { class: 'photo-box' });
+  const status = h('div', { class: 'muted small' });
+  const fileInp = h('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', multiple: true, style: { display: 'none' }, onchange: async () => {
+    const files = [...fileInp.files]; fileInp.value = '';
+    for (let i = 0; i < files.length; i++) {
+      status.textContent = `Загружаю ${i + 1} из ${files.length}…`;
+      try { await api('POST', `/api/room-types/${typeId}/photos`, { data: await compressImage(files[i]) }); }
+      catch (ex) { toast(`${files[i].name}: ${ex.message}`, true); }
+    }
+    status.textContent = ''; draw(); onChange?.();
+  } });
+  async function draw() {
+    let photos = [];
+    try { photos = await api('GET', `/api/room-types/${typeId}/photos`); } catch (ex) { box.textContent = ex.message; return; }
+    box.innerHTML = '';
+    const grid = h('div', { class: 'photo-grid' });
+    photos.forEach((p, i) => {
+      const img = h('img', { alt: 'Фото номера', loading: 'lazy' });
+      fetch(`/api/photos/${p.id}/file`, { headers: { Authorization: `Bearer ${store.get('token')}` } })
+        .then((r) => r.blob()).then((b) => { img.src = URL.createObjectURL(b); }).catch(() => {});
+      grid.append(h('div', { class: 'photo-item' + (i === 0 ? ' main' : '') }, img,
+        i === 0 ? h('span', { class: 'photo-tag' }, 'Главное') : h('button', { class: 'photo-act first', title: 'Сделать главным', type: 'button', onclick: async () => {
+          const ids = [p.id, ...photos.filter((x) => x.id !== p.id).map((x) => x.id)];
+          await api('PUT', `/api/room-types/${typeId}/photos/order`, { ids }); draw(); onChange?.();
+        } }, '★'),
+        h('button', { class: 'photo-act del', title: 'Удалить фото', type: 'button', onclick: async () => {
+          if (!confirm('Удалить это фото?')) return;
+          await api('DELETE', `/api/photos/${p.id}`); draw(); onChange?.();
+        } }, '✕')));
+    });
+    box.append(grid, h('div', { style: { display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+      photos.length < 8 ? h('button', { class: 'btn small', type: 'button', onclick: () => fileInp.click() }, icon('plus'), 'Добавить фото') : h('span', { class: 'muted small' }, 'Максимум 8 фото'),
+      status, fileInp));
+  }
+  draw();
+  return h('div', { class: 'field' }, h('span', {}, 'Фото для страницы бронирования'), box,
+    h('span', { class: 'muted small', style: { fontWeight: 400 } }, 'Гости увидят их в карточке номера. Первое фото — главное.'));
+}
+
 // ---------- настройки ----------
 async function viewSettings(main) {
   const content = h('div', { class: 'stack' });
@@ -2187,7 +2241,8 @@ async function viewSettings(main) {
       const fld = (k, l, a = {}) => h('label', { class: 'field' }, h('span', {}, l), g[k] = h('input', { class: 'input', value: t[k] ?? '', ...a }));
       openDrawer(t.id ? t.name : 'Новая категория', h('div', {},
         fld('name', 'Название'), fld('description', 'Описание для гостей'),
-        h('div', { class: 'row3' }, fld('capacity', 'Гостей', { type: 'number', min: 1, value: t.capacity ?? 2 }), fld('base_price', 'Цена, ₽', { type: 'number', min: 0, value: t.base_price != null ? Math.round(t.base_price) : '' }), fld('min_stay', 'Мин. ночей', { type: 'number', min: 1, value: t.min_stay ?? 1 }))),
+        h('div', { class: 'row3' }, fld('capacity', 'Гостей', { type: 'number', min: 1, value: t.capacity ?? 2 }), fld('base_price', 'Цена, ₽', { type: 'number', min: 0, value: t.base_price != null ? Math.round(t.base_price) : '' }), fld('min_stay', 'Мин. ночей', { type: 'number', min: 1, value: t.min_stay ?? 1 })),
+        t.id ? photoManager(t.id) : h('p', { class: 'muted small' }, 'Фото можно добавить после сохранения категории.')),
       [t.id ? h('button', { class: 'btn ghost danger', onclick: async () => { try { await api('DELETE', `/api/room-types/${t.id}`); closeDrawer(); load(); } catch (ex) { toast(ex.message, true); } } }, 'Удалить') : null,
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn primary', onclick: async () => {
