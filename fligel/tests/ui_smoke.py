@@ -10,6 +10,7 @@
 Вход: demo@fligel.ru / demo12345 (создаётся командой `python -m app.demo`).
 """
 import os
+import re
 import sys
 
 try:
@@ -29,6 +30,10 @@ def check(page, name, problems):
     text = page.inner_text("#app").strip()
     if len(text) < 30:
         problems.append(f"раздел «{name}» пустой")
+    # «null», «undefined» или «[object ...]» в тексте страницы — признак забытой проверки в вёрстке
+    bad = re.search(r"(^|\s)(null|undefined|NaN)(\s|$)|\[object ", text)
+    if bad:
+        problems.append(f"раздел «{name}»: в тексте страницы видно «{bad.group(0).strip()}»")
 
 
 def main() -> int:

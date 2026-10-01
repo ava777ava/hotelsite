@@ -17,11 +17,13 @@ os.environ["DATABASE_URL"] = TEST_DB
 os.environ["SYNC_ENABLED"] = "0"
 os.environ["PUBLIC_BASE_URL"] = "https://fligel.test"
 os.environ["SECRET_KEY"] = "test-secret"
+os.environ["PUBLIC_BOOKINGS_PER_HOUR"] = "100000"  # лимиты защиты от спама проверяются отдельными тестами
+os.environ["RESET_REQUESTS_PER_HOUR"] = "100000"
 
 import psycopg  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from app import config, db, expenses, ical, mail, sync, telegram  # noqa: E402
+from app import admin, config, db, expenses, ical, mail, ratelimit, sync, telegram  # noqa: E402
 from app.api.reports import _shift_years  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -1228,6 +1230,19 @@ class LaunchReadinessTests(Base):
         t = self.client.get("/api/today", headers=ctx["h"]).json()
         self.assertEqual((t["rooms_total"], t["occupied_tonight"], t["free_tonight"]), (3, 2, 1))
 
+    def test_menu_badges_count_site_requests_and_conflicts(self):
+        ctx = self.register("launch7@example.ru")
+        self.assertEqual(self.client.get("/api/badges", headers=ctx["h"]).json(), {"requests": 0, "conflicts": 0})
+        slug, rt = ctx["prop"]["public_slug"], ctx["prop"]["room_types"][0]["id"]
+        self.client.post(f"/api/public/{slug}/book", json={"room_type_id": rt, "check_in": d(3), "check_out": d(5), "guest_name": "Ольга", "guest_phone": "+79001234567", "consent": True})
+        self.book(ctx, ctx["rooms"][5], d(3), d(5), status="pending")  # ручная неподтверждённая — это не заявка с сайта
+        self.assertEqual(self.client.get("/api/badges", headers=ctx["h"]).json()["requests"], 1)
+        hh = self.client.post("/api/users", headers=ctx["h"], json={"name": "Оля", "email": "launch7h@example.ru", "role": "housekeeper", "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": "launch7h@example.ru", "password": "password123"}).json()["token"]
+        self.assertEqual(self.client.get("/api/badges", headers={"Authorization": f"Bearer {tok}"}).json(), {"requests": 0, "conflicts": 0})
+        with db.tx() as conn:
+            self.assertIsNotNone(db.one(conn, "SELECT last_login_at FROM users WHERE lower(email) = 'launch7h@example.ru'")["last_login_at"])
+
     def test_category_color_must_be_hex(self):
         ctx = self.register("launch5@example.ru")
         r = self.client.post("/api/expense-categories", headers=ctx["h"], json={"name": "Цвет", "color": "red\"><script>"})
@@ -1247,9 +1262,18 @@ class LaunchReadinessTests(Base):
                        "guest_phone": "+79001234567", "guest_email": "olga@example.ru", "consent": True}
             r = self.client.post(f"/api/public/{slug}/book", json=payload)
             self.assertEqual(r.status_code, 200, r.text)
-            self.assertEqual(len(sent), 1)
-            self.assertEqual(sent[0][0], "olga@example.ru")
-            self.assertIn("Номер заявки", sent[0][2])
+            to_guest = [m for m in sent if m[0] == "olga@example.ru"]
+            self.assertEqual(len(to_guest), 1)
+            self.assertIn("Номер заявки", to_guest[0][2])
+            to_staff = [m for m in sent if m[0] == "launch6@example.ru"]  # владелец тоже получает письмо о заявке
+            self.assertEqual(len(to_staff), 1)
+            self.assertIn("Новая заявка с сайта", to_staff[0][1])
+            # отключил письма в профиле — больше не приходят
+            self.client.patch("/api/me/preferences", headers=ctx["h"], json={"notify_email": False})
+            sent.clear()
+            self.client.post(f"/api/public/{slug}/book", json={**payload, "check_in": d(20), "check_out": d(22), "guest_email": ""})
+            self.assertEqual([m for m in sent if m[0] == "launch6@example.ru"], [])
+            self.client.patch("/api/me/preferences", headers=ctx["h"], json={"notify_email": True})
 
             def broken(*a):
                 raise RuntimeError("SMTP недоступен")
@@ -1351,6 +1375,140 @@ class OperationsTests(Base):
                           ([r["id"] for r in ctx["rooms"]],))["n"]
         self.assertEqual(left, 0)
         self.assertEqual(self.client.get("/api/me", headers=keep["h"]).status_code, 200)  # чужой аккаунт цел
+
+
+class AbuseProtectionTests(Base):
+    """Публичная форма открыта всем — спам-заявки не должны занимать номера навсегда."""
+
+    def setUp(self):
+        self.ctx = self.register(f"abuse{id(self)}@example.ru")
+        self.slug = self.ctx["prop"]["public_slug"]
+        self.rt = self.ctx["prop"]["room_types"][0]["id"]
+        ratelimit.reset()
+        self._orig = (config.PUBLIC_BOOKINGS_PER_HOUR, config.MAX_PENDING_PER_PHONE, config.REQUEST_TTL_HOURS)
+
+    def tearDown(self):
+        config.PUBLIC_BOOKINGS_PER_HOUR, config.MAX_PENDING_PER_PHONE, config.REQUEST_TTL_HOURS = self._orig
+        ratelimit.reset()
+
+    def request(self, offset=3, phone="+79001234567", **extra):
+        return self.client.post(f"/api/public/{self.slug}/book", json={
+            "room_type_id": self.rt, "check_in": d(offset), "check_out": d(offset + 2), "guest_name": "Гость",
+            "guest_phone": phone, "consent": True, **extra})
+
+    def pending(self):
+        return self.client.get("/api/bookings", headers=self.ctx["h"], params={"from": d(0), "to": d(60), "status": "pending"}).json()
+
+    def test_honeypot_looks_accepted_but_creates_nothing(self):
+        r = self.request(website="http://spam.example")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.pending(), [])
+
+    def test_per_ip_limit(self):
+        config.PUBLIC_BOOKINGS_PER_HOUR = 2
+        codes = [self.request(offset=3 + 3 * i, phone=f"+7900123456{i}").status_code for i in range(3)]
+        self.assertEqual(codes, [200, 200, 429])
+
+    def test_per_phone_limit_on_unconfirmed_requests(self):
+        config.MAX_PENDING_PER_PHONE = 2
+        codes = [self.request(offset=3 + 3 * i).status_code for i in range(3)]
+        self.assertEqual(codes, [200, 200, 429])
+        # другой телефон не затронут
+        self.assertEqual(self.request(offset=20, phone="+79007654321").status_code, 200)
+
+    def test_unconfirmed_request_expires_and_frees_room(self):
+        rows = self.request().json()
+        with db.tx() as conn:
+            row = db.one(conn, "SELECT hold_expires_at > now() + interval '47 hours' AS ok FROM bookings WHERE id = %s", (rows["booking_id"],))
+            self.assertTrue(row["ok"])  # срок по умолчанию 48 часов
+            db.run(conn, "UPDATE bookings SET hold_expires_at = now() - interval '1 minute' WHERE id = %s", (rows["booking_id"],))
+        self.assertGreaterEqual(sync.expire_holds(), 1)
+        b = self.client.get(f"/api/bookings/{rows['booking_id']}", headers=self.ctx["h"]).json()
+        self.assertEqual(b["status"], "cancelled")
+        self.assertIn("не подтверждена вовремя", b["notes"])
+        # подтверждённая заявка срок не теряет
+        r2 = self.request(offset=30).json()
+        self.client.patch(f"/api/bookings/{r2['booking_id']}", headers=self.ctx["h"], json={"status": "confirmed"})
+        with db.tx() as conn:
+            db.run(conn, "UPDATE bookings SET hold_expires_at = now() - interval '1 minute' WHERE id = %s", (r2["booking_id"],))
+        sync.expire_holds()
+        self.assertEqual(self.client.get(f"/api/bookings/{r2['booking_id']}", headers=self.ctx["h"]).json()["status"], "confirmed")
+
+    def test_ttl_can_be_disabled(self):
+        config.REQUEST_TTL_HOURS = 0
+        rid = self.request().json()["booking_id"]
+        with db.tx() as conn:
+            self.assertIsNone(db.one(conn, "SELECT hold_expires_at FROM bookings WHERE id = %s", (rid,))["hold_expires_at"])
+
+    def test_password_reset_requests_are_limited(self):
+        orig = config.RESET_REQUESTS_PER_HOUR
+        config.RESET_REQUESTS_PER_HOUR = 2
+        try:
+            codes = [self.client.post("/api/auth/forgot-password", json={"email": f"nobody{i}@example.ru"}).status_code for i in range(3)]
+            self.assertEqual(codes, [200, 200, 429])
+            ratelimit.reset()
+            config.RESET_REQUESTS_PER_HOUR = 100
+            codes = [self.client.post("/api/auth/forgot-password", json={"email": "same@example.ru"}).status_code for _ in range(4)]
+            self.assertEqual(codes, [200, 200, 200, 429])  # на один адрес — не больше 3 в час
+        finally:
+            config.RESET_REQUESTS_PER_HOUR = orig
+
+    def test_db_sessions_use_hotel_timezone(self):
+        with db.tx() as conn:
+            self.assertEqual(db.one(conn, "SHOW timezone")["TimeZone"], config.APP_TIMEZONE)
+
+
+class PlatformAdminTests(Base):
+    """Команды администратора сервиса и ограничения тарифов."""
+
+    def test_plan_limits_properties(self):
+        ctx = self.register("plan1@example.ru")
+        me = self.client.get("/api/me", headers=ctx["h"]).json()
+        self.assertEqual((me["plan"], me["properties_limit"]), ("trial", 4))
+        for i in range(3):  # один объект уже создан регистрацией — доводим до лимита 4
+            r = self.client.post("/api/setup", headers=ctx["h"], json={"name": f"Объект {i}", "room_types": [{"name": "Стандарт", "count": 1, "base_price": 1000}]})
+            self.assertEqual(r.status_code, 200, r.text)
+        r = self.client.post("/api/setup", headers=ctx["h"], json={"name": "Пятый", "room_types": [{"name": "С", "count": 1}]})
+        self.assertEqual(r.status_code, 403)
+        self.assertIn("до 4 объектов", r.json()["error"])
+        with db.tx() as conn:
+            admin.set_plan(conn, "plan1@example.ru", "business")
+        r = self.client.post("/api/setup", headers=ctx["h"], json={"name": "Пятый", "room_types": [{"name": "С", "count": 1}]})
+        self.assertEqual(r.status_code, 200, r.text)
+        me = self.client.get("/api/me", headers=ctx["h"]).json()
+        self.assertEqual((me["plan_label"], me["properties_limit"]), ("Бизнес", 15))
+
+    def test_suspend_activate_and_set_plan(self):
+        ctx = self.register("plan2@example.ru")
+        with db.tx() as conn:
+            admin.set_status(conn, "plan2@example.ru", "suspended")
+        self.assertEqual(self.client.get("/api/me", headers=ctx["h"]).status_code, 403)  # токен сразу перестаёт работать
+        self.assertEqual(self.client.post("/api/auth/login", json={"email": "plan2@example.ru", "password": "password123"}).status_code, 403)
+        with db.tx() as conn:
+            admin.set_status(conn, "plan2@example.ru", "active")
+            admin.set_plan(conn, "plan2@example.ru", "pro", date.today() + timedelta(days=30))
+        me = self.client.get("/api/me", headers=ctx["h"]).json()
+        self.assertEqual((me["plan"], me["paid_until"], me["trial_ends"]), ("pro", (date.today() + timedelta(days=30)).isoformat(), None))
+        with self.assertRaises(SystemExit):
+            with db.tx() as conn:
+                admin.set_plan(conn, "plan2@example.ru", "несуществующий")
+
+    def test_reset_password_and_listing(self):
+        ctx = self.register("plan3@example.ru")
+        for _ in range(config.LOGIN_MAX_ATTEMPTS):
+            self.client.post("/api/auth/login", json={"email": "plan3@example.ru", "password": "x"})
+        with db.tx() as conn:
+            new_pw = admin.reset_password(conn, "plan3@example.ru")
+        r = self.client.post("/api/auth/login", json={"email": "plan3@example.ru", "password": new_pw})
+        self.assertEqual(r.status_code, 200, r.text)  # блокировка после подбора тоже снята
+        with db.tx() as conn:
+            rows = admin.list_accounts(conn)
+            row = next(x for x in rows if x["owner_email"] == "plan3@example.ru")
+            self.assertEqual((row["plan"], row["rooms"]), ("trial", 12))
+            self.assertIsNotNone(row["last_login"])
+            self.assertGreaterEqual(admin.stats(conn)["accounts"], 1)
+            self.assertEqual(admin.find_account(conn, str(row["id"])[:8])["id"], row["id"])  # поиск по началу id
+        self.assertEqual(admin.main(["stats"]), 0)
 
 
 class AuthSecurityTests(Base):

@@ -289,19 +289,19 @@ def claim_due_feeds(limit: int = 20) -> list:
 
 
 def expire_holds() -> int:
-    """Неоплаченные прямые брони с истёкшим сроком удержания освобождают номер."""
+    """Неподтверждённые заявки с сайта с истёкшим сроком (REQUEST_TTL_HOURS) освобождают номер."""
     with tx() as conn:
         rows = all_(conn, "SELECT id, account_id, guest_name FROM bookings WHERE status = 'pending'"
                           " AND hold_expires_at IS NOT NULL AND hold_expires_at < now()")
         if not rows:
             return 0
         run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now(),"
-                  " notes = notes || ' [снято: не оплачено вовремя]' WHERE id = ANY(%s::uuid[])",
+                  " notes = notes || ' [снято: заявка не подтверждена вовремя]' WHERE id = ANY(%s::uuid[])",
             ([r["id"] for r in rows],))
         for r in rows:
-            booklog.log(conn, r["account_id"], r["id"], None, "cancelled", {"reason": "Не оплачена вовремя"})
+            booklog.log(conn, r["account_id"], r["id"], None, "cancelled", {"reason": "Заявка не подтверждена вовремя"})
             telegram.notify(conn, r["account_id"], "cancellation",
-                            f"Бронь «{r['guest_name'] or 'без имени'}» снята: не оплачена вовремя.")
+                            f"Бронь «{r['guest_name'] or 'без имени'}» снята: не подтверждена вовремя.")
     return len(rows)
 
 

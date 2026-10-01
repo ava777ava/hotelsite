@@ -18,7 +18,7 @@ def init_pool(url: str | None = None) -> ConnectionPool:
             url or config.DATABASE_URL,
             min_size=1,
             max_size=config.DB_POOL_MAX,
-            kwargs={"row_factory": dict_row, "autocommit": False},
+            kwargs={"row_factory": dict_row, "autocommit": False, "options": f"-c timezone={config.APP_TIMEZONE}"},
             open=True,
         )
     return _pool

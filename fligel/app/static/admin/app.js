@@ -52,7 +52,7 @@ const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн'
 const SOURCE = {
   manual: 'Вручную', direct: 'Сайт', avito: 'Авито', yandex: 'Яндекс', sutochno: 'Суточно', ostrovok: 'Островок', other: 'Другое',
 };
-const STATUS = { confirmed: 'Подтверждена', pending: 'Ждёт оплаты', blocked: 'Даты закрыты', cancelled: 'Отменена' };
+const STATUS = { confirmed: 'Подтверждена', pending: 'Заявка', blocked: 'Даты закрыты', cancelled: 'Отменена' };
 const ROLE = { owner: 'Владелец', manager: 'Администратор', housekeeper: 'Горничная' };
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -115,6 +115,7 @@ const state = {
   boardFrom: null,
   boardDays: window.innerWidth < 860 ? 14 : 31,
   conflicts: 0,
+  requests: 0,
   financeKind: 'expense',
 };
 
@@ -144,9 +145,39 @@ async function boot() {
   render();
 }
 
+// Счётчики в меню (заявки с сайта, конфликты площадок) и автообновление экранов: два сотрудника
+// работают одновременно, и новая бронь/заявка должна появиться у другого без перезагрузки страницы.
+async function refreshBadges() {
+  if (!state.me || !can('manager')) return;
+  try {
+    const b = await api('GET', '/api/badges');
+    state.requests = b.requests; state.conflicts = b.conflicts;
+    document.querySelectorAll('[data-badge]').forEach((el) => {
+      const n = state[el.dataset.badge] || 0;
+      el.textContent = n; el.style.display = n ? '' : 'none';
+    });
+  } catch { /* сеть пропала — попробуем в следующий раз */ }
+}
+let autoTimer = null;
+let autoFn = null;
+function autoRefresh(fn, seconds = 45) {
+  clearInterval(autoTimer);
+  autoFn = fn;
+  autoTimer = setInterval(() => {
+    // не мешаем, пока человек что-то делает: открыто окно/панель, идёт перетаскивание, вкладка скрыта
+    if (document.hidden || drawerEl || modalEl || document.querySelector('.bar.dragging, .bar.lifted')) return;
+    fn();
+  }, seconds * 1000);
+}
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && state.me) { refreshBadges(); if (autoFn && !drawerEl && !modalEl) autoFn(); }
+});
+setInterval(() => { if (!document.hidden) refreshBadges(); }, 60000);
+
 function render() {
   closeDrawer();
   closeModal();
+  clearInterval(autoTimer); autoFn = null;
   $app.innerHTML = '';
   if (location.hash.startsWith('#/reset-password')) return $app.append(viewResetPassword());
   if (!state.me) return $app.append(viewAuth());
@@ -162,6 +193,7 @@ function render() {
     return;
   }
   def.view(main);
+  refreshBadges();
 }
 
 // Переход к брони из поиска: переключаемся на её объект, открываем шахматку на нужных датах
@@ -207,8 +239,9 @@ function guestSearchDrawer() {
 
 function layout(route, main) {
   const visible = Object.entries(ROUTES).filter(([, d]) => !d.role || can(d.role));
+  const BADGE = { bookings: 'requests', channels: 'conflicts' };
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
-    key === 'channels' && state.conflicts ? h('span', { class: 'badge' }, state.conflicts) : null);
+    BADGE[key] ? h('span', { class: 'badge', 'data-badge': BADGE[key], style: { display: state[BADGE[key]] ? '' : 'none' } }, state[BADGE[key]] || 0) : null);
   const prop = state.me.properties.find((p) => p.id === state.propertyId);
   const sideSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { color: '#C3CCC0' }, onclick: guestSearchDrawer }, icon('search')) : null;
   const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { marginLeft: 'auto', color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
@@ -506,11 +539,17 @@ async function viewBoard(main) {
           h('div', {}, `С площадок пришли брони на уже занятые даты: ${boardData.open_conflicts}. `,
             h('a', { href: '#/channels' }, 'Разобрать конфликты'))));
       }
+      // при автообновлении не сбрасываем прокрутку шахматки
+      const old = card.querySelector('.board-scroll');
+      const pos = old ? [old.scrollLeft, old.scrollTop] : null;
       card.innerHTML = '';
       card.append(drawBoard(boardData, load));
-    } catch (ex) { card.innerHTML = ''; card.append(h('div', { class: 'empty' }, ex.message)); }
+      const fresh = card.querySelector('.board-scroll');
+      if (pos && fresh) { fresh.scrollLeft = pos[0]; fresh.scrollTop = pos[1]; }
+    } catch (ex) { if (!card.querySelector('.board')) { card.innerHTML = ''; card.append(h('div', { class: 'empty' }, ex.message)); } }
   };
   load();
+  autoRefresh(load);
 }
 
 // Перенос брони перетаскиванием (в другой номер и/или на другие даты) и изменение длины за
@@ -847,7 +886,7 @@ function drawBoard(data, reload) {
   const legend = h('div', { class: 'legend' },
     ['direct', 'manual', 'avito', 'yandex', 'sutochno', 'ostrovok'].map((s) => h('span', {}, h('i', { class: 'dot', style: { background: `var(--src-${s})` } }), SOURCE[s])),
     h('span', {}, h('i', { class: 'dot', style: { background: 'repeating-linear-gradient(135deg,#9AA296 0 3px,#C9CEC5 3px 6px)' } }), 'Даты закрыты'),
-    h('span', {}, 'Штриховка — ждёт оплаты'),
+    h('span', {}, 'Штриховка — заявка, ждёт подтверждения'),
     can('manager') ? h('span', { style: { marginLeft: 'auto' } }, 'Протяните по свободным клеткам, чтобы создать бронь') : null);
   const scroll = h('div', { class: 'board-scroll' }, board);
   // прокрутить к сегодняшнему дню на узких экранах
@@ -890,7 +929,7 @@ async function bookingDrawer(b, onSaved) {
   const guestBox = h('div');
   const drawSeg = () => {
     statusSeg.innerHTML = '';
-    [['confirmed', 'Подтверждена'], ['pending', 'Ждёт оплаты'], ['blocked', 'Закрыть даты']].forEach(([k, l]) => {
+    [['confirmed', 'Подтверждена'], ['pending', 'Заявка'], ['blocked', 'Закрыть даты']].forEach(([k, l]) => {
       statusSeg.append(h('button', { type: 'button', class: status.value === k ? 'on' : '', style: { flex: 1 }, disabled: readOnly || (imported && k !== status.value),
         onclick: () => { status.value = k; drawSeg(); guestBox.style.display = k === 'blocked' ? 'none' : ''; requote(); } }, l));
     });
@@ -923,7 +962,7 @@ async function bookingDrawer(b, onSaved) {
         if (q.closed_dates.length && status.value !== 'blocked') warn.push('Продажи на часть дат закрыты');
         if (q.nights < q.min_stay && status.value !== 'blocked') warn.push(`Минимальный срок — ${q.min_stay} ${nightsWord(q.min_stay)}`);
         if (warn.length) { note.className = 'note bad'; note.textContent = warn.join('. '); note.style.display = ''; }
-        else if (!imported) note.style.display = 'none';
+        else if (!imported && !(b.status === 'pending' && b.source === 'direct' && b.hold_expires_at)) note.style.display = 'none';
       } catch { /* покажем при сохранении */ }
     }, 200);
   }
@@ -933,6 +972,11 @@ async function bookingDrawer(b, onSaved) {
     totalEl.title = paid ? `Оплачено ${fmtMoney(paid)}, к оплате ${fmtMoney(total - paid)}` : '';
   };
 
+  if (b.status === 'pending' && b.source === 'direct' && b.hold_expires_at) {
+    note.className = 'note';
+    note.textContent = `Заявка с сайта. Подтвердите её — или она сама снимется ${fmtDateTime(b.hold_expires_at)}, и номер освободится.`;
+    note.style.display = '';
+  }
   if (imported) {
     note.className = 'note';
     note.textContent = `Бронь пришла с площадки «${SOURCE[b.source]}» через синхронизацию календаря. Даты и номер меняются на самой площадке. Имя гостя, телефон и сумму можно дописать здесь.`;
@@ -1106,7 +1150,7 @@ async function viewToday(main) {
         h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${b.guests_count} гост. · ${SOURCE[b.source]}`),
         b.guest_phone ? h('a', { class: 'small tel', href: `tel:${b.guest_phone}`, onclick: (e) => e.stopPropagation() }, b.guest_phone) : null),
       kind !== 'staying' && due > 0 && can('manager') ? h('span', { class: 'pill warn num' }, `к оплате ${fmtMoney(due)}`) : null,
-      b.status === 'pending' ? h('span', { class: 'pill warn' }, 'ждёт оплаты') : null,
+      b.status === 'pending' ? h('span', { class: 'pill warn' }, 'заявка') : null,
       kind === 'out' && day === todayISO() ? cleaningControl(b) : null);
   };
   // Уборка: номер, из которого сегодня выезжают, «ждёт уборки», пока горничная (или любой сотрудник) не отметит его убранным
@@ -1144,6 +1188,7 @@ async function viewToday(main) {
     } catch (ex) { content.innerHTML = ''; content.append(h('div', { class: 'card empty' }, ex.message)); }
   };
   load();
+  autoRefresh(load);
 }
 
 // ---------- печатный лист ----------
@@ -1200,10 +1245,10 @@ async function viewBookings(main) {
     if (!rows.length) { table.append(h('div', { class: 'empty' }, h('h3', {}, 'Броней не найдено'), 'Измените период или поиск.')); return; }
     const part = rows.slice(0, shown);
     const multi = scope.value === 'all';
-    table.append(
+    table.append(...[
       h('div', { class: 'card-head' }, h('h2', {}, 'Найдено броней'), h('span', { class: 'pill none num' }, rows.length)),
       h('div', { class: 'table-wrap' }, h('table', { class: 'list cards-mobile' },
-        h('thead', {}, h('tr', {}, [multi ? 'Объект' : null, 'Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Статус', 'Сумма', 'Оплачено'].filter(Boolean).map((t) => h('th', {}, t)))),
+        h('thead', {}, h('tr', {}, [multi ? 'Объект' : null, 'Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Статус', 'Сумма', 'Оплачено', ''].filter((t) => t !== null).map((t) => h('th', {}, t)))),
         h('tbody', {}, part.map((b) => h('tr', { class: 'click', onclick: () => bookingDrawer(b, load) },
           multi ? h('td', { class: 'muted small', 'data-l': 'Объект' }, b.property_name) : null,
           h('td', { class: 'num', 'data-l': 'Заезд' }, fmtShort(b.check_in)), h('td', { class: 'num', 'data-l': 'Выезд' }, fmtShort(b.check_out)),
@@ -1213,9 +1258,20 @@ async function viewBookings(main) {
           h('td', { 'data-l': 'Источник' }, h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, h('i', { class: 'dot', style: { background: `var(--src-${b.source})` } }), SOURCE[b.source])),
           h('td', { 'data-l': 'Статус' }, h('span', { class: 'pill ' + ({ confirmed: 'ok', pending: 'warn', blocked: 'none', cancelled: 'bad' }[b.status]) }, STATUS[b.status])),
           h('td', { class: 'num', 'data-l': b.status === 'blocked' ? null : 'Сумма' }, b.status === 'blocked' ? '' : fmtMoney(b.total_price)),
-          h('td', { class: 'num', 'data-l': b.status === 'blocked' ? null : 'Оплачено' }, b.status === 'blocked' ? '' : fmtMoney(b.paid_amount))))))),
+          h('td', { class: 'num', 'data-l': b.status === 'blocked' ? null : 'Оплачено' }, b.status === 'blocked' ? '' : fmtMoney(b.paid_amount)),
+          h('td', { class: 'wide row-actions' }, b.status === 'pending' && !b.feed_id ? [
+            h('button', { class: 'btn small primary', onclick: async (e) => {
+              e.stopPropagation();
+              try { await api('PATCH', `/api/bookings/${b.id}`, { status: 'confirmed' }); toast('Бронь подтверждена'); load(); refreshBadges(); } catch (ex) { toast(ex.message, true); }
+            } }, 'Подтвердить'),
+            h('button', { class: 'btn small ghost danger', onclick: async (e) => {
+              e.stopPropagation();
+              if (!confirm(`Отклонить заявку${b.guest_name ? ` от «${b.guest_name}»` : ''}? Номер освободится.`)) return;
+              try { await api('DELETE', `/api/bookings/${b.id}`); toast('Заявка отклонена'); load(); refreshBadges(); } catch (ex) { toast(ex.message, true); }
+            } }, 'Отклонить')] : null)))))),
       rows.length > shown ? h('div', { class: 'more-count' }, h('button', { class: 'btn', onclick: () => { shown += PAGE; draw(); } },
-        `Показать ещё (${Math.min(PAGE, rows.length - shown)} из ${rows.length - shown} оставшихся)`)) : null);
+        `Показать ещё (${Math.min(PAGE, rows.length - shown)} из ${rows.length - shown} оставшихся)`)) : null,
+    ].filter(Boolean));
   };
   async function load() {
     try {
@@ -2111,7 +2167,7 @@ async function viewSettings(main) {
           } catch (ex) { toast(ex.message, true); }
         } }, 'Сохранить')),
       h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '8px' } }, 'Бронирование на сайте'),
-        h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Страница, где гость сам выбирает даты и отправляет заявку. Заявки появляются в шахматке со статусом «Ждёт оплаты».'),
+        h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Страница, где гость сам выбирает даты и отправляет заявку. Заявки появляются в шахматке со статусом «Заявка» (штриховка) — подтвердите или отклоните их в разделе «Брони». Неподтверждённая заявка сама снимается через 48 часов.'),
         h('label', { class: 'check', style: { marginBottom: '12px' } }, f.booking_enabled, 'Принимать заявки', h('span', { class: 'muted small' }, ''),),
         h('div', { class: 'field' }, h('span', {}, 'Ссылка для гостей и соцсетей'), h('div', { class: 'copy-line' }, h('input', { class: 'input', readonly: true, value: bookingUrl }),
           h('a', { class: 'btn small', href: bookingUrl, target: '_blank' }, 'Открыть'))),
@@ -2299,6 +2355,10 @@ async function viewProfile(main) {
   const ok = h('div', { class: 'note ok', style: { display: 'none' } });
   const current = h('input', { class: 'input', type: 'password', autocomplete: 'current-password', required: true });
   const next = h('input', { class: 'input', type: 'password', autocomplete: 'new-password', required: true });
+  const emailBox = h('input', { type: 'checkbox', checked: state.me.notify_email !== false, onchange: async () => {
+    try { await api('PATCH', '/api/me/preferences', { notify_email: emailBox.checked }); state.me.notify_email = emailBox.checked; toast('Сохранено'); }
+    catch (ex) { emailBox.checked = !emailBox.checked; toast(ex.message, true); }
+  } });
   const submit = h('button', { class: 'btn primary', type: 'submit' }, 'Сменить пароль');
   const form = h('form', { onsubmit: async (e) => {
     e.preventDefault(); submit.disabled = true; err.style.display = 'none'; ok.style.display = 'none';
@@ -2315,8 +2375,13 @@ async function viewProfile(main) {
       h('h2', { style: { marginBottom: '6px' } }, state.me.name),
       h('p', { class: 'muted small', style: { marginTop: 0 } }, state.me.email, ' · ', ROLE[state.me.role], ' · ', state.me.account_name),
       can('owner') ? h('p', { class: 'small', style: { marginBottom: 0 } }, 'Тариф: ',
-        state.me.trial_ends ? h('b', {}, `пробный период до ${fmtDate(state.me.trial_ends)}`)
-          : h('b', {}, state.me.paid_until ? `оплачен до ${fmtDate(state.me.paid_until)}` : 'активен')) : null),
+        h('b', {}, state.me.plan_label || state.me.plan),
+        state.me.trial_ends ? ` · пробный период до ${fmtDate(state.me.trial_ends)}` : (state.me.paid_until ? ` · оплачен до ${fmtDate(state.me.paid_until)}` : ''),
+        ` · объектов ${state.me.properties.length} из ${state.me.properties_limit}`) : null),
+    can('manager') ? h('div', { class: 'card card-pad', style: { marginBottom: '16px' } },
+      h('h2', { style: { marginBottom: '8px' } }, 'Письма о новых заявках'),
+      h('label', { class: 'check' }, emailBox, ' Присылать на почту письмо, когда гость оставил заявку на сайте'),
+      h('p', { class: 'muted small', style: { marginBottom: 0 } }, 'Работает, когда на сервере настроена почта (SMTP). Уведомления в Telegram настраиваются в разделе «Уведомления».')) : null,
     h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '14px' } }, 'Сменить пароль'), err, ok, form));
 }
 

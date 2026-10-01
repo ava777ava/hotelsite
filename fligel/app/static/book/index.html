@@ -53,6 +53,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
 .full { grid-column: 1 / -1; }
 .consent { flex-direction: row; align-items: flex-start; gap: 9px; font-weight: 400; font-size: 13px; color: var(--muted); margin: 6px 0 16px; }
 .consent input { margin-top: 3px; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
 .total { display: flex; justify-content: space-between; align-items: baseline; border-top: 1px dashed var(--border); padding-top: 14px; margin-bottom: 14px; }
 .total b { font-size: 24px; font-variant-numeric: tabular-nums; }
 .done { text-align: center; padding: 34px 20px; }
@@ -158,6 +159,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
         <label class="full">Email (необязательно)<input class="input" name="guest_email" type="email" autocomplete="email"></label>
         <label class="full">Пожелания (необязательно)<textarea class="input" name="comment" placeholder="Время заезда, детская кроватка…"></textarea></label>
       </div>
+      <div class="hp" aria-hidden="true"><label>Не заполняйте это поле<input name="website" tabindex="-1" autocomplete="off"></label></div>
       <label class="consent"><input type="checkbox" name="consent" required> Я согласен на <a href="/legal/pdn-consent" target="_blank" rel="noopener">обработку персональных данных</a> для оформления бронирования и принимаю <a href="/legal/terms" target="_blank" rel="noopener">условия использования сервиса</a></label>
       <div class="total"><span>Итого</span><b>${money(o.total)}</b></div>
       <div id="err"></div>
@@ -174,7 +176,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
         const r = await call('POST', `/api/public/${encodeURIComponent(slug)}/book`, {
           room_type_id: o.room_type_id, check_in: d.check_in, check_out: d.check_out, guests: d.guests,
           guest_name: f.guest_name.value, guest_phone: f.guest_phone.value, guest_email: f.guest_email.value,
-          comment: f.comment.value, consent: f.consent.checked,
+          comment: f.comment.value, consent: f.consent.checked, website: f.website.value,
         });
         out.innerHTML = `<div class="panel done"><div class="mark">✓</div><h2>Заявка отправлена</h2>
           <p>${esc(r.room_type)}, ${fmtDate(r.check_in)} — ${fmtDate(r.check_out)}, ${money(r.total)}</p>

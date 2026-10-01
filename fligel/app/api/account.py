@@ -4,10 +4,11 @@ from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
-from .. import config, mail
+from .. import config, mail, ratelimit
 from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
+from ..admin import PLAN_LABELS, PLANS
 from ..expenses import create_default_categories
 from ..util import Json, opt_str, parse_int, parse_money, parse_uuid, req_str, slugify
 from .base import Ctx, api
@@ -93,8 +94,8 @@ def login(c: Ctx):
         elif user["status"] != "active":
             error = ApiError(403, "Аккаунт приостановлен. Свяжитесь с поддержкой")
         else:
-            if user["failed_attempts"] or user["locked_until"]:
-                run(conn, "UPDATE users SET failed_attempts = 0, locked_until = NULL WHERE id = %s", (user["id"],))
+            run(conn, "UPDATE users SET failed_attempts = 0, locked_until = NULL, last_login_at = now() WHERE id = %s",
+                (user["id"],))
             token = make_token(user["id"], user["account_id"], user["role"])
     if error:
         raise error
@@ -107,6 +108,10 @@ def forgot_password(c: Ctx):
     было бы угадывать, какие email зарегистрированы."""
     email = str(c.data.get("email") or "").strip().lower()
     message = "Если такой email зарегистрирован, на него отправлена ссылка для восстановления пароля."
+    # не даём заваливать чужую почту письмами и перебирать адреса: лимит по IP и по адресу
+    if not ratelimit.allow(f"reset-ip:{ratelimit.client_ip(c.request)}", config.RESET_REQUESTS_PER_HOUR, 3600) \
+            or (email and not ratelimit.allow(f"reset-mail:{email}", 3, 3600)):
+        raise ApiError(429, "Слишком много запросов. Попробуйте через час")
     if email:
         with tx() as conn:
             user = one(conn, "SELECT id, name FROM users WHERE lower(email) = %s", (email,))
@@ -167,7 +172,7 @@ def me(c: Ctx):
     with tx() as conn:
         user = one(
             conn,
-            "SELECT u.id, u.name, u.email, u.role, a.name AS account_name, a.plan, a.status, a.paid_until,"
+            "SELECT u.id, u.name, u.email, u.role, u.notify_email, a.name AS account_name, a.plan, a.status, a.paid_until,"
             " a.created_at AS account_created_at FROM users u JOIN accounts a ON a.id = u.account_id"
             " WHERE u.id = %s AND u.account_id = %s",
             (c.p.user_id, c.account_id),
@@ -183,7 +188,31 @@ def me(c: Ctx):
     # Пробный период — информационный: показываем, сколько осталось, но доступ не ограничиваем
     # (подключение оплаты — отдельный этап).
     trial_ends = (created + timedelta(days=TRIAL_DAYS)).date() if user["plan"] == "trial" else None
-    return {**user, "properties": props, "trial_ends": trial_ends}
+    return {**user, "properties": props, "trial_ends": trial_ends,
+            "plan_label": PLAN_LABELS.get(user["plan"], user["plan"]), "properties_limit": PLANS.get(user["plan"], PLANS["trial"])}
+
+
+@api()
+def update_preferences(c: Ctx):
+    if "notify_email" not in c.data:
+        raise ApiError(422, "Нечего сохранять")
+    with tx() as conn:
+        run(conn, "UPDATE users SET notify_email = %s WHERE id = %s AND account_id = %s",
+            (bool(c.data["notify_email"]), c.p.user_id, c.account_id))
+    return {"notify_email": bool(c.data["notify_email"])}
+
+
+@api()
+def badges(c: Ctx):
+    """Счётчики для меню: заявки с сайта, ждущие подтверждения, и конфликты с площадок."""
+    if not c.p.role or c.p.role == "housekeeper":
+        return {"requests": 0, "conflicts": 0}
+    with tx() as conn:
+        requests = one(conn, "SELECT count(*) AS n FROM bookings WHERE account_id = %s AND source = 'direct'"
+                             " AND status = 'pending' AND check_out >= current_date", (c.account_id,))["n"]
+        conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
+                        (c.account_id,))["n"]
+    return {"requests": requests, "conflicts": conflicts}
 
 
 @api("manager")
@@ -276,6 +305,12 @@ def quick_setup(c: Ctx):
     if not isinstance(types, list) or not types:
         raise ApiError(422, "Добавьте хотя бы одну категорию номеров")
     with tx() as conn:
+        acc = one(conn, "SELECT plan FROM accounts WHERE id = %s", (c.account_id,))
+        limit = PLANS.get(acc["plan"], PLANS["trial"])
+        have = one(conn, "SELECT count(*) AS n FROM properties WHERE account_id = %s", (c.account_id,))["n"]
+        if have >= limit:
+            raise ApiError(403, f"Тариф «{PLAN_LABELS.get(acc['plan'], acc['plan'])}» включает до {limit} объектов. "
+                                "Чтобы добавить ещё, перейдите на следующий тариф — напишите нам.")
         prop = one(
             conn,
             "INSERT INTO properties (account_id, name, address, phone, public_slug)"
@@ -518,6 +553,8 @@ routes = [
     Route("/api/auth/change-password", change_password, methods=["POST"]),
     Route("/api/me", me),
     Route("/api/onboarding", onboarding),
+    Route("/api/badges", badges),
+    Route("/api/me/preferences", update_preferences, methods=["PATCH"]),
     Route("/api/account/export", export_account),
     Route("/api/account/delete", delete_account, methods=["POST"]),
     Route("/api/users", list_users),

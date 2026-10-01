@@ -467,3 +467,6 @@ table.list tbody tr { transition: background .1s; }
 .ok-btn { background: var(--pine-soft); border-color: var(--pine); color: var(--pine); }
 .log-row { padding: 7px 0; border-bottom: 1px solid var(--line); }
 .log-row:last-child { border-bottom: 0; }
+.row-actions { white-space: nowrap; text-align: right; }
+.row-actions .btn + .btn { margin-left: 6px; }
+@media (max-width: 760px) { .row-actions { text-align: left; } .row-actions:empty { display: none !important; } }

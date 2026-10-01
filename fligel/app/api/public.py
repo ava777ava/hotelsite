@@ -6,7 +6,7 @@ from starlette.routing import Route
 
 import logging
 
-from .. import booklog, mail, telegram
+from .. import booklog, config, mail, ratelimit, telegram
 from ..db import all_, one, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -87,9 +87,41 @@ def availability(c: Ctx):
     return {"check_in": check_in, "check_out": check_out, "guests": guests, "options": result}
 
 
+def _email_staff(prop: dict, room_type: dict, name: str, phone: str, check_in: date, check_out: date, total) -> None:
+    """Письмо владельцу и администраторам о новой заявке с сайта (кто не отключил в профиле).
+    Сбой почты не должен влиять на ответ гостю."""
+    try:
+        with tx() as conn:
+            staff = all_(conn, "SELECT email, name FROM users WHERE account_id = %s AND role IN ('owner', 'manager')"
+                               " AND notify_email", (prop["account_id"],))
+        for u in staff:
+            mail.send_or_log(
+                u["email"], f"Новая заявка с сайта — {prop['name']}",
+                f"Здравствуйте, {u['name']}!\n\nНовая заявка на бронирование:\n"
+                f"Гость: {name}, {phone}\nНомер: {room_type['name']}\n"
+                f"Даты: {check_in.strftime('%d.%m.%Y')} — {check_out.strftime('%d.%m.%Y')}\n"
+                f"Стоимость: {total:.0f} ₽\n\nПодтвердить или отклонить: {config.PUBLIC_BASE_URL}/app/#/bookings\n"
+                f"Заявка снимется сама через {config.REQUEST_TTL_HOURS} ч, если её не подтвердить."
+                if config.REQUEST_TTL_HOURS else
+                f"Здравствуйте, {u['name']}!\n\nНовая заявка на бронирование:\n"
+                f"Гость: {name}, {phone}\nНомер: {room_type['name']}\n"
+                f"Даты: {check_in.strftime('%d.%m.%Y')} — {check_out.strftime('%d.%m.%Y')}\n"
+                f"Стоимость: {total:.0f} ₽\n\nПодтвердить или отклонить: {config.PUBLIC_BASE_URL}/app/#/bookings\n")
+    except Exception:
+        log.exception("Не удалось отправить письмо сотрудникам о новой заявке")
+
+
 @api(public=True)
 def create_request(c: Ctx):
     d = c.data
+    ip = ratelimit.client_ip(c.request)
+    if not ratelimit.allow(f"book:{ip}", config.PUBLIC_BOOKINGS_PER_HOUR, 3600):
+        raise ApiError(429, "Слишком много заявок с вашего адреса. Попробуйте позже или позвоните нам")
+    if str(d.get("website") or "").strip():
+        # скрытое поле-ловушка: человек его не видит и не заполняет, а простые боты — заполняют.
+        # Делаем вид, что заявка принята, но ничего не создаём и не занимаем номер.
+        return {"booking_id": None, "reference": "—", "status": "pending",
+                "message": "Заявка принята. Мы свяжемся с вами для подтверждения и оплаты."}
     check_in, check_out = _dates(d.get("check_in"), d.get("check_out"))
     guests = parse_int(d.get("guests"), "Гостей", 1, default=1)
     name = req_str(d, "guest_name", "Имя", 200)
@@ -101,6 +133,12 @@ def create_request(c: Ctx):
     rt_id = parse_uuid(d.get("room_type_id"), "Категория номера")
     with tx() as conn:
         prop = _property(conn, c.path["slug"])
+        if config.MAX_PENDING_PER_PHONE > 0 and one(
+                conn, "SELECT count(*) AS n FROM bookings WHERE account_id = %s AND source = 'direct' AND status = 'pending'"
+                      " AND guest_phone = %s AND created_at > now() - interval '24 hours'",
+                (prop["account_id"], phone))["n"] >= config.MAX_PENDING_PER_PHONE:
+            raise ApiError(429, "С этого номера уже есть неподтверждённые заявки. Дождитесь звонка или позвоните нам",
+                           {"field": "guest_phone"})
         t = one(conn, "SELECT * FROM room_types WHERE id = %s AND property_id = %s", (rt_id, prop["id"]))
         if not t:
             raise ApiError(404, "Категория номера не найдена")
@@ -117,12 +155,13 @@ def create_request(c: Ctx):
                     b = one(
                         conn,
                         "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
-                        " source, guest_name, guest_phone, guest_email, guests_count, total_price, notes)"
-                        " VALUES (%s, %s, %s, %s, %s, 'pending', 'direct', %s, %s, %s, %s, %s, %s)"
+                        " source, guest_name, guest_phone, guest_email, guests_count, total_price, notes,"
+                        " hold_expires_at) VALUES (%s, %s, %s, %s, %s, 'pending', 'direct', %s, %s, %s, %s, %s, %s,"
+                        " CASE WHEN %s > 0 THEN now() + make_interval(hours => %s) END)"
                         " RETURNING id, check_in, check_out, total_price",
                         (prop["account_id"], prop["id"], room["id"], check_in, check_out, name, phone,
                          opt_str(d, "guest_email", max_len=200), guests, q.total,
-                         opt_str(d, "comment", max_len=1000)),
+                         opt_str(d, "comment", max_len=1000), config.REQUEST_TTL_HOURS, config.REQUEST_TTL_HOURS),
                     )
                 break
             except psycopg.errors.ExclusionViolation:
@@ -135,6 +174,7 @@ def create_request(c: Ctx):
         telegram.notify(conn, prop["account_id"], "new_booking",
                         f"Новая заявка с сайта: {t['name']}, {check_in.strftime('%d.%m')}–"
                         f"{check_out.strftime('%d.%m')}, {name}, {phone}.")
+    _email_staff(prop, t, name, phone, check_in, check_out, q.total)
     guest_email = opt_str(d, "guest_email", max_len=200)
     if guest_email and "@" in guest_email:
         # Письмо гостю — после коммита заявки и без влияния на ответ: сбой почты не должен
