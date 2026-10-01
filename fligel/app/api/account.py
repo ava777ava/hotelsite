@@ -1,6 +1,6 @@
 """Регистрация, вход, сотрудники, настройка объекта и номеров."""
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
@@ -159,13 +159,17 @@ def change_password(c: Ctx):
     return {"message": "Пароль изменён."}
 
 
+TRIAL_DAYS = 14
+
+
 @api()
 def me(c: Ctx):
     with tx() as conn:
         user = one(
             conn,
-            "SELECT u.id, u.name, u.email, u.role, a.name AS account_name, a.plan, a.status"
-            " FROM users u JOIN accounts a ON a.id = u.account_id WHERE u.id = %s AND u.account_id = %s",
+            "SELECT u.id, u.name, u.email, u.role, a.name AS account_name, a.plan, a.status, a.paid_until,"
+            " a.created_at AS account_created_at FROM users u JOIN accounts a ON a.id = u.account_id"
+            " WHERE u.id = %s AND u.account_id = %s",
             (c.p.user_id, c.account_id),
         )
         if not user:
@@ -175,7 +179,38 @@ def me(c: Ctx):
             "SELECT id, name, public_slug FROM properties WHERE account_id = %s ORDER BY created_at",
             (c.account_id,),
         )
-    return {**user, "properties": props}
+    created = user.pop("account_created_at")
+    # Пробный период — информационный: показываем, сколько осталось, но доступ не ограничиваем
+    # (подключение оплаты — отдельный этап).
+    trial_ends = (created + timedelta(days=TRIAL_DAYS)).date() if user["plan"] == "trial" else None
+    return {**user, "properties": props, "trial_ends": trial_ends}
+
+
+@api("manager")
+def onboarding(c: Ctx):
+    """Чек-лист «Быстрый старт» для нового аккаунта: что уже настроено, а что ещё нет."""
+    with tx() as conn:
+        n = lambda sql, *a: one(conn, sql, (c.account_id, *a))["n"]  # noqa: E731
+        rooms = n("SELECT count(*) AS n FROM rooms WHERE account_id = %s")
+        bookings = n("SELECT count(*) AS n FROM bookings WHERE account_id = %s")
+        rates = n("SELECT count(*) AS n FROM rates WHERE account_id = %s")
+        feeds = n("SELECT count(*) AS n FROM ical_feeds WHERE account_id = %s")
+        staff = n("SELECT count(*) AS n FROM users WHERE account_id = %s AND id <> %s", c.p.user_id)
+        slug = one(conn, "SELECT public_slug FROM properties WHERE account_id = %s AND booking_enabled"
+                         " ORDER BY created_at LIMIT 1", (c.account_id,))
+        expenses = n("SELECT count(*) AS n FROM expenses WHERE account_id = %s")
+    steps = [
+        {"key": "rooms", "title": "Добавить номера", "done": rooms > 0, "route": "settings"},
+        {"key": "prices", "title": "Настроить цены на даты (выходные, сезон)", "done": rates > 0, "route": "rates"},
+        {"key": "booking", "title": "Создать первую бронь в шахматке", "done": bookings > 0, "route": "board"},
+        {"key": "channels", "title": "Подключить календарь Авито, Яндекса или другой площадки", "done": feeds > 0,
+         "route": "channels"},
+        {"key": "staff", "title": "Добавить администратора или горничную", "done": staff > 0, "route": "settings"},
+        {"key": "expenses", "title": "Записать первый расход — отчёты посчитают прибыль", "done": expenses > 0,
+         "route": "expenses"},
+    ]
+    return {"steps": steps, "done": sum(1 for s in steps if s["done"]), "total": len(steps),
+            "booking_page_slug": slug["public_slug"] if slug else None}
 
 
 # ---------- сотрудники ----------
@@ -416,6 +451,7 @@ routes = [
     Route("/api/auth/reset-password", reset_password, methods=["POST"]),
     Route("/api/auth/change-password", change_password, methods=["POST"]),
     Route("/api/me", me),
+    Route("/api/onboarding", onboarding),
     Route("/api/users", list_users),
     Route("/api/users", create_user, methods=["POST"]),
     Route("/api/users/{id}", delete_user, methods=["DELETE"]),

@@ -4,7 +4,9 @@ from datetime import date
 import psycopg
 from starlette.routing import Route
 
-from .. import telegram
+import logging
+
+from .. import mail, telegram
 from ..db import all_, one, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -12,6 +14,7 @@ from ..util import opt_str, parse_date, parse_int, parse_uuid, req_str
 from .base import Ctx, api
 
 MAX_NIGHTS = 60
+log = logging.getLogger("fligel.public")
 
 
 def _property(conn, slug: str) -> dict:
@@ -129,6 +132,22 @@ def create_request(c: Ctx):
         telegram.notify(conn, prop["account_id"], "new_booking",
                         f"Новая заявка с сайта: {t['name']}, {check_in.strftime('%d.%m')}–"
                         f"{check_out.strftime('%d.%m')}, {name}, {phone}.")
+    guest_email = opt_str(d, "guest_email", max_len=200)
+    if guest_email and "@" in guest_email:
+        # Письмо гостю — после коммита заявки и без влияния на ответ: сбой почты не должен
+        # терять бронь. Без настроенного SMTP письмо просто пишется в лог (см. app/mail.py).
+        try:
+            mail.send_or_log(
+                guest_email, f"Заявка на бронирование принята — {prop['name']}",
+                f"Здравствуйте, {name}!\n\nМы получили вашу заявку на бронирование.\n\n"
+                f"Объект: {prop['name']}{(', ' + prop['address']) if prop['address'] else ''}\n"
+                f"Номер: {t['name']}\nЗаезд: {check_in.strftime('%d.%m.%Y')} (с {prop['check_in_time'].strftime('%H:%M')})\n"
+                f"Выезд: {check_out.strftime('%d.%m.%Y')} (до {prop['check_out_time'].strftime('%H:%M')})\n"
+                f"Стоимость: {q.total:.0f} ₽\nНомер заявки: {str(b['id'])[:8].upper()}\n\n"
+                f"Мы свяжемся с вами для подтверждения и оплаты."
+                + (f"\nТелефон для связи: {prop['phone']}" if prop["phone"] else ""))
+        except Exception:
+            log.exception("Не удалось отправить письмо гостю о заявке %s", b["id"])
     return {
         "booking_id": b["id"], "reference": str(b["id"])[:8].upper(), "room_type": t["name"],
         "check_in": b["check_in"], "check_out": b["check_out"], "total": b["total_price"],

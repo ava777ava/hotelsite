@@ -1167,6 +1167,99 @@ class IncomesTests(Base):
         self.assertEqual((len(by_room["rows"]), float(by_room["total"])), (1, 700))
 
 
+class LaunchReadinessTests(Base):
+    """Заголовки безопасности, служебные страницы, выгрузка броней, быстрый старт, письмо гостю."""
+
+    def test_security_headers_and_embeddable_booking_page(self):
+        r = self.client.get("/app/")
+        self.assertEqual(r.headers["x-frame-options"], "DENY")
+        self.assertIn("default-src 'self'", r.headers["content-security-policy"])
+        self.assertIn("frame-ancestors 'none'", r.headers["content-security-policy"])
+        self.assertEqual(r.headers["x-content-type-options"], "nosniff")
+        book = self.client.get("/book/any")
+        self.assertNotIn("x-frame-options", book.headers)  # страницу бронирования встраивают через iframe
+        self.assertNotIn("frame-ancestors", book.headers["content-security-policy"])
+
+    def test_service_pages_and_404(self):
+        self.assertIn("Disallow: /app/", self.client.get("/robots.txt").text)
+        self.assertIn("/legal/privacy", self.client.get("/sitemap.xml").text)
+        m = self.client.get("/manifest.webmanifest").json()
+        self.assertEqual(m["start_url"], "/app/")
+        page = self.client.get("/net-takoj-stranitsy")
+        self.assertEqual(page.status_code, 404)
+        self.assertIn("Такой страницы нет", page.text)
+        api_404 = self.client.get("/api/net-takogo")
+        self.assertEqual(api_404.status_code, 404)
+        self.assertEqual(api_404.json()["error"], "Не найдено")
+
+    def test_bookings_csv_export_and_scoping(self):
+        a = self.register("launch1@example.ru")
+        b = self.register("launch2@example.ru")
+        self.book(a, a["rooms"][0], d(2), d(5), guest="=ВЗЛОМ()", total_price=9000, paid_amount=3000)
+        self.book(b, b["rooms"][0], d(2), d(5), guest="Чужой гость")
+        text = self.client.get("/api/bookings/export.csv", headers=a["h"], params={"from": d(0), "to": d(30)}).text
+        self.assertIn("Заезд;Выезд;Ночей", text)
+        self.assertIn("'=ВЗЛОМ()", text)  # защита от формул в Excel
+        self.assertIn("6000", text)  # остаток к оплате
+        self.assertNotIn("Чужой гость", text)
+        hh = self.client.post("/api/users", headers=a["h"], json={"name": "Горничная", "email": "launch1h@example.ru", "role": "housekeeper", "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": "launch1h@example.ru", "password": "password123"}).json()["token"]
+        self.assertEqual(self.client.get("/api/bookings/export.csv", headers={"Authorization": f"Bearer {tok}"}).status_code, 403)
+
+    def test_onboarding_progress_and_trial_info(self):
+        ctx = self.register("launch3@example.ru")
+        o = self.client.get("/api/onboarding", headers=ctx["h"]).json()
+        done = {s["key"]: s["done"] for s in o["steps"]}
+        self.assertTrue(done["rooms"])
+        self.assertFalse(done["booking"])
+        self.assertEqual(o["booking_page_slug"], ctx["prop"]["public_slug"])
+        self.book(ctx, ctx["rooms"][0], d(1), d(2))
+        o2 = self.client.get("/api/onboarding", headers=ctx["h"]).json()
+        self.assertEqual(o2["done"], o["done"] + 1)
+        me = self.client.get("/api/me", headers=ctx["h"]).json()
+        self.assertEqual(me["plan"], "trial")
+        self.assertEqual(me["trial_ends"], (date.today() + timedelta(days=14)).isoformat())
+
+    def test_today_reports_free_rooms(self):
+        ctx = self.register("launch4@example.ru", rooms=(("Стандарт", 3, 1000),))
+        self.book(ctx, ctx["rooms"][0], d(-1), d(2))   # проживает
+        self.book(ctx, ctx["rooms"][1], d(0), d(1))    # заезжает сегодня
+        self.book(ctx, ctx["rooms"][2], d(-3), d(0), status="blocked")  # закрыт, но не на эту ночь
+        t = self.client.get("/api/today", headers=ctx["h"]).json()
+        self.assertEqual((t["rooms_total"], t["occupied_tonight"], t["free_tonight"]), (3, 2, 1))
+
+    def test_category_color_must_be_hex(self):
+        ctx = self.register("launch5@example.ru")
+        r = self.client.post("/api/expense-categories", headers=ctx["h"], json={"name": "Цвет", "color": "red\"><script>"})
+        self.assertEqual(r.status_code, 422)
+        r = self.client.post("/api/income-categories", headers=ctx["h"], json={"name": "Цвет", "color": "#A1b2C3"})
+        self.assertEqual(r.status_code, 200)
+
+    def test_guest_gets_confirmation_email_without_breaking_booking(self):
+        ctx = self.register("launch6@example.ru")
+        sent = []
+        orig_send, orig_host = mail.send, config.SMTP_HOST
+        config.SMTP_HOST = "smtp.test.local"
+        try:
+            mail.send = lambda to, subject, body: sent.append((to, subject, body))
+            slug, rt = ctx["prop"]["public_slug"], ctx["prop"]["room_types"][0]["id"]
+            payload = {"room_type_id": rt, "check_in": d(3), "check_out": d(5), "guest_name": "Ольга",
+                       "guest_phone": "+79001234567", "guest_email": "olga@example.ru", "consent": True}
+            r = self.client.post(f"/api/public/{slug}/book", json=payload)
+            self.assertEqual(r.status_code, 200, r.text)
+            self.assertEqual(len(sent), 1)
+            self.assertEqual(sent[0][0], "olga@example.ru")
+            self.assertIn("Номер заявки", sent[0][2])
+
+            def broken(*a):
+                raise RuntimeError("SMTP недоступен")
+            mail.send = broken
+            r = self.client.post(f"/api/public/{slug}/book", json={**payload, "check_in": d(10), "check_out": d(12)})
+            self.assertEqual(r.status_code, 200, r.text)  # сбой почты не теряет заявку
+        finally:
+            mail.send, config.SMTP_HOST = orig_send, orig_host
+
+
 class AuthSecurityTests(Base):
     """Восстановление пароля (мок SMTP — как telegram.send_message/sync.fetch в других тестах)
     и блокировка входа после подбора пароля."""

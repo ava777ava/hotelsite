@@ -1,15 +1,18 @@
 """Брони, шахматка, цены по датам, статистика."""
+import csv
+import io
 from datetime import date, timedelta
 from decimal import Decimal
 
 import psycopg
+from starlette.responses import Response
 from starlette.routing import Route
 
 from .. import telegram
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..pricing import quote
-from ..util import opt_str, parse_date, parse_int, parse_money, parse_uuid
+from ..util import csv_safe, opt_str, parse_date, parse_int, parse_money, parse_uuid
 from .base import Ctx, api
 from .common import selected_property
 from .reports import SOURCE_LABELS
@@ -67,8 +70,7 @@ def _room_type(conn, room: dict) -> dict:
 # Список и карточка отдельной брони — только менеджер/владелец: горничной для её работы хватает
 # /api/board и /api/today (те и так открыты всем ролям), а полнотекстовый поиск по гостям
 # по всем броням аккаунта выходит за рамки «только шахматка и заезды».
-@api("manager")
-def list_bookings(c: Ctx):
+def _booking_filters(c: Ctx) -> tuple[list[str], list]:
     start, end = _date_range(c, 60)
     where = ["b.account_id = %s", "b.check_in < %s", "b.check_out > %s"]
     params: list = [c.account_id, end, start]
@@ -84,6 +86,12 @@ def list_bookings(c: Ctx):
         where.append("(b.guest_name ILIKE %s OR b.guest_phone ILIKE %s OR b.guest_email ILIKE %s)")
         like = f"%{c.q['q']}%"
         params += [like, like, like]
+    return where, params
+
+
+@api("manager")
+def list_bookings(c: Ctx):
+    where, params = _booking_filters(c)
     with tx() as conn:
         return all_(
             conn,
@@ -92,6 +100,37 @@ def list_bookings(c: Ctx):
             f" WHERE {' AND '.join(where)} ORDER BY b.check_in, r.sort_order LIMIT 1000",
             params,
         )
+
+
+@api("manager")
+def export_bookings(c: Ctx):
+    """Выгрузка броней за период в CSV (Excel открывает с кириллицей благодаря BOM)."""
+    where, params = _booking_filters(c)
+    with tx() as conn:
+        rows = all_(
+            conn,
+            f"SELECT {BOOKING_COLS}, r.name AS room_name, p.name AS property_name FROM bookings b"
+            " JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
+            f" WHERE {' AND '.join(where)} ORDER BY b.check_in, r.sort_order LIMIT 20000",
+            params,
+        )
+    buf = io.StringIO()
+    buf.write("\ufeff")
+    w = csv.writer(buf, delimiter=";")
+    w.writerow(["Заезд", "Выезд", "Ночей", "Объект", "Номер", "Гость", "Телефон", "Email", "Гостей", "Источник",
+                "Статус", "Стоимость", "Оплачено", "Остаток", "Комментарий"])
+    status_label = {"confirmed": "Подтверждена", "pending": "Ждёт оплаты", "blocked": "Даты закрыты",
+                    "cancelled": "Отменена"}
+    for r in rows:
+        total, paid = Decimal(r["total_price"]), Decimal(r["paid_amount"])
+        w.writerow([r["check_in"].strftime("%d.%m.%Y"), r["check_out"].strftime("%d.%m.%Y"),
+                    (r["check_out"] - r["check_in"]).days, csv_safe(r["property_name"]), csv_safe(r["room_name"]),
+                    csv_safe(r["guest_name"]), csv_safe(r["guest_phone"]), csv_safe(r["guest_email"]),
+                    r["guests_count"], SOURCE_LABELS.get(r["source"], r["source"]), status_label[r["status"]],
+                    str(total).replace(".", ","), str(paid).replace(".", ","),
+                    str(max(total - paid, Decimal("0"))).replace(".", ","), csv_safe(r["notes"])])
+    return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=bookings.csv"})
 
 
 @api("manager")
@@ -362,11 +401,24 @@ def today(c: Ctx):
             f" AND b.check_in <= %s AND b.check_out >= %s{prop_filter} ORDER BY r.sort_order",
             (c.account_id, day, day, *prop_params),
         )
+        rooms_total = one(
+            conn, f"SELECT count(*) AS n FROM rooms r WHERE r.account_id = %s{' AND r.property_id = %s' if prop_id else ''}",
+            (c.account_id, *prop_params))["n"]
+        blocked_now = one(
+            conn, "SELECT count(DISTINCT b.room_id) AS n FROM bookings b WHERE b.account_id = %s AND b.status = 'blocked'"
+                  f" AND b.check_in <= %s AND b.check_out > %s{prop_filter}",
+            (c.account_id, day, day, *prop_params))["n"]
+    arrivals = [r for r in rows if r["check_in"] == day]
+    staying = [r for r in rows if r["check_in"] < day < r["check_out"]]
+    # ночь «на эту дату» занимают заезжающие сегодня и те, кто уже проживает
+    occupied = len(arrivals) + len(staying)
     return {
         "date": day,
-        "arrivals": [r for r in rows if r["check_in"] == day],
+        "arrivals": arrivals,
         "departures": [r for r in rows if r["check_out"] == day],
-        "staying": [r for r in rows if r["check_in"] < day < r["check_out"]],
+        "staying": staying,
+        "rooms_total": rooms_total, "occupied_tonight": occupied, "blocked_rooms": blocked_now,
+        "free_tonight": max(rooms_total - occupied - blocked_now, 0),
     }
 
 
@@ -400,6 +452,7 @@ def guest_history(c: Ctx):
 routes = [
     Route("/api/bookings", list_bookings),
     Route("/api/bookings", create_booking, methods=["POST"]),
+    Route("/api/bookings/export.csv", export_bookings),
     Route("/api/bookings/quote", quote_booking),
     Route("/api/bookings/{id}", get_booking),
     Route("/api/bookings/{id}", update_booking, methods=["PATCH"]),

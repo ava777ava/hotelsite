@@ -463,6 +463,21 @@ function openDrawer(title, body, foot) {
 // ---------- шахматка ----------
 let boardData = null;
 
+// «Быстрый старт»: чек-лист для нового аккаунта на шахматке, пока не всё настроено
+async function drawOnboarding(box) {
+  let o;
+  try { o = await api('GET', '/api/onboarding'); } catch { return; }
+  if (o.done >= o.total) return;
+  const bookingUrl = o.booking_page_slug ? `${location.origin}/book/${o.booking_page_slug}` : null;
+  box.append(h('div', { class: 'card card-pad onboard' },
+    h('div', { class: 'onboard-head' }, h('div', {}, h('h3', {}, 'Быстрый старт'), h('div', { class: 'muted small' }, `Настроено ${o.done} из ${o.total} — так сервис начнёт приносить пользу сразу`)),
+      h('button', { class: 'btn small ghost', onclick: () => { store.set('onboardHidden', '1'); box.innerHTML = ''; } }, 'Скрыть')),
+    h('div', { class: 'bar-h', style: { margin: '10px 0 12px' } }, h('i', { style: { width: `${(o.done / o.total) * 100}%`, background: 'var(--pine)' } })),
+    h('div', { class: 'onboard-steps' }, o.steps.map((st) => h('a', { class: 'onboard-step' + (st.done ? ' done' : ''), href: `#/${st.route}` },
+      h('span', { class: 'chk' }, st.done ? '✓' : ''), h('span', {}, st.title)))),
+    bookingUrl ? h('div', { class: 'muted small', style: { marginTop: '10px' } }, 'Ваша страница бронирования для гостей: ', h('a', { href: bookingUrl, target: '_blank', rel: 'noopener' }, bookingUrl)) : null));
+}
+
 async function viewBoard(main) {
   if (!state.boardFrom) state.boardFrom = addDays(todayISO(), -2);
   const head = h('div', { class: 'page-head' }, h('h1', {}, 'Шахматка'));
@@ -474,8 +489,10 @@ async function viewBoard(main) {
     can('manager') ? h('button', { class: 'btn primary', onclick: () => bookingDrawer({}) }, icon('plus'), 'Бронь') : null);
   head.append(tools);
   const banner = h('div');
+  const onboard = h('div');
   const card = h('div', { class: 'card board-card' }, h('div', { class: 'empty' }, h('span', { class: 'spin' }), 'Загружаю…'));
-  main.append(head, banner, card);
+  main.append(head, onboard, banner, card);
+  if (can('manager') && !store.get('onboardHidden')) drawOnboarding(onboard);
 
   const shift = (n) => { state.boardFrom = addDays(state.boardFrom, n); load(); };
   const load = async () => {
@@ -949,7 +966,9 @@ async function bookingDrawer(b, onSaved) {
   guestBox.append(
     inp('guest_name', 'Гость', { autocomplete: 'off', placeholder: 'Имя и фамилия' }),
     h('div', { class: 'row2' }, inp('guest_phone', 'Телефон', { type: 'tel', placeholder: '+7' }), inp('guest_email', 'Email', { type: 'email' })),
-    h('button', { type: 'button', class: 'btn small ghost', style: { marginBottom: '14px' }, onclick: showGuestHistory }, 'История гостя по телефону'),
+    h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' } },
+      h('button', { type: 'button', class: 'btn small ghost', onclick: showGuestHistory }, 'История гостя по телефону'),
+      readOnly ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => { f.paid_amount.value = f.total_price.value || 0; updateTotal(); } }, 'Оплачено полностью')),
     guestHistoryBox,
     h('div', { class: 'row3' },
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1 }),
@@ -1039,8 +1058,8 @@ async function viewToday(main) {
       h('div', { style: { flex: 1, minWidth: 0 } },
         h('div', { style: { fontWeight: 600 } }, b.guest_name || `Гость с площадки ${SOURCE[b.source]}`,
           scope.value === 'all' ? h('span', { class: 'muted small', style: { fontWeight: 400 } }, ' · ', b.property_name) : null),
-        h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${b.guests_count} гост. · ${SOURCE[b.source]}`,
-          b.guest_phone ? [' · ', h('a', { href: `tel:${b.guest_phone}`, onclick: (e) => e.stopPropagation() }, b.guest_phone)] : null)),
+        h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${b.guests_count} гост. · ${SOURCE[b.source]}`),
+        b.guest_phone ? h('a', { class: 'small tel', href: `tel:${b.guest_phone}`, onclick: (e) => e.stopPropagation() }, b.guest_phone) : null),
       kind !== 'staying' && due > 0 && can('manager') ? h('span', { class: 'pill warn num' }, `к оплате ${fmtMoney(due)}`) : null,
       b.status === 'pending' ? h('span', { class: 'pill warn' }, 'ждёт оплаты') : null);
   };
@@ -1052,8 +1071,14 @@ async function viewToday(main) {
       const d = await api('GET', '/api/today?' + qs({ date: day, property_id: scope.value === 'current' ? state.propertyId : undefined }));
       lastData = d;
       content.innerHTML = '';
+      const dueToday = [...d.arrivals, ...d.departures].reduce((sum, b) => sum + Math.max(Number(b.total_price) - Number(b.paid_amount), 0), 0);
       content.append(
         h('p', { class: 'muted', style: { marginTop: '-6px' } }, `${fmtDate(day)}, ${WD[parseISO(day).getDay()].toLowerCase()}`),
+        h('div', { class: 'kpis' },
+          kpiCard('Заезды', String(d.arrivals.length)), kpiCard('Выезды', String(d.departures.length)),
+          kpiCard('Проживают', String(d.staying.length)),
+          kpiCard('Свободно на ночь', `${d.free_tonight}`, `из ${d.rooms_total}`),
+          can('manager') ? kpiCard('К доплате по заездам и выездам', fmtMoney(dueToday)) : null),
         h('div', { class: 'grid-2' },
           block('Заезды', d.arrivals, 'in', 'Заездов нет'),
           block('Выезды', d.departures, 'out', 'Выездов нет'),
@@ -1104,6 +1129,9 @@ async function viewBookings(main) {
   let timer;
   Object.values(f).forEach((el) => el.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(load, 250); }));
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Брони'),
+    h('button', { class: 'btn', onclick: () => downloadCsv('/api/bookings/export.csv?' + qs({
+      q: f.q.value, from: f.from.value, to: f.to.value, status: f.status.value,
+      property_id: scope.value === 'current' ? state.propertyId : undefined }), `bookings_${f.from.value}_${f.to.value}.csv`) }, icon('download'), 'CSV'),
     h('button', { class: 'btn primary', onclick: () => bookingDrawer({}, load) }, icon('plus'), 'Бронь')),
   h('div', { class: 'board-tools', style: { marginBottom: '14px' } }, f.q, f.from, '—', f.to, f.status, scopeSeg(scope, () => load())), table);
   const PAGE = 50;
@@ -2200,7 +2228,10 @@ async function viewProfile(main) {
   main.append(
     h('div', { class: 'card card-pad', style: { marginBottom: '16px' } },
       h('h2', { style: { marginBottom: '6px' } }, state.me.name),
-      h('p', { class: 'muted small', style: { marginTop: 0 } }, state.me.email, ' · ', ROLE[state.me.role], ' · ', state.me.account_name)),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, state.me.email, ' · ', ROLE[state.me.role], ' · ', state.me.account_name),
+      can('owner') ? h('p', { class: 'small', style: { marginBottom: 0 } }, 'Тариф: ',
+        state.me.trial_ends ? h('b', {}, `пробный период до ${fmtDate(state.me.trial_ends)}`)
+          : h('b', {}, state.me.paid_until ? `оплачен до ${fmtDate(state.me.paid_until)}` : 'активен')) : null),
     h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '14px' } }, 'Сменить пароль'), err, ok, form));
 }
 

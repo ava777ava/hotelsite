@@ -409,6 +409,7 @@ table.list tbody tr { transition: background .1s; }
   .quick-row .btn { flex: 1 1 100%; }
   .kpis { grid-template-columns: 1fr 1fr; gap: 10px; }
   .kpi { padding: 12px; }
+  .kpis > :last-child:nth-child(odd) { grid-column: 1 / -1; }
   .kpi .v { font-size: 21px; }
   .card-head { padding: 12px 14px; }
   .card-pad { padding: 14px; }
@@ -445,3 +446,14 @@ table.list tbody tr { transition: background .1s; }
   table.cards-mobile td:not([data-l])::before { display: none; }
   table.cards-mobile td.wide { grid-column: 1 / -1; }
 }
+
+/* ---------- быстрый старт ---------- */
+.onboard { margin-bottom: 14px; border-color: #CFE0D7; background: linear-gradient(180deg, #F6FAF7, #fff); }
+.onboard-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.onboard-steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px 16px; }
+.onboard-step { display: flex; align-items: center; gap: 10px; padding: 6px 0; color: var(--text); text-decoration: none; font-size: 13.5px; }
+.onboard-step:hover span:last-child { text-decoration: underline; }
+.onboard-step .chk { width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--border); display: grid; place-items: center; font-size: 12px; color: #fff; flex: none; background: #fff; }
+.onboard-step.done { color: var(--muted); }
+.onboard-step.done .chk { background: var(--pine); border-color: var(--pine); }
+.day-list .tel { display: inline-block; margin-top: 2px; }

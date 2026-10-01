@@ -8,13 +8,15 @@ from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
-from starlette.responses import FileResponse, RedirectResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from . import config, db, sync
 from .api import account, bookings, channels, expenses, incomes, public, reports
 from .api import telegram as telegram_api
+from .middleware import SecurityHeaders
 from .migrate import migrate
 from .sync import Scheduler
 from .util import Json
@@ -41,6 +43,42 @@ def legal_page(name: str):
     def handler(request: Request):
         return FileResponse(STATIC / "legal" / f"{name}.html")
     return handler
+
+
+def favicon(request: Request):
+    return FileResponse(STATIC / "icons" / "icon.svg", media_type="image/svg+xml")
+
+
+def robots(request: Request):
+    return PlainTextResponse(
+        "User-agent: *\nAllow: /\nDisallow: /app/\nDisallow: /api/\nDisallow: /ical/\n"
+        f"Sitemap: {config.PUBLIC_BASE_URL}/sitemap.xml\n")
+
+
+def sitemap(request: Request):
+    urls = ["/", "/legal/privacy", "/legal/pdn-consent", "/legal/terms"]
+    body = "".join(f"<url><loc>{config.PUBLIC_BASE_URL}{u}</loc></url>" for u in urls)
+    return Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+                    f"{body}</urlset>", media_type="application/xml")
+
+
+def manifest(request: Request):
+    return Json({
+        "name": "Флигель — управление бронированиями", "short_name": "Флигель", "lang": "ru",
+        "start_url": "/app/", "scope": "/", "display": "standalone", "background_color": "#1C2420",
+        "theme_color": "#1C2420",
+        "icons": [{"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png"},
+                  {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png"},
+                  {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}],
+    }, media_type="application/manifest+json")
+
+
+async def not_found(request: Request, exc: StarletteHTTPException):
+    """Понятная страница 404 для людей и JSON для программ (API, календари)."""
+    if exc.status_code == 404 and not request.url.path.startswith(("/api/", "/ical/", "/static/")):
+        return FileResponse(STATIC / "404.html", status_code=404)
+    return Json({"error": "Не найдено" if exc.status_code == 404 else (exc.detail or "Ошибка")},
+                status_code=exc.status_code)
 
 
 def health(request: Request):
@@ -84,6 +122,10 @@ routes = [
     Route("/legal/pdn-consent", legal_page("pdn-consent")),
     Route("/legal/terms", legal_page("terms")),
     Route("/health", health),
+    Route("/favicon.ico", favicon),
+    Route("/robots.txt", robots),
+    Route("/sitemap.xml", sitemap),
+    Route("/manifest.webmanifest", manifest),
     *account.routes,
     *bookings.routes,
     *channels.routes,
@@ -95,4 +137,4 @@ routes = [
     Mount("/static", StaticFiles(directory=STATIC), name="static"),
 ]
 
-app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(GZipMiddleware, minimum_size=1000)])
+app = Starlette(routes=routes, lifespan=lifespan, exception_handlers={StarletteHTTPException: not_found}, middleware=[Middleware(SecurityHeaders), Middleware(GZipMiddleware, minimum_size=1000)])
