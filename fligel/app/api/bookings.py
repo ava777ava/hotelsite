@@ -8,7 +8,7 @@ import psycopg
 from starlette.responses import Response
 from starlette.routing import Route
 
-from .. import booklog, telegram
+from .. import booklog, importer, telegram
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -131,6 +131,71 @@ def export_bookings(c: Ctx):
                     str(max(total - paid, Decimal("0"))).replace(".", ","), csv_safe(r["notes"])])
     return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": "attachment; filename=bookings.csv"})
+
+
+@api("manager")
+def import_template(c: Ctx):
+    return Response("\ufeff" + importer.TEMPLATE, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=bookings_template.csv"})
+
+
+@api("manager")
+def import_bookings(c: Ctx):
+    """Импорт броней из CSV в выбранный объект. dry_run=true — только проверка: ничего не сохраняется,
+    но результат (сколько создастся и какие строки с ошибками) тот же, что и при настоящем импорте."""
+    text = c.data.get("csv")
+    if not isinstance(text, str) or not text.strip():
+        raise ApiError(422, "Выберите файл с бронями")
+    if len(text.encode("utf-8")) > importer.MAX_BYTES:
+        raise ApiError(422, "Файл слишком большой (максимум 1,5 МБ)")
+    dry_run = bool(c.data.get("dry_run"))
+    try:
+        fields, items = importer.read_table(text)
+    except ValueError as e:
+        raise ApiError(422, str(e))
+    errors, created = [], 0
+    with tx() as conn:
+        prop = selected_property(conn, c.account_id, c.data.get("property_id"))
+        rooms = {r["name"].strip().lower(): r for r in all_(
+            conn, "SELECT r.*, rt.base_price, rt.min_stay, rt.capacity FROM rooms r"
+                  " JOIN room_types rt ON rt.id = r.room_type_id WHERE r.property_id = %s AND r.account_id = %s",
+            (prop["id"], c.account_id))}
+        with conn.transaction():
+            for item in items:
+                n = item["_line"]
+                row, err = importer.normalize(item)
+                if err:
+                    errors.append({"line": n, "error": err})
+                    continue
+                room = rooms.get(row["room"].lower())
+                if not room:
+                    errors.append({"line": n, "error": f"номер «{row['room']}» не найден в объекте «{prop['name']}»"})
+                    continue
+                total = row["total_price"]
+                if total == "auto":
+                    total = quote(conn, _room_type(conn, room), row["check_in"], row["check_out"]).total
+                try:
+                    with conn.transaction():
+                        b = one(
+                            conn,
+                            "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
+                            " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount,"
+                            " notes) VALUES (%s, %s, %s, %s, %s, 'confirmed', %s, %s, %s, %s, %s, %s, %s, %s)"
+                            " RETURNING id",
+                            (c.account_id, prop["id"], room["id"], row["check_in"], row["check_out"], row["source"],
+                             row["guest_name"], row["guest_phone"], row["guest_email"], row["guests_count"], total,
+                             row["paid_amount"], row["notes"]))
+                except psycopg.errors.ExclusionViolation:
+                    errors.append({"line": n, "error": _overlap_info(conn, room["id"], row["check_in"], row["check_out"], None)})
+                    continue
+                booklog.log(conn, c.account_id, b["id"], c.p.user_id, "created", {
+                    "summary": f"{row['check_in'].strftime('%d.%m')}–{row['check_out'].strftime('%d.%m')}, номер {room['name']}, импорт из файла",
+                    "source": row["source"]})
+                created += 1
+            if dry_run:
+                raise psycopg.Rollback()
+    return {"dry_run": dry_run, "created": created, "total": len(items), "skipped": len(errors),
+            "errors": errors[:200], "columns": fields}
 
 
 @api("manager")
@@ -477,6 +542,8 @@ routes = [
     Route("/api/bookings", list_bookings),
     Route("/api/bookings", create_booking, methods=["POST"]),
     Route("/api/bookings/export.csv", export_bookings),
+    Route("/api/bookings/import-template.csv", import_template),
+    Route("/api/bookings/import", import_bookings, methods=["POST"]),
     Route("/api/bookings/quote", quote_booking),
     Route("/api/bookings/{id}/log", booking_history),
     Route("/api/bookings/{id}", get_booking),

@@ -19,7 +19,7 @@ except ImportError:
     sys.exit("Нужен playwright: pip install playwright && playwright install chromium")
 
 BASE = (sys.argv[1] if len(sys.argv) > 1 else "http://localhost:8000").rstrip("/")
-ROUTES = ["board", "today", "bookings", "rates", "channels", "expenses", "stats", "notifications", "settings", "profile"]
+ROUTES = ["board", "today", "bookings", "rates", "channels", "expenses", "stats", "notifications", "settings", "help", "profile"]
 VIEWPORTS = {"компьютер": {"width": 1366, "height": 850}, "телефон": {"width": 390, "height": 844}}
 
 

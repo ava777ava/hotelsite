@@ -480,3 +480,12 @@ table.list tbody tr { transition: background .1s; }
 .photo-act.del { right: 4px; } .photo-act.first { left: 4px; }
 .photo-act:hover { background: var(--ink); }
 .photo-tag { position: absolute; left: 4px; bottom: 4px; background: var(--pine); color: #fff; font-size: 11px; padding: 1px 7px; border-radius: 10px; }
+
+/* справка */
+.help-item { padding: 0; }
+.help-item summary { cursor: pointer; padding: 16px 18px; font-weight: 650; list-style: none; display: flex; justify-content: space-between; align-items: center; }
+.help-item summary::-webkit-details-marker { display: none; }
+.help-item summary::after { content: '+'; font-size: 20px; color: var(--muted); }
+.help-item[open] summary::after { content: '−'; }
+.help-item ul { margin: 0; padding: 0 20px 16px 38px; color: var(--ink-2, var(--ink)); }
+.help-item li { margin: 0 0 8px; line-height: 1.5; }

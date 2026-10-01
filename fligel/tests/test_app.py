@@ -1720,5 +1720,63 @@ class LandingAndLegalTests(unittest.TestCase):
             self.assertIn(path, js)
 
 
+class ImportTests(Base):
+    """Импорт броней из CSV (переезд из Excel / другой системы)."""
+
+    def imp(self, ctx, text, dry=False, headers=None):
+        return self.client.post("/api/bookings/import", headers=headers or ctx["h"], json={"csv": text, "dry_run": dry})
+
+    def test_import_creates_bookings_and_reports_errors(self):
+        ctx = self.register("imp1@example.ru")
+        csv_text = ("\ufeffЗаезд;Выезд;Номер;Гость;Телефон;Гостей;Источник;Стоимость;Оплачено;Комментарий\n"
+                    "15.07.2030;18.07.2030;101;Иван Петров;+7 900 111-22-33;2;Авито;10 500,50 ₽;3000;поздний заезд\n"
+                    "2030-07-20;2030-07-22;102;Мария;;;;;;\n"
+                    "16.07.2030;17.07.2030;101;Пересечение;;;;;;\n"
+                    "10.08.2030;09.08.2030;101;Наоборот;;;;;;\n"
+                    "10.08.2030;12.08.2030;999;Нет номера;;;;;;\n"
+                    "\n"
+                    "abc;12.08.2030;101;Плохая дата;;;;;;\n")
+        dry = self.imp(ctx, csv_text, dry=True).json()
+        self.assertEqual((dry["dry_run"], dry["created"], dry["skipped"], dry["total"]), (True, 2, 4, 6))
+        self.assertEqual(self.client.get("/api/bookings?from=2030-07-01&to=2030-09-01", headers=ctx["h"]).json(), [])  # проверка ничего не сохранила
+        real = self.imp(ctx, csv_text).json()
+        self.assertEqual((real["created"], real["skipped"]), (2, 4))
+        lines = {e["line"]: e["error"] for e in real["errors"]}
+        self.assertIn("занят", lines[4])
+        self.assertIn("выезд", lines[5])
+        self.assertIn("не найден", lines[6])
+        self.assertIn("дата заезда", lines[8])
+        rows = self.client.get("/api/bookings?from=2030-07-01&to=2030-09-01", headers=ctx["h"]).json()
+        first = next(b for b in rows if b["guest_name"] == "Иван Петров")
+        self.assertEqual((first["source"], first["total_price"], first["paid_amount"], first["notes"]),
+                         ("avito", 10500.5, 3000.0, "поздний заезд"))
+        auto = next(b for b in rows if b["guest_name"] == "Мария")
+        self.assertEqual(float(auto["total_price"]), 7000.0)  # цена не указана — по тарифу 3500 × 2 ночи
+        # повторный импорт того же файла ничего не дублирует
+        again = self.imp(ctx, csv_text).json()
+        self.assertEqual(again["created"], 0)
+
+    def test_import_validation_and_permissions(self):
+        ctx = self.register("imp2@example.ru")
+        self.assertEqual(self.imp(ctx, "").status_code, 422)
+        r = self.imp(ctx, "Гость;Телефон\nИван;123\n")
+        self.assertEqual(r.status_code, 422)
+        self.assertIn("Заезд", r.json()["error"])
+        self.assertEqual(self.client.post("/api/bookings/import", headers=ctx["h"], json={}).status_code, 422)
+        self.assertEqual(self.client.post("/api/bookings/import", json={"csv": "x"}).status_code, 401)
+        t = self.client.get("/api/bookings/import-template.csv", headers=ctx["h"])
+        self.assertEqual(t.status_code, 200)
+        self.assertTrue(self.imp(ctx, t.content.decode("utf-8-sig"), dry=True).json()["created"] in (0, 1))
+        # запятая как разделитель и английские заголовки
+        r = self.imp(ctx, "check_in,check_out,room,name\n2031-01-10,2031-01-12,103,John\n").json()
+        self.assertEqual(r["created"], 1)
+
+    def test_import_is_tenant_isolated(self):
+        a, b = self.register("imp3a@example.ru"), self.register("imp3b@example.ru")
+        self.imp(a, "Заезд;Выезд;Номер\n10.01.2032;12.01.2032;101\n")
+        r = self.imp(b, "Заезд;Выезд;Номер\n10.01.2032;12.01.2032;101\n").json()
+        self.assertEqual(r["created"], 1)  # у другого аккаунта номер 101 свободен
+
+
 if __name__ == "__main__":
     unittest.main()

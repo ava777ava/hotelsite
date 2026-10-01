@@ -37,11 +37,13 @@ const ICONS = {
   copy: '<rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M5 15V5a1 1 0 0 1 1-1h10" fill="none" stroke="currentColor" stroke-width="1.8"/>',
   expenses: '<rect x="2.5" y="6" width="19" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M2.5 10h19" stroke="currentColor" stroke-width="1.7"/><circle cx="7" cy="14.5" r="1.4" fill="currentColor"/>',
   trash: '<path d="M4 7h16M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7M6 7l1 13h10l1-13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+  upload: '<path d="M12 16V4M7 9l5-5 5 5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   download: '<path d="M12 3v13M7 11l5 5 5-5M4 20h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   search: '<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   print: '<path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   bell: '<path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6.5H4c.5-1 2-2.5 2-6.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7"/>',
   more: '<path d="M5 12h.01M12 12h.01M19 12h.01" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/>',
+  help: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1.9-1.1 1.8M12 17h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   user: '<circle cx="12" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 20c1.2-4 4-6 7.5-6s6.3 2 7.5 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
 };
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
@@ -130,9 +132,10 @@ const ROUTES = {
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
   profile: { title: 'Профиль', icon: 'user', view: viewProfile },
+  help: { title: 'Справка', icon: 'help', view: viewHelp },
 };
 const RANK = { housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['board', 'today', 'bookings', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'profile'];
+const MOBILE_ORDER = ['board', 'today', 'bookings', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'help', 'profile'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
 const currentRoute = () => { const r = location.hash.replace(/^#\/?/, '').split('?')[0] || 'board'; return ROUTES[r] ? r : 'board'; };
 
@@ -1235,6 +1238,7 @@ async function viewBookings(main) {
     h('button', { class: 'btn', onclick: () => downloadCsv('/api/bookings/export.csv?' + qs({
       q: f.q.value, from: f.from.value, to: f.to.value, status: f.status.value,
       property_id: scope.value === 'current' ? state.propertyId : undefined }), `bookings_${f.from.value}_${f.to.value}.csv`) }, icon('download'), 'CSV'),
+    h('button', { class: 'btn', onclick: () => importDialog(load) }, icon('upload'), 'Импорт'),
     h('button', { class: 'btn primary', onclick: () => bookingDrawer({}, load) }, icon('plus'), 'Бронь')),
   h('div', { class: 'board-tools', style: { marginBottom: '14px' } }, f.q, f.from, '—', f.to, f.status, scopeSeg(scope, () => load())), table);
   const PAGE = 50;
@@ -1778,6 +1782,49 @@ async function downloadCsv(path, filename) {
     document.body.append(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
   } catch (ex) { toast(ex.message, true); }
+}
+
+// Импорт броней из CSV: сначала проверка (ничего не сохраняется), потом настоящий импорт
+function importDialog(onDone) {
+  let text = '';
+  const info = h('div', { class: 'muted small' }, 'Файл не выбран');
+  const report = h('div', {});
+  const go = h('button', { class: 'btn primary', disabled: true }, 'Проверить файл');
+  let checked = false;
+  const file = h('input', { type: 'file', accept: '.csv,.txt,text/csv', style: { display: 'none' }, onchange: async () => {
+    const f = file.files[0]; if (!f) return;
+    if (f.size > 1_500_000) { toast('Файл слишком большой (максимум 1,5 МБ)', true); return; }
+    text = await f.text(); checked = false; report.innerHTML = '';
+    info.textContent = `Выбран файл: ${f.name}`; go.textContent = 'Проверить файл'; go.disabled = false;
+  } });
+  const show = (r) => {
+    report.innerHTML = '';
+    report.append(h('div', { class: 'note ' + (r.created ? 'ok' : 'bad'), style: { margin: '12px 0 8px' } },
+      r.dry_run ? `Можно загрузить броней: ${r.created} из ${r.total}.` : `Загружено броней: ${r.created} из ${r.total}.`,
+      r.skipped ? ` Пропущено: ${r.skipped}.` : ''));
+    if (r.errors.length) report.append(h('div', { class: 'table-wrap', style: { maxHeight: '220px', overflow: 'auto' } },
+      h('table', { class: 'list' }, h('tbody', {}, r.errors.map((e) => h('tr', {}, h('td', { class: 'num' }, `строка ${e.line}`), h('td', {}, e.error)))))));
+  };
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      const r = await api('POST', '/api/bookings/import', { csv: text, dry_run: !checked, property_id: state.propertyId });
+      show(r);
+      if (r.dry_run) {
+        checked = true; go.textContent = r.created ? `Загрузить ${r.created} бронь(ей)` : 'Проверить заново'; go.disabled = !r.created;
+        if (!r.created) { checked = false; go.disabled = false; }
+      } else { go.textContent = 'Готово'; toast(`Загружено броней: ${r.created}`); onDone?.(); refreshBadges?.(); }
+    } catch (ex) { toast(ex.message, true); go.disabled = false; checked = false; }
+  });
+  openModal('Импорт броней из CSV', h('div', {},
+    h('p', { class: 'muted small', style: { marginTop: 0 } },
+      'Переезжаете из Excel или другой системы? Сохраните таблицу как CSV: нужны колонки «Заезд», «Выезд» и «Номер» (название номера из «Настроек»); необязательно — «Гость», «Телефон», «Email», «Гостей», «Источник», «Стоимость», «Оплачено», «Комментарий». Если стоимость не указана, она посчитается по тарифам. Брони загрузятся в выбранный объект как подтверждённые; пересекающиеся с уже существующими будут пропущены.'),
+    h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', alignItems: 'center' } },
+      h('button', { class: 'btn', type: 'button', onclick: () => file.click() }, icon('upload'), 'Выбрать файл'),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => downloadCsv('/api/bookings/import-template.csv', 'bookings_template.csv') }, icon('download'), 'Скачать образец'),
+      info, file),
+    report),
+  [h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Закрыть'), h('span', { class: 'spacer' }), go]);
 }
 
 function categoryDrawer(cat, cfg = FLOW.expense) {
@@ -2404,6 +2451,48 @@ async function viewNotifications(main) {
 }
 
 // ---------- профиль ----------
+// ---------- справка ----------
+const HELP = [
+  ['Шахматка: брони и перенос', null, [
+    'Нажмите на пустую клетку, чтобы создать бронь, или протяните мышью по нескольким дням — даты подставятся сами.',
+    'Бронь можно перетащить на другие даты или в другой номер (на телефоне — нажать и подержать). Перед сохранением откроется окно: даты, номер и цену можно поправить.',
+    'Красным подсвечиваются конфликты — например, когда площадка прислала бронь на уже занятые даты.',
+    'Брони с площадок (Авито, Яндекс и др.) приходят автоматически. Их даты меняются только на самой площадке.']],
+  ['Заявки с вашего сайта', null, [
+    'Гость заполняет форму на странице бронирования — заявка появляется в «Бронях» с оранжевым значком. Номер на эти даты сразу блокируется.',
+    'Нажмите «Подтвердить» (после звонка гостю и оплаты) или «Отклонить». Если не ответить вовремя, заявка снимется сама — срок задаёт администратор сервера (по умолчанию 48 часов).',
+    'Новые заявки приходят на почту и в Telegram, если вы их подключили (раздел «Уведомления» и «Профиль»).']],
+  ['Цены и минимальный срок', 'manager', [
+    'Базовая цена и минимальное число ночей задаются в «Настройках» для категории номеров.',
+    'В разделе «Цены» можно поставить свою цену на выбранные даты, закрыть продажи или задать минимальный срок на сезон.']],
+  ['Подключение площадок (Авито, Яндекс, Суточно, Островок)', 'manager', [
+    'В разделе «Площадки» создайте подключение: система покажет ссылку на наш календарь — вставьте её в личном кабинете площадки, чтобы она знала о занятых датах.',
+    'Ссылку календаря площадки вставьте в наш кабинет — тогда её брони попадут в шахматку. Обновление происходит каждые несколько минут.',
+    'Через календарь передаётся только занятость. Цены и данные гостей с площадок не приходят.']],
+  ['Финансы и отчёты', 'manager', [
+    'В «Финансах» записывайте расходы и доходы — общие по объекту или по конкретному номеру. Категории можно создавать свои.',
+    'В «Отчётах» — выручка, загрузка, структура по источникам, расходы и прибыль по номерам. Данные можно выгрузить в CSV.',
+    'Оплату брони отмечайте в карточке брони (кнопка «Оплачено полностью»).']],
+  ['Фото номеров на странице бронирования', 'owner', [
+    'Откройте «Настройки» → «Изменить» у категории номеров. Там можно загрузить до 8 фото — первое будет главным. Фото сжимаются автоматически.']],
+  ['Перенос данных из Excel или другой системы', 'manager', [
+    'Раздел «Брони» → «Импорт». Сохраните свою таблицу как CSV, выберите файл: система сначала проверит его и покажет, что загрузится, а какие строки пропущены. Образец файла скачивается там же.']],
+  ['Сотрудники и доступ', 'owner', [
+    'В «Настройках» можно добавить администраторов и горничных. Администратор видит брони, цены и финансы; горничная — только шахматку и страницу «Сегодня» с отметкой об уборке.']],
+  ['Резервные копии и ваши данные', 'owner', [
+    'Данные хранятся на сервере в России. В «Настройках» → «Данные аккаунта» можно скачать всё одним файлом или удалить аккаунт.']],
+];
+
+function viewHelp(main) {
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Справка')));
+  const shown = HELP.filter(([, role]) => !role || can(role));
+  main.append(h('div', { class: 'stack' },
+    h('div', { class: 'card card-pad' }, h('p', { style: { margin: 0 } },
+      'Коротко о главном. Если что-то непонятно — напишите нам, подскажем и поправим интерфейс.')),
+    shown.map(([title, , items], i) => h('details', { class: 'card help-item', open: i === 0 },
+      h('summary', {}, title), h('ul', {}, items.map((t) => h('li', {}, t)))))));
+}
+
 async function viewProfile(main) {
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Профиль')));
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
