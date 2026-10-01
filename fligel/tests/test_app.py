@@ -1073,6 +1073,100 @@ class TelegramTests(Base):
         self.assertFalse(any(c == chat_id and "Доброе утро" in t for c, t in self.sent))
 
 
+class IncomesTests(Base):
+    """Прочие доходы (не от проживания), расходы на конкретный номер и их учёт в отчётах."""
+
+    def staff_headers(self, ctx, email, role):
+        self.client.post("/api/users", headers=ctx["h"], json={
+            "name": "Сотрудник", "email": email, "role": role, "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": email, "password": "password123"})
+        return {"Authorization": f"Bearer {tok.json()['token']}"}
+
+    def income_cat(self, ctx, name=None):
+        cats = self.client.get("/api/income-categories", headers=ctx["h"]).json()
+        return next(c for c in cats if c["name"] == name) if name else cats[0]
+
+    def test_default_income_categories_and_crud(self):
+        ctx = self.register("inc1@example.ru")
+        cats = self.client.get("/api/income-categories", headers=ctx["h"]).json()
+        self.assertIn("Парковка", [c["name"] for c in cats])
+        cat = self.income_cat(ctx, "Парковка")
+        r = self.client.post("/api/incomes", headers=ctx["h"], json={
+            "category_id": cat["id"], "amount": 1500, "date": d(0), "property_id": ctx["prop"]["id"],
+            "comment": "Парковка за неделю"})
+        self.assertEqual(r.status_code, 200, r.text)
+        iid = r.json()["id"]
+        lst = self.client.get("/api/incomes", headers=ctx["h"], params={"from": d(-1), "to": d(1)}).json()
+        self.assertEqual((len(lst["rows"]), float(lst["total"])), (1, 1500))
+        self.assertEqual(lst["by_category"][0]["category_name"], "Парковка")
+        r = self.client.patch(f"/api/incomes/{iid}", headers=ctx["h"], json={"amount": 2000})
+        self.assertEqual(float(r.json()["amount"]), 2000)
+        csv_text = self.client.get("/api/incomes/export.csv", headers=ctx["h"], params={"from": d(-1), "to": d(1)}).text
+        self.assertIn("Парковка", csv_text)
+        # свои категории: создание, дубликат, архив
+        r = self.client.post("/api/income-categories", headers=ctx["h"], json={"name": "Аренда зала", "color": "#112233"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.client.post("/api/income-categories", headers=ctx["h"], json={"name": "аренда зала"}).status_code, 409)
+        new_id = r.json()["id"]
+        self.client.patch(f"/api/income-categories/{new_id}", headers=ctx["h"], json={"archived": True})
+        r = self.client.post("/api/incomes", headers=ctx["h"], json={"category_id": new_id, "amount": 10})
+        self.assertEqual(r.status_code, 422)  # в архиве
+        self.assertEqual(self.client.delete(f"/api/incomes/{iid}", headers=ctx["h"]).status_code, 200)
+
+    def test_income_roles_and_tenant_isolation(self):
+        a = self.register("inc2a@example.ru")
+        b = self.register("inc2b@example.ru")
+        mh = self.staff_headers(a, "inc2m@example.ru", "manager")
+        hh = self.staff_headers(a, "inc2h@example.ru", "housekeeper")
+        cat = self.income_cat(a)
+        r = self.client.post("/api/incomes", headers=mh, json={"category_id": cat["id"], "amount": 100})
+        self.assertEqual(r.status_code, 200, r.text)
+        iid = r.json()["id"]
+        self.assertEqual(self.client.post("/api/income-categories", headers=mh, json={"name": "Новая"}).status_code, 403)
+        self.assertEqual(self.client.delete(f"/api/incomes/{iid}", headers=mh).status_code, 403)
+        self.assertEqual(self.client.get("/api/incomes", headers=hh).status_code, 403)
+        # чужой аккаунт не видит и не трогает доходы и категории
+        self.assertEqual(self.client.patch(f"/api/incomes/{iid}", headers=b["h"], json={"amount": 1}).status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/incomes/{iid}", headers=b["h"]).status_code, 404)
+        r = self.client.post("/api/incomes", headers=b["h"], json={"category_id": cat["id"], "amount": 5})
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(self.client.get("/api/incomes", headers=b["h"], params={"from": d(-1), "to": d(1)}).json()["rows"], [])
+        # номер чужого аккаунта нельзя указать
+        r = self.client.post("/api/incomes", headers=b["h"], json={
+            "category_id": self.income_cat(b)["id"], "amount": 5, "room_id": a["rooms"][0]["id"]})
+        self.assertEqual(r.status_code, 404)
+
+    def test_report_includes_other_income_and_per_room_profit(self):
+        ctx = self.register("inc3@example.ru", rooms=(("Стандарт", 2, 1000),))
+        r0, r1 = ctx["rooms"]
+        self.book(ctx, r0, d(0), d(5), total_price=5000)
+        pid = ctx["prop"]["id"]
+        inc = self.income_cat(ctx, "Парковка")["id"]
+        exp = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]["id"]
+        self.client.post("/api/incomes", headers=ctx["h"], json={"category_id": inc, "amount": 1000, "date": d(1), "room_id": r0["id"]})
+        self.client.post("/api/incomes", headers=ctx["h"], json={"category_id": inc, "amount": 200, "date": d(2)})  # общий
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": exp, "amount": 700, "date": d(1), "room_id": r0["id"]})
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": exp, "amount": 300, "date": d(1), "property_id": pid})
+        rep = self.client.get("/api/reports", headers=ctx["h"], params={"from": d(0), "to": d(10)}).json()
+        t = rep["totals"]
+        self.assertEqual((float(t["revenue"]), float(t["other_income"]), float(t["total_income"])), (5000, 1200, 6200))
+        self.assertEqual((float(t["expenses"]), float(t["profit"])), (1000, 5200))
+        rooms = {x["room_id"]: x for x in rep["by_room"]}
+        self.assertEqual((float(rooms[r0["id"]]["other_income"]), float(rooms[r0["id"]]["expenses"]),
+                          float(rooms[r0["id"]]["profit"])), (1000, 700, 5300))
+        self.assertEqual((float(rooms[r1["id"]]["expenses"]), float(rooms[r1["id"]]["profit"])), (0, 0))
+        self.assertEqual(float(rep["by_income_category"][0]["amount"]), 1200)
+        self.assertEqual(len(rep["expense_monthly"]["rows"]), 12)
+        self.assertTrue(rep["expense_monthly"]["categories"])
+        self.assertIn("other_income", rep["monthly"][-1])
+        csv_text = self.client.get("/api/reports/export.csv", headers=ctx["h"], params={"from": d(0), "to": d(10)}).text
+        self.assertIn("Прочие доходы", csv_text)
+        # фильтр расходов по номеру
+        by_room = self.client.get("/api/expenses", headers=ctx["h"], params={
+            "from": d(-1), "to": d(10), "room_id": r0["id"]}).json()
+        self.assertEqual((len(by_room["rows"]), float(by_room["total"])), (1, 700))
+
+
 class AuthSecurityTests(Base):
     """Восстановление пароля (мок SMTP — как telegram.send_message/sync.fetch в других тестах)
     и блокировка входа после подбора пароля."""

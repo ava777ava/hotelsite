@@ -121,3 +121,13 @@ def csv_safe(value) -> str:
     if s[:1] in ("=", "+", "-", "@", "\t", "\r"):
         return "'" + s
     return s
+
+
+def parse_color(data: dict, key: str = "color", default: str = "#69755F") -> str:
+    """Цвет категории — только #RRGGBB: значение попадает в стили и SVG интерфейса."""
+    value = str(data.get(key) or "").strip()
+    if not value:
+        return default
+    if not re.fullmatch(r"#[0-9a-fA-F]{6}", value):
+        raise ApiError(422, "Цвет нужен в формате #RRGGBB", {"field": key})
+    return value

@@ -130,30 +130,45 @@ def _arrivals_metrics(conn, account_id: str, property_ids: list[str], start: dat
     return avg_stay, cancellation_rate
 
 
-def _expenses_total(conn, account_id: str, property_ids: list[str], scope_rooms: int, total_rooms: int,
-                    start: date, end: date) -> Decimal:
-    direct = one(conn, "SELECT coalesce(sum(amount), 0) AS n FROM expenses WHERE account_id = %s"
+# Таблицы «потоков» (расходы и прочие доходы) устроены одинаково — и считаются одним кодом.
+# Имена таблиц здесь только из этого списка (не из пользовательского ввода), так что подстановка
+# в текст запроса безопасна.
+_FLOWS = {
+    "expenses": ("expenses", "expense_categories"),
+    "incomes": ("incomes", "income_categories"),
+}
+
+
+def _flow_total(conn, kind: str, account_id: str, property_ids: list[str], scope_rooms: int, total_rooms: int,
+                start: date, end: date) -> Decimal:
+    table = _FLOWS[kind][0]
+    direct = one(conn, f"SELECT coalesce(sum(amount), 0) AS n FROM {table} WHERE account_id = %s"
                        " AND property_id = ANY(%s::uuid[]) AND date >= %s AND date < %s",
-                (account_id, property_ids, start, end))["n"]
-    shared = one(conn, "SELECT coalesce(sum(amount), 0) AS n FROM expenses WHERE account_id = %s"
+                 (account_id, property_ids, start, end))["n"]
+    shared = one(conn, f"SELECT coalesce(sum(amount), 0) AS n FROM {table} WHERE account_id = %s"
                        " AND property_id IS NULL AND date >= %s AND date < %s", (account_id, start, end))["n"]
     allocated = _money(Decimal(shared) * scope_rooms / total_rooms) if total_rooms else Decimal("0")
     return Decimal(direct) + allocated
 
 
-def _expenses_by_category(conn, account_id: str, property_ids: list[str], scope_rooms: int, total_rooms: int,
-                          start: date, end: date) -> list[dict]:
+def _expenses_total(conn, account_id, property_ids, scope_rooms, total_rooms, start, end) -> Decimal:
+    return _flow_total(conn, "expenses", account_id, property_ids, scope_rooms, total_rooms, start, end)
+
+
+def _flow_by_category(conn, kind: str, account_id: str, property_ids: list[str], scope_rooms: int,
+                      total_rooms: int, start: date, end: date) -> list[dict]:
+    table, cat_table = _FLOWS[kind]
     direct_rows = all_(
         conn,
-        "SELECT e.category_id, cat.name, cat.color, sum(e.amount) AS amount FROM expenses e"
-        " JOIN expense_categories cat ON cat.id = e.category_id"
+        f"SELECT e.category_id, cat.name, cat.color, sum(e.amount) AS amount FROM {table} e"
+        f" JOIN {cat_table} cat ON cat.id = e.category_id"
         " WHERE e.account_id = %s AND e.property_id = ANY(%s::uuid[]) AND e.date >= %s AND e.date < %s"
         " GROUP BY e.category_id, cat.name, cat.color", (account_id, property_ids, start, end),
     )
     shared_rows = all_(
         conn,
-        "SELECT e.category_id, cat.name, cat.color, sum(e.amount) AS amount FROM expenses e"
-        " JOIN expense_categories cat ON cat.id = e.category_id"
+        f"SELECT e.category_id, cat.name, cat.color, sum(e.amount) AS amount FROM {table} e"
+        f" JOIN {cat_table} cat ON cat.id = e.category_id"
         " WHERE e.account_id = %s AND e.property_id IS NULL AND e.date >= %s AND e.date < %s"
         " GROUP BY e.category_id, cat.name, cat.color", (account_id, start, end),
     )
@@ -168,6 +183,64 @@ def _expenses_by_category(conn, account_id: str, property_ids: list[str], scope_
                                         "amount": Decimal("0")})
         entry["amount"] += _money(Decimal(r["amount"]) * ratio) if total_rooms else Decimal("0")
     return sorted(result.values(), key=lambda x: -x["amount"])
+
+
+def _expenses_by_category(conn, account_id, property_ids, scope_rooms, total_rooms, start, end) -> list[dict]:
+    return _flow_by_category(conn, "expenses", account_id, property_ids, scope_rooms, total_rooms, start, end)
+
+
+def _room_flows(conn, kind: str, account_id: str, room_ids: list[str], start: date, end: date) -> dict[str, Decimal]:
+    """Прямые расходы/доходы, записанные именно на номер. Объектные и общие суммы между номерами
+    не делятся — они видны на уровне объекта и всего аккаунта."""
+    if not room_ids:
+        return {}
+    table = _FLOWS[kind][0]
+    rows = all_(conn, f"SELECT room_id, sum(amount) AS n FROM {table} WHERE account_id = %s"
+                      " AND room_id = ANY(%s::uuid[]) AND date >= %s AND date < %s GROUP BY room_id",
+                (account_id, room_ids, start, end))
+    return {str(r["room_id"]): Decimal(r["n"]) for r in rows}
+
+
+def _monthly_expense_categories(conn, account_id: str, property_ids: list[str], scope_rooms: int,
+                                total_rooms: int, first_month: date, months: int, top: int = 7) -> dict:
+    """Расходы по категориям помесячно — для столбчатой диаграммы с накоплением. Показываем
+    `top` крупнейших категорий за весь показанный период, остальные сливаем в «Остальные»."""
+    last = _add_months(first_month, months)
+    rows = all_(
+        conn,
+        "SELECT date_trunc('month', e.date)::date AS m, e.category_id, cat.name, cat.color,"
+        " (e.property_id IS NULL) AS shared, sum(e.amount) AS amount FROM expenses e"
+        " JOIN expense_categories cat ON cat.id = e.category_id"
+        " WHERE e.account_id = %s AND (e.property_id = ANY(%s::uuid[]) OR e.property_id IS NULL)"
+        " AND e.date >= %s AND e.date < %s GROUP BY 1, 2, 3, 4, 5",
+        (account_id, property_ids, first_month, last),
+    )
+    ratio = (Decimal(scope_rooms) / total_rooms) if total_rooms else Decimal("0")
+    by_month: dict[str, dict[str, Decimal]] = {}
+    meta: dict[str, dict] = {}
+    totals: dict[str, Decimal] = {}
+    for r in rows:
+        amount = _money(Decimal(r["amount"]) * ratio) if r["shared"] else Decimal(r["amount"])
+        cid = str(r["category_id"])
+        meta[cid] = {"category_id": cid, "name": r["name"], "color": r["color"]}
+        month = by_month.setdefault(r["m"].isoformat(), {})
+        month[cid] = month.get(cid, Decimal("0")) + amount
+        totals[cid] = totals.get(cid, Decimal("0")) + amount
+    ranked = [cid for cid, _ in sorted(totals.items(), key=lambda kv: -kv[1])]
+    keep = ranked[:top]
+    categories = [meta[cid] for cid in keep]
+    if len(ranked) > top:
+        categories.append({"category_id": "other", "name": "Остальные", "color": "#9AA296"})
+    out_rows = []
+    cursor = first_month
+    for _ in range(months):
+        values = by_month.get(cursor.isoformat(), {})
+        amounts = {cid: values.get(cid, Decimal("0")) for cid in keep}
+        if len(ranked) > top:
+            amounts["other"] = sum((v for cid, v in values.items() if cid not in keep), Decimal("0"))
+        out_rows.append({"month": cursor.isoformat(), "amounts": amounts})
+        cursor = _add_months(cursor, 1)
+    return {"categories": categories, "rows": out_rows}
 
 
 def _weekday_occupancy(rows: list[dict], rooms: int, start: date, end: date) -> list[dict]:
@@ -194,11 +267,14 @@ def _period_summary(conn, account_id: str, property_ids: list[str], scope_rooms:
     days = (end - start).days
     m = _booking_metrics(rows, scope_rooms, days)
     expenses = _expenses_total(conn, account_id, property_ids, scope_rooms, total_rooms, start, end)
+    other_income = _flow_total(conn, "incomes", account_id, property_ids, scope_rooms, total_rooms, start, end)
     revenue = m["revenue"]
-    profit = revenue - expenses
+    total_income = revenue + other_income
+    profit = total_income - expenses
     return {
-        "revenue": revenue, "expenses": expenses, "profit": profit,
-        "margin": round(float(profit * 100 / revenue), 1) if revenue else None,
+        "revenue": revenue, "other_income": other_income, "total_income": total_income,
+        "expenses": expenses, "profit": profit,
+        "margin": round(float(profit * 100 / total_income), 1) if total_income else None,
         "occupancy": m["occupancy"], "adr": m["adr"], "revpar": m["revpar"], "due": m["due"],
         "room_nights": m["room_nights"], "sold_nights": m["sold_nights"],
         "raw_rows": rows, "by_source_raw": m["by_source"], "by_room_raw": m["by_room"],
@@ -210,6 +286,7 @@ def _cmp_block(main: dict, other: dict) -> dict:
         "revenue": other["revenue"], "expenses": other["expenses"], "profit": other["profit"],
         "occupancy": other["occupancy"],
         "revenue_delta": _delta(main["revenue"], other["revenue"]),
+        "other_income_delta": _delta(main["other_income"], other["other_income"]),
         "expenses_delta": _delta(main["expenses"], other["expenses"]),
         "profit_delta": _delta(main["profit"], other["profit"]),
         "occupancy_delta": _delta(Decimal(str(main["occupancy"])), Decimal(str(other["occupancy"]))),
@@ -251,12 +328,17 @@ def _build_report(c: Ctx) -> dict:
         for rid, agg in main["by_room_raw"].items():
             e = by_room_map.setdefault(rid, {"nights": 0, "revenue": Decimal("0")})
             e["nights"] += agg["nights"]; e["revenue"] += agg["revenue"]
+        room_expenses = _room_flows(conn, "expenses", c.account_id, list(room_meta), start, end)
+        room_incomes = _room_flows(conn, "incomes", c.account_id, list(room_meta), start, end)
         by_room = []
         for rid, e in by_room_map.items():
             meta = room_meta.get(rid, {})
+            r_exp = room_expenses.get(rid, Decimal("0"))
+            r_inc = room_incomes.get(rid, Decimal("0"))
             by_room.append({
                 "room_id": rid, "room_name": meta.get("name", "—"), "room_type_name": meta.get("room_type_name", ""),
                 "property_name": meta.get("property_name", ""), "nights": e["nights"], "revenue": e["revenue"],
+                "other_income": r_inc, "expenses": r_exp, "profit": e["revenue"] + r_inc - r_exp,
                 "occupancy": round(e["nights"] * 100 / days, 1) if days else 0.0,
             })
         by_room.sort(key=lambda x: -x["revenue"])
@@ -282,6 +364,8 @@ def _build_report(c: Ctx) -> dict:
 
         by_expense_category = _expenses_by_category(conn, c.account_id, scope_ids, scope_rooms, total_rooms,
                                                      start, end)
+        by_income_category = _flow_by_category(conn, "incomes", c.account_id, scope_ids, scope_rooms, total_rooms,
+                                               start, end)
 
         by_property = None
         if not prop_id and len(all_properties) > 1:
@@ -290,6 +374,7 @@ def _build_report(c: Ctx) -> dict:
                 p_rooms = _rooms_count(conn, [p["id"]])
                 ps = _period_summary(conn, c.account_id, [p["id"]], p_rooms, total_rooms, start, end)
                 by_property.append({"property_id": p["id"], "property_name": p["name"], "revenue": ps["revenue"],
+                                     "other_income": ps["other_income"],
                                      "expenses": ps["expenses"], "profit": ps["profit"],
                                      "occupancy": ps["occupancy"], "rooms": p_rooms})
             by_property.sort(key=lambda x: -x["revenue"])
@@ -297,18 +382,23 @@ def _build_report(c: Ctx) -> dict:
         weekday = _weekday_occupancy(main["raw_rows"], scope_rooms, start, end)
 
         monthly = []
-        cursor = _add_months(date(start.year, start.month, 1), -11)
+        first_month = _add_months(date(start.year, start.month, 1), -11)
+        cursor = first_month
         for _ in range(12):
             m_end = _add_months(cursor, 1)
             ms = _period_summary(conn, c.account_id, scope_ids, scope_rooms, total_rooms, cursor, m_end)
-            monthly.append({"month": cursor.isoformat(), "revenue": ms["revenue"], "expenses": ms["expenses"],
+            monthly.append({"month": cursor.isoformat(), "revenue": ms["revenue"],
+                            "other_income": ms["other_income"], "expenses": ms["expenses"],
                             "profit": ms["profit"]})
             cursor = m_end
+        expense_monthly = _monthly_expense_categories(conn, c.account_id, scope_ids, scope_rooms, total_rooms,
+                                                      first_month, 12)
 
     return {
         "from": start, "to": end, "property_id": prop_id,
         "totals": {
-            "revenue": main["revenue"], "expenses": main["expenses"], "profit": main["profit"],
+            "revenue": main["revenue"], "other_income": main["other_income"], "total_income": main["total_income"],
+            "expenses": main["expenses"], "profit": main["profit"],
             "margin": main["margin"], "occupancy": main["occupancy"], "adr": main["adr"], "revpar": main["revpar"],
             "avg_stay": avg_stay, "cancellation_rate": cancellation_rate, "due_amount": main["due"],
             "rooms": scope_rooms, "room_nights": main["room_nights"], "sold_nights": main["sold_nights"],
@@ -320,10 +410,13 @@ def _build_report(c: Ctx) -> dict:
         "by_room": by_room,
         "by_source": by_source,
         "by_expense_category": by_expense_category,
+        "by_income_category": by_income_category,
         "monthly": monthly,
+        "expense_monthly": expense_monthly,
         "weekday_occupancy": weekday,
-        "share_note": "Общие расходы (без привязки к объекту) делятся между объектами "
-                      "пропорционально числу номеров.",
+        "share_note": "Общие расходы и доходы (без привязки к объекту) делятся между объектами "
+                      "пропорционально числу номеров. В таблице «По номерам» показаны только суммы, "
+                      "записанные на сам номер: расходы объекта и общие между номерами не делятся.",
     }
 
 
@@ -349,7 +442,8 @@ def export_report(c: Ctx):
     w.writerow([])
     w.writerow(["Показатель", "Значение"])
     for label, value in [
-        ("Выручка", t["revenue"]), ("Расходы", t["expenses"]), ("Прибыль", t["profit"]),
+        ("Выручка от проживания", t["revenue"]), ("Прочие доходы", t["other_income"]),
+        ("Всего доходов", t["total_income"]), ("Расходы", t["expenses"]), ("Прибыль", t["profit"]),
         ("Рентабельность, %", t["margin"]), ("Загрузка, %", t["occupancy"]), ("ADR", t["adr"]),
         ("RevPAR", t["revpar"]), ("Средний срок проживания, ночей", t["avg_stay"]),
         ("Доля отмен, %", t["cancellation_rate"]), ("Гости должны доплатить", t["due_amount"]),
@@ -367,12 +461,18 @@ def export_report(c: Ctx):
     for x in data["by_expense_category"]:
         w.writerow([csv_safe(x["name"]), _num(x["amount"])])
     w.writerow([])
-    w.writerow(["По номерам"])
-    w.writerow(["Номер", "Категория", "Объект", "Ночей", "Загрузка, %", "Выручка"])
+    w.writerow(["По категориям прочих доходов"])
+    w.writerow(["Категория", "Сумма"])
+    for x in data["by_income_category"]:
+        w.writerow([csv_safe(x["name"]), _num(x["amount"])])
+    w.writerow([])
+    w.writerow(["По номерам (доходы и расходы, записанные на сам номер)"])
+    w.writerow(["Номер", "Категория", "Объект", "Ночей", "Загрузка, %", "Выручка", "Прочие доходы", "Расходы",
+                "Прибыль"])
     for r in data["by_room"]:
         w.writerow([csv_safe(r["room_name"]), csv_safe(r["room_type_name"]), csv_safe(r["property_name"]),
-                    r["nights"], _num(r["occupancy"]),
-                    _num(r["revenue"])])
+                    r["nights"], _num(r["occupancy"]), _num(r["revenue"]), _num(r["other_income"]),
+                    _num(r["expenses"]), _num(r["profit"])])
     return Response(buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename=report_{data['from']}_{data['to']}.csv"})
 

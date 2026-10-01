@@ -18,11 +18,28 @@ DEFAULT_EXPENSE_CATEGORIES = [
 ]
 
 
+DEFAULT_INCOME_CATEGORIES = [
+    ("Завтраки и питание", "#B7791F"),
+    ("Дополнительные услуги", "#23767E"),
+    ("Парковка", "#4A5A6A"),
+    ("Трансфер", "#6E4A93"),
+    ("Штрафы и компенсации", "#B4562E"),
+    ("Прочее", "#69755F"),
+]
+
+
 def create_default_categories(conn, account_id: str) -> None:
     for i, (name, color) in enumerate(DEFAULT_EXPENSE_CATEGORIES):
         run(
             conn,
             "INSERT INTO expense_categories (account_id, name, color, sort_order) VALUES (%s, %s, %s, %s)"
+            " ON CONFLICT (account_id, lower(name)) WHERE NOT archived DO NOTHING",
+            (account_id, name, color, i),
+        )
+    for i, (name, color) in enumerate(DEFAULT_INCOME_CATEGORIES):
+        run(
+            conn,
+            "INSERT INTO income_categories (account_id, name, color, sort_order) VALUES (%s, %s, %s, %s)"
             " ON CONFLICT (account_id, lower(name)) WHERE NOT archived DO NOTHING",
             (account_id, name, color, i),
         )

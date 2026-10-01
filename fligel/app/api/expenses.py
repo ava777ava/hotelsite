@@ -14,7 +14,7 @@ from starlette.routing import Route
 
 from ..db import all_, one, run, tx
 from ..errors import ApiError
-from ..util import csv_safe, opt_str, parse_date, parse_int, parse_money, parse_uuid, req_str
+from ..util import csv_safe, opt_str, parse_color, parse_date, parse_int, parse_money, parse_uuid, req_str
 from .base import Ctx, api
 
 EXPENSE_COLS_PLAIN = "id, property_id, room_id, category_id, date, amount, comment, recurring_rule_id, created_at"
@@ -55,7 +55,7 @@ def list_categories(c: Ctx):
 @api("owner")
 def create_category(c: Ctx):
     name = req_str(c.data, "name", "Название категории", 100)
-    color = opt_str(c.data, "color", "#69755F", 20) or "#69755F"
+    color = parse_color(c.data, "color", "#69755F")
     with tx() as conn:
         if one(conn, "SELECT 1 FROM expense_categories WHERE account_id = %s AND lower(name) = lower(%s)"
                      " AND NOT archived", (c.account_id, name)):
@@ -76,7 +76,7 @@ def update_category(c: Ctx):
         new_name = req_str(d, "name", "Название", 100)
         sets.append("name = %s"); params.append(new_name)
     if "color" in d:
-        sets.append("color = %s"); params.append(opt_str(d, "color", "#69755F", 20) or "#69755F")
+        sets.append("color = %s"); params.append(parse_color(d, "color", "#69755F"))
     if "archived" in d:
         sets.append("archived = %s"); params.append(bool(d["archived"]))
     if "sort_order" in d:
@@ -105,6 +105,9 @@ def _serialize_filters(c: Ctx):
     elif c.q.get("property_id"):
         where.append("e.property_id = %s")
         params.append(parse_uuid(c.q["property_id"], "Объект"))
+    if c.q.get("room_id"):
+        where.append("e.room_id = %s")
+        params.append(parse_uuid(c.q["room_id"], "Номер"))
     if c.q.get("category_id"):
         where.append("e.category_id = %s")
         params.append(parse_uuid(c.q["category_id"], "Категория"))

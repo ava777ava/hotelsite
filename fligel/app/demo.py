@@ -145,6 +145,32 @@ def main() -> None:
                           " VALUES (%s, NULL, %s, %s, %s, %s)",
                     (acc, cats["Реклама"], m + timedelta(days=rnd.randint(1, 28)), rnd.randint(3000, 12000),
                      "Продвижение объявлений"))
+        # расходы, записанные на конкретные номера (стирка, мелкий ремонт, замена белья)
+        for rid, _price in rooms[:6]:
+            for _ in range(rnd.randint(2, 6)):
+                run(conn, "INSERT INTO expenses (account_id, property_id, room_id, category_id, date, amount, comment)"
+                          " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (acc, prop, rid, cats[rnd.choice(["Ремонт и обслуживание", "Расходники", "Уборка и прачечная"])],
+                     today - timedelta(days=rnd.randint(1, 300)), rnd.randint(500, 6000), "Расход на номер"))
+        # прочие доходы: завтраки, парковка, трансфер — часть на конкретных номерах
+        inc_cats = {c["name"]: c["id"] for c in all_(conn, "SELECT id, name FROM income_categories WHERE account_id = %s",
+                                                     (acc,))}
+        for i in range(12):
+            m = month_start
+            for _ in range(i):
+                m = (m - timedelta(days=1)).replace(day=1)
+            for name, lo, hi in (("Завтраки и питание", 8000, 26000), ("Парковка", 3000, 9000),
+                                 ("Трансфер", 0, 12000), ("Дополнительные услуги", 2000, 10000)):
+                amount = rnd.randint(lo, hi)
+                if amount:
+                    run(conn, "INSERT INTO incomes (account_id, property_id, category_id, date, amount, comment)"
+                              " VALUES (%s, %s, %s, %s, %s, %s)",
+                        (acc, prop, inc_cats[name], m + timedelta(days=rnd.randint(2, 27)), amount, "За месяц"))
+        for rid, _price in rooms[:3]:
+            run(conn, "INSERT INTO incomes (account_id, property_id, room_id, category_id, date, amount, comment)"
+                      " VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (acc, prop, rid, inc_cats["Штрафы и компенсации"], today - timedelta(days=rnd.randint(5, 120)),
+                 rnd.randint(1000, 5000), "Компенсация за ущерб"))
         # шаблон повторяющегося расхода — аренда 1-го числа каждого месяца
         run(conn, "INSERT INTO expense_recurring_rules (account_id, category_id, amount, day_of_month, comment)"
                   " VALUES (%s, %s, %s, %s, %s)",

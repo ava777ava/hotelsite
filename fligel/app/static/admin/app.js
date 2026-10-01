@@ -41,6 +41,7 @@ const ICONS = {
   search: '<circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M20 20l-4.3-4.3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   print: '<path d="M6 9V3h12v6M6 18H4a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1h16a1 1 0 0 1 1 1v6a1 1 0 0 1-1 1h-2M6 14h12v7H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
   bell: '<path d="M6 10a6 6 0 0 1 12 0c0 4 1.5 5.5 2 6.5H4c.5-1 2-2.5 2-6.5Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M10 19a2 2 0 0 0 4 0" fill="none" stroke="currentColor" stroke-width="1.7"/>',
+  more: '<path d="M5 12h.01M12 12h.01M19 12h.01" stroke="currentColor" stroke-width="3.4" stroke-linecap="round"/>',
   user: '<circle cx="12" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 20c1.2-4 4-6 7.5-6s6.3 2 7.5 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
 };
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
@@ -73,6 +74,8 @@ const ago = (s) => {
   const hr = Math.round(min / 60); if (hr < 24) return `${hr} ч назад`;
   return fmtDateTime(s);
 };
+
+const loadingBox = () => h('div', { class: 'card empty' }, h('span', { class: 'spin' }), 'Загружаю…');
 
 function toast(msg, bad = false) {
   const t = h('div', { class: 'toast' + (bad ? ' bad' : '') }, msg);
@@ -112,6 +115,7 @@ const state = {
   boardFrom: null,
   boardDays: window.innerWidth < 860 ? 14 : 31,
   conflicts: 0,
+  financeKind: 'expense',
 };
 
 const ROUTES = {
@@ -120,7 +124,7 @@ const ROUTES = {
   bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager' },
   rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager' },
   channels: { title: 'Площадки', icon: 'channels', view: viewChannels, role: 'manager' },
-  expenses: { title: 'Расходы', icon: 'expenses', view: viewExpenses, role: 'manager' },
+  expenses: { title: 'Финансы', icon: 'expenses', view: viewExpenses, role: 'manager' },
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
@@ -142,6 +146,7 @@ async function boot() {
 
 function render() {
   closeDrawer();
+  closeModal();
   $app.innerHTML = '';
   if (location.hash.startsWith('#/reset-password')) return $app.append(viewResetPassword());
   if (!state.me) return $app.append(viewAuth());
@@ -149,6 +154,7 @@ function render() {
   if (!state.me.properties.find((p) => p.id === state.propertyId)) state.propertyId = state.me.properties[0].id;
   const route = currentRoute();
   const def = ROUTES[route];
+  document.title = `${def.title} — Флигель`;
   const main = h('main', { class: 'main' });
   $app.append(layout(route, main));
   if (def.role && !can(def.role)) {
@@ -204,8 +210,14 @@ function layout(route, main) {
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
     key === 'channels' && state.conflicts ? h('span', { class: 'badge' }, state.conflicts) : null);
   const prop = state.me.properties.find((p) => p.id === state.propertyId);
-  const sideSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', style: { color: '#C3CCC0' }, onclick: guestSearchDrawer }, icon('search')) : null;
-  const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', style: { marginLeft: 'auto', color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
+  const sideSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { color: '#C3CCC0' }, onclick: guestSearchDrawer }, icon('search')) : null;
+  const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { marginLeft: 'auto', color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
+  // На телефоне в нижней панели помещается 5 пунктов: четыре главных и «Ещё» со всеми остальными разделами.
+  const ordered = MOBILE_ORDER.map((k) => visible.find(([v]) => v === k)).filter(Boolean);
+  const mainItems = ordered.length <= 5 ? ordered : ordered.slice(0, 4);
+  const rest = ordered.slice(mainItems.length);
+  const moreBtn = rest.length ? h('button', { class: 'more-btn' + (rest.some(([k]) => k === route) ? ' active' : ''), onclick: () => moreSheet(rest, route) },
+    icon('more'), h('span', {}, 'Ещё')) : null;
   return h('div', { class: 'shell' },
     h('aside', { class: 'side' },
       h('div', { class: 'brand' }, h('div', { class: 'brand-mark' }),
@@ -221,7 +233,15 @@ function layout(route, main) {
         mobileSearchBtn,
         h('button', { class: 'btn small ghost', style: { color: '#fff' }, onclick: logout }, 'Выйти')),
       main),
-    h('nav', { class: 'mobile-nav' }, MOBILE_ORDER.map((k) => visible.find(([v]) => v === k)).filter(Boolean).slice(0, 5).map(link)));
+    h('nav', { class: 'mobile-nav', 'aria-label': 'Разделы' }, mainItems.map(link), moreBtn));
+}
+
+// Все разделы, не поместившиеся в нижнюю панель телефона
+function moreSheet(items, route) {
+  openModal('Разделы', h('div', { class: 'more-grid' },
+    items.map(([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '', onclick: () => closeModal() }, icon(d.icon), d.title))),
+  [h('button', { class: 'btn', onclick: () => closeModal() }, 'Закрыть'), h('span', { class: 'spacer' }),
+    h('span', { class: 'muted small' }, `${state.me.name} · ${ROLE[state.me.role]}`)]);
 }
 
 function logout() { store.set('token', null); state.me = null; location.hash = ''; render(); }
@@ -454,7 +474,7 @@ async function viewBoard(main) {
     can('manager') ? h('button', { class: 'btn primary', onclick: () => bookingDrawer({}) }, icon('plus'), 'Бронь') : null);
   head.append(tools);
   const banner = h('div');
-  const card = h('div', { class: 'card board-card' }, h('div', { class: 'empty' }, 'Загружаю…'));
+  const card = h('div', { class: 'card board-card' }, h('div', { class: 'empty' }, h('span', { class: 'spin' }), 'Загружаю…'));
   main.append(head, banner, card);
 
   const shift = (n) => { state.boardFrom = addDays(state.boardFrom, n); load(); };
@@ -476,26 +496,51 @@ async function viewBoard(main) {
 }
 
 // Перенос брони перетаскиванием (в другой номер и/или на другие даты) и изменение длины за
-// край полоски. Брони с площадок (b.feed_id) не перетаскиваются — их даты меняются на площадке.
+// край полоски. Мышь: потянуть сразу. Касание (телефон): сначала долгое нажатие на полоску,
+// затем перетащить — иначе нельзя было бы прокручивать шахматку пальцем. После отпускания
+// ничего не сохраняется сразу: открывается окно подтверждения с новыми датами и ценой.
+// Брони с площадок (b.feed_id) не перетаскиваются — их даты меняются на площадке.
 function bindBarDrag(bar, b, room, draggable, ctx) {
   const { days, cellW, roomRows, reload } = ctx;
   let st = null;
   let justDragged = false;
-  bar.addEventListener('pointerdown', (ev) => {
-    ev.stopPropagation();
-    if (!draggable || ev.button !== 0 || ev.pointerType !== 'mouse') return;
-    const rect = bar.getBoundingClientRect();
-    const edge = 10;
-    const mode = ev.clientX - rect.left < edge ? 'left' : rect.right - ev.clientX < edge ? 'right' : 'move';
+  let pressTimer = null;
+  const begin = (ev, mode, active) => {
     st = {
-      mode, startX: ev.clientX, moved: false, startCheckIn: b.check_in, startCheckOut: b.check_out,
+      mode, active, startX: ev.clientX, startY: ev.clientY, moved: false, startCheckIn: b.check_in, startCheckOut: b.check_out,
       roomId: b.room_id, curRoomId: b.room_id, resultCheckIn: b.check_in, resultCheckOut: b.check_out,
     };
-    bar.setPointerCapture(ev.pointerId);
+  };
+  bar.addEventListener('pointerdown', (ev) => {
+    ev.stopPropagation();
+    if (!draggable || ev.button !== 0) return;
+    if (ev.pointerType === 'mouse') {
+      const rect = bar.getBoundingClientRect();
+      const edge = 10;
+      begin(ev, ev.clientX - rect.left < edge ? 'left' : rect.right - ev.clientX < edge ? 'right' : 'move', true);
+      bar.setPointerCapture(ev.pointerId);
+    } else {
+      begin(ev, 'move', false);
+      pressTimer = setTimeout(() => {
+        if (!st) return;
+        st.active = true;
+        bar.classList.add('lifted');
+        if (navigator.vibrate) navigator.vibrate(12);
+        try { bar.setPointerCapture(ev.pointerId); } catch { /* уже отпущено */ }
+      }, 380);
+    }
   });
+  // Пока полоска «поднята» долгим нажатием, шахматка не должна прокручиваться вслед за пальцем
+  bar.addEventListener('touchmove', (ev) => { if (st && st.active) ev.preventDefault(); }, { passive: false });
+  bar.addEventListener('contextmenu', (ev) => { if (draggable) ev.preventDefault(); });
   bar.addEventListener('pointermove', (ev) => {
     if (!st) return;
     const dx = ev.clientX - st.startX;
+    if (!st.active) {
+      // палец поехал до долгого нажатия — это обычная прокрутка, а не перенос
+      if (Math.abs(dx) > 8 || Math.abs(ev.clientY - st.startY) > 8) { clearTimeout(pressTimer); st = null; }
+      return;
+    }
     const dayDelta = Math.round(dx / cellW);
     let curCheckIn = st.startCheckIn, curCheckOut = st.startCheckOut;
     if (st.mode === 'move') {
@@ -528,20 +573,20 @@ function bindBarDrag(bar, b, room, draggable, ctx) {
     st.resultCheckOut = curCheckOut;
   });
   const finish = (ev) => {
+    clearTimeout(pressTimer);
     if (!st) return;
     const done = st; st = null;
-    bar.classList.remove('dragging');
+    bar.classList.remove('dragging', 'lifted');
     try { bar.releasePointerCapture(ev.pointerId); } catch { /* уже отпущено */ }
-    if (!done.moved) return;
+    if (!done.active || !done.moved) return;
     justDragged = true;
-    const payload = {};
-    if (done.resultCheckIn !== done.startCheckIn) payload.check_in = done.resultCheckIn;
-    if (done.resultCheckOut !== done.startCheckOut) payload.check_out = done.resultCheckOut;
-    if (done.curRoomId !== done.roomId) payload.room_id = done.curRoomId;
-    if (!Object.keys(payload).length) return;
-    api('PATCH', `/api/bookings/${b.id}`, payload)
-      .then(() => { toast('Бронь изменена'); reload(); })
-      .catch((ex) => { toast(ex.message, true); reload(); });
+    setTimeout(() => { justDragged = false; }, 400);
+    const change = {};
+    if (done.resultCheckIn !== done.startCheckIn) change.check_in = done.resultCheckIn;
+    if (done.resultCheckOut !== done.startCheckOut) change.check_out = done.resultCheckOut;
+    if (done.curRoomId !== done.roomId) change.room_id = done.curRoomId;
+    if (!Object.keys(change).length) { reload(); return; }
+    moveDialog(b, change, reload);
   };
   bar.addEventListener('pointerup', finish);
   bar.addEventListener('pointercancel', finish);
@@ -549,6 +594,128 @@ function bindBarDrag(bar, b, room, draggable, ctx) {
     if (justDragged) { justDragged = false; ev.preventDefault(); return; }
     bookingDrawer(b, reload);
   });
+}
+
+// ---------- окно подтверждения (по центру на компьютере, снизу на телефоне) ----------
+let modalEl = null;
+let modalOnDismiss = null;
+function closeModal(dismissed = false) {
+  if (!modalEl) return;
+  const cb = dismissed ? modalOnDismiss : null;
+  modalEl.remove(); modalEl = null; modalOnDismiss = null;
+  document.removeEventListener('keydown', escModal);
+  if (cb) cb();
+}
+function escModal(e) { if (e.key === 'Escape') closeModal(true); }
+function openModal(title, body, foot, onDismiss) {
+  closeModal();
+  modalOnDismiss = onDismiss || null;
+  modalEl = h('div', { class: 'modal-wrap' },
+    h('div', { class: 'modal-back', onclick: () => closeModal(true) }),
+    h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+      h('div', { class: 'modal-head' }, h('h2', {}, title)),
+      h('div', { class: 'modal-body' }, body),
+      foot ? h('div', { class: 'modal-foot' }, foot) : null));
+  document.body.append(modalEl);
+  document.addEventListener('keydown', escModal);
+  if (!matchMedia('(pointer: coarse)').matches) setTimeout(() => modalEl?.querySelector('input:not([type=hidden]), select, button.primary')?.focus(), 50);
+}
+
+// Подтверждение переноса брони: новые даты и номер можно поправить, цена пересчитывается по тарифам
+// (или остаётся прежней / вводится вручную) — и только после «Подтвердить» уходит на сервер.
+async function moveDialog(b, change, reload) {
+  await ensureBoardData();
+  const rooms = allRooms();
+  const roomName = (id) => { const r = rooms.find((x) => x.id === id); return r ? `№${r.name} · ${r.type}` : '—'; };
+  const oldTotal = Math.round(Number(b.total_price || 0));
+  const paid = Math.round(Number(b.paid_amount || 0));
+  const f = {};
+  const note = h('div', { class: 'note', style: { display: 'none' } });
+  f.room_id = h('select', { class: 'input', onchange: () => requote() }, rooms.map((r) => h('option', { value: r.id, selected: r.id === (change.room_id || b.room_id) }, `№${r.name} · ${r.type}`)));
+  f.check_in = h('input', { class: 'input', type: 'date', value: change.check_in || b.check_in, onchange: () => {
+    if (f.check_out.value <= f.check_in.value) f.check_out.value = addDays(f.check_in.value, 1);
+    requote();
+  } });
+  f.check_out = h('input', { class: 'input', type: 'date', value: change.check_out || b.check_out, onchange: () => requote() });
+  f.price = h('input', { class: 'input', type: 'number', inputmode: 'decimal', min: 0, value: oldTotal, oninput: () => { priceMode = 'custom'; drawPriceMode(); drawSummary(); } });
+  let priceMode = 'keep';
+  let tariff = null; // стоимость по тарифам на выбранные даты и номер
+  let tariffOld = null; // по тарифам на прежние даты — чтобы понять, была ли цена «автоматической»
+  const modeBox = h('div', { class: 'seg', style: { marginBottom: '10px', width: '100%' } });
+  const hint = h('div', { class: 'muted small', style: { marginBottom: '12px' } });
+  const summary = h('div', { class: 'move-summary' });
+  const drawPriceMode = () => {
+    modeBox.innerHTML = '';
+    [['recalc', 'По тарифу'], ['keep', 'Как было']].forEach(([k, l]) => modeBox.append(h('button', {
+      type: 'button', class: priceMode === k ? 'on' : '', style: { flex: 1 }, disabled: k === 'recalc' && tariff === null,
+      onclick: () => { priceMode = k; f.price.value = k === 'recalc' ? Math.round(tariff) : oldTotal; drawPriceMode(); drawSummary(); },
+    }, l)));
+    hint.textContent = tariff === null ? 'Считаю стоимость по тарифам…'
+      : `По тарифам на новые даты: ${fmtMoney(tariff)}. Прежняя стоимость: ${fmtMoney(oldTotal)}. Можно ввести свою сумму.`;
+  };
+  const nightsOf = (ci, co) => Math.max(diffDays(ci, co), 0);
+  const drawSummary = () => {
+    const ci = f.check_in.value, co = f.check_out.value;
+    const total = Math.round(Number(f.price.value || 0));
+    const diff = total - oldTotal;
+    summary.innerHTML = '';
+    summary.append(...[
+      h('div', { class: 'move-row' }, h('span', { class: 'lbl' }, 'Было'),
+        h('span', {}, `${roomName(b.room_id)} · ${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} (${nightsOf(b.check_in, b.check_out)} ${nightsWord(nightsOf(b.check_in, b.check_out))}) · ${fmtMoney(oldTotal)}`)),
+      h('div', { class: 'move-row now' }, h('span', { class: 'lbl' }, 'Станет'),
+        h('span', {}, `${roomName(f.room_id.value)} · ${ci ? fmtShort(ci) : '—'} — ${co ? fmtShort(co) : '—'} (${nightsOf(ci, co)} ${nightsWord(nightsOf(ci, co))}) · `, h('b', {}, fmtMoney(total)),
+          diff ? h('span', { class: diff > 0 ? 'delta up' : 'delta down' }, ` ${diff > 0 ? '+' : '−'}${fmtMoney(Math.abs(diff))}`) : null)),
+      paid ? h('div', { class: 'muted small', style: { marginTop: '6px' } }, `Оплачено ${fmtMoney(paid)}, останется доплатить ${fmtMoney(Math.max(total - paid, 0))}`) : null,
+    ].filter(Boolean));
+  };
+  let timer;
+  async function quoteFor(room, ci, co) {
+    return api('GET', '/api/bookings/quote?' + qs({ room_id: room, check_in: ci, check_out: co, exclude: b.id }));
+  }
+  function requote() {
+    clearTimeout(timer);
+    drawSummary();
+    timer = setTimeout(async () => {
+      const ci = f.check_in.value, co = f.check_out.value;
+      if (!ci || !co || co <= ci) { note.className = 'note bad'; note.textContent = 'Дата выезда должна быть позже даты заезда'; note.style.display = ''; return; }
+      try {
+        const q = await quoteFor(f.room_id.value, ci, co);
+        tariff = Number(q.total);
+        if (priceMode === 'recalc') f.price.value = Math.round(tariff);
+        const warn = [];
+        if (q.busy) warn.push(q.busy);
+        if (q.closed_dates.length && b.status !== 'blocked') warn.push('Продажи на часть дат закрыты');
+        if (q.nights < q.min_stay && b.status !== 'blocked') warn.push(`Минимальный срок — ${q.min_stay} ${nightsWord(q.min_stay)}`);
+        if (warn.length) { note.className = 'note bad'; note.textContent = warn.join('. '); note.style.display = ''; } else note.style.display = 'none';
+      } catch { /* ошибку покажем при подтверждении */ }
+      drawPriceMode(); drawSummary();
+    }, 200);
+  }
+  // была ли прежняя цена посчитана автоматически: тогда по умолчанию пересчитываем
+  try {
+    tariffOld = Number((await quoteFor(b.room_id, b.check_in, b.check_out)).total);
+    if (Math.round(tariffOld) === oldTotal) priceMode = 'recalc';
+  } catch { /* оставим «как было» */ }
+  const confirmBtn = h('button', { class: 'btn primary', onclick: async () => {
+    confirmBtn.disabled = true;
+    const payload = b.status === 'blocked' ? {} : { total_price: f.price.value || 0 };
+    if (f.room_id.value !== b.room_id) payload.room_id = f.room_id.value;
+    if (f.check_in.value !== b.check_in) payload.check_in = f.check_in.value;
+    if (f.check_out.value !== b.check_out) payload.check_out = f.check_out.value;
+    try {
+      await api('PATCH', `/api/bookings/${b.id}`, payload);
+      toast('Бронь перенесена');
+      closeModal(); reload();
+    } catch (ex) { note.className = 'note bad'; note.textContent = ex.message; note.style.display = ''; confirmBtn.disabled = false; }
+  } }, 'Подтвердить перенос');
+  const title = b.status === 'blocked' ? 'Перенести закрытые даты?' : `Перенести бронь${b.guest_name ? ` «${b.guest_name}»` : ''}?`;
+  openModal(title, h('div', {}, note, summary,
+    h('label', { class: 'field' }, h('span', {}, 'Номер'), f.room_id),
+    h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Заезд'), f.check_in), h('label', { class: 'field' }, h('span', {}, 'Выезд'), f.check_out)),
+    b.status === 'blocked' ? null : [h('div', { class: 'field' }, h('span', {}, 'Стоимость'), modeBox, f.price), hint]),
+  [h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Отмена'), h('span', { class: 'spacer' }), confirmBtn],
+  () => reload());
+  drawPriceMode(); drawSummary(); requote();
 }
 
 function drawBoard(data, reload) {
@@ -939,26 +1106,39 @@ async function viewBookings(main) {
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Брони'),
     h('button', { class: 'btn primary', onclick: () => bookingDrawer({}, load) }, icon('plus'), 'Бронь')),
   h('div', { class: 'board-tools', style: { marginBottom: '14px' } }, f.q, f.from, '—', f.to, f.status, scopeSeg(scope, () => load())), table);
+  const PAGE = 50;
+  let shown = PAGE;
+  let rows = [];
+  const draw = () => {
+    table.innerHTML = '';
+    if (!rows.length) { table.append(h('div', { class: 'empty' }, h('h3', {}, 'Броней не найдено'), 'Измените период или поиск.')); return; }
+    const part = rows.slice(0, shown);
+    const multi = scope.value === 'all';
+    table.append(
+      h('div', { class: 'card-head' }, h('h2', {}, 'Найдено броней'), h('span', { class: 'pill none num' }, rows.length)),
+      h('div', { class: 'table-wrap' }, h('table', { class: 'list cards-mobile' },
+        h('thead', {}, h('tr', {}, [multi ? 'Объект' : null, 'Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Статус', 'Сумма', 'Оплачено'].filter(Boolean).map((t) => h('th', {}, t)))),
+        h('tbody', {}, part.map((b) => h('tr', { class: 'click', onclick: () => bookingDrawer(b, load) },
+          multi ? h('td', { class: 'muted small', 'data-l': 'Объект' }, b.property_name) : null,
+          h('td', { class: 'num', 'data-l': 'Заезд' }, fmtShort(b.check_in)), h('td', { class: 'num', 'data-l': 'Выезд' }, fmtShort(b.check_out)),
+          h('td', { class: 'num', 'data-l': 'Номер' }, b.room_name),
+          h('td', { 'data-l': 'Гость' }, b.status === 'blocked' ? h('span', { class: 'muted' }, 'Закрыто') : (b.guest_name || h('span', { class: 'muted' }, '—')),
+            b.guest_phone ? h('div', { class: 'muted small' }, b.guest_phone) : null),
+          h('td', { 'data-l': 'Источник' }, h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, h('i', { class: 'dot', style: { background: `var(--src-${b.source})` } }), SOURCE[b.source])),
+          h('td', { 'data-l': 'Статус' }, h('span', { class: 'pill ' + ({ confirmed: 'ok', pending: 'warn', blocked: 'none', cancelled: 'bad' }[b.status]) }, STATUS[b.status])),
+          h('td', { class: 'num', 'data-l': b.status === 'blocked' ? null : 'Сумма' }, b.status === 'blocked' ? '' : fmtMoney(b.total_price)),
+          h('td', { class: 'num', 'data-l': b.status === 'blocked' ? null : 'Оплачено' }, b.status === 'blocked' ? '' : fmtMoney(b.paid_amount))))))),
+      rows.length > shown ? h('div', { class: 'more-count' }, h('button', { class: 'btn', onclick: () => { shown += PAGE; draw(); } },
+        `Показать ещё (${Math.min(PAGE, rows.length - shown)} из ${rows.length - shown} оставшихся)`)) : null);
+  };
   async function load() {
     try {
-      const rows = await api('GET', '/api/bookings?' + qs({
+      rows = await api('GET', '/api/bookings?' + qs({
         q: f.q.value, from: f.from.value, to: f.to.value, status: f.status.value,
         property_id: scope.value === 'current' ? state.propertyId : undefined,
       }));
-      table.innerHTML = '';
-      if (!rows.length) { table.append(h('div', { class: 'empty' }, h('h3', {}, 'Броней не найдено'), 'Измените период или поиск.')); return; }
-      table.append(h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
-        h('thead', {}, h('tr', {}, [scope.value === 'all' ? 'Объект' : null, 'Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Статус', 'Сумма', 'Оплачено'].filter(Boolean).map((t) => h('th', {}, t)))),
-        h('tbody', {}, rows.map((b) => h('tr', { class: 'click', onclick: () => bookingDrawer(b, load) },
-          scope.value === 'all' ? h('td', { class: 'muted small' }, b.property_name) : null,
-          h('td', { class: 'num' }, fmtShort(b.check_in)), h('td', { class: 'num' }, fmtShort(b.check_out)),
-          h('td', { class: 'num' }, b.room_name),
-          h('td', {}, b.status === 'blocked' ? h('span', { class: 'muted' }, 'Закрыто') : (b.guest_name || h('span', { class: 'muted' }, '—')),
-            b.guest_phone ? h('div', { class: 'muted small' }, b.guest_phone) : null),
-          h('td', {}, h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, h('i', { class: 'dot', style: { background: `var(--src-${b.source})` } }), SOURCE[b.source])),
-          h('td', {}, h('span', { class: 'pill ' + ({ confirmed: 'ok', pending: 'warn', blocked: 'none', cancelled: 'bad' }[b.status]) }, STATUS[b.status])),
-          h('td', { class: 'num' }, b.status === 'blocked' ? '' : fmtMoney(b.total_price)),
-          h('td', { class: 'num' }, b.status === 'blocked' ? '' : fmtMoney(b.paid_amount))))))));
+      shown = PAGE;
+      draw();
     } catch (ex) { table.innerHTML = ''; table.append(h('div', { class: 'empty' }, ex.message)); }
   }
   load();
@@ -1149,6 +1329,9 @@ async function viewChannels(main) {
 }
 
 // ---------- отчёты: графики (свой SVG, без библиотек) ----------
+const escHtml = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const safeColor = (c) => (/^#[0-9a-fA-F]{6}$/.test(c || '') ? c : '#69755F');
+
 function svgEl(markup) {
   const wrap = document.createElement('div');
   wrap.innerHTML = markup.trim();
@@ -1158,30 +1341,63 @@ function svgEl(markup) {
 const CHART_COLORS = ['#2F5D50', '#B7791F', '#6E4A93', '#23767E', '#B4562E', '#4A5A6A', '#5E6B5A', '#7A3418', '#8A5A12', '#69755F'];
 
 function monthlyChart(monthly) {
-  const W = 720, H = 220, padL = 0, padB = 24, plotH = H - padB;
-  const vals = monthly.flatMap((m) => [Number(m.revenue), Number(m.expenses), Math.abs(Number(m.profit))]);
+  const W = 720, H = 230, padB = 24, plotH = H - padB - 8;
+  const vals = monthly.flatMap((m) => [Number(m.revenue) + Number(m.other_income || 0), Number(m.expenses), Math.abs(Number(m.profit))]);
   const max = Math.max(1, ...vals);
   const n = monthly.length;
-  const colW = (W - padL) / n;
+  const colW = W / n;
   const barW = Math.min(16, colW * 0.32);
+  const y0 = plotH + 8;
   let bars = '';
   let points = '';
   monthly.forEach((m, i) => {
-    const cx = padL + colW * (i + 0.5);
-    const rev = Number(m.revenue), exp = Number(m.expenses), profit = Number(m.profit);
-    const revH = (rev / max) * plotH, expH = (exp / max) * plotH;
-    bars += `<rect x="${cx - barW - 2}" y="${plotH - revH}" width="${barW}" height="${revH}" fill="${CHART_COLORS[0]}" rx="2"/>`;
-    bars += `<rect x="${cx + 2}" y="${plotH - expH}" width="${barW}" height="${expH}" fill="${CHART_COLORS[4]}" rx="2"/>`;
-    const py = Math.max(-20, Math.min(plotH, plotH - (profit / max) * plotH));
+    const cx = colW * (i + 0.5);
+    const rev = Number(m.revenue), oth = Number(m.other_income || 0), exp = Number(m.expenses), profit = Number(m.profit);
+    const revH = (rev / max) * plotH, othH = (oth / max) * plotH, expH = (exp / max) * plotH;
+    const dt = parseISO(m.month);
+    const tip = `${MONTHS_SHORT[dt.getMonth()]} ${dt.getFullYear()}: проживание ${fmtMoney(rev)}, прочие доходы ${fmtMoney(oth)}, расходы ${fmtMoney(exp)}, прибыль ${fmtMoney(profit)}`;
+    bars += `<g><title>${tip}</title>`;
+    bars += `<rect x="${cx - barW - 2}" y="${y0 - revH}" width="${barW}" height="${revH}" fill="${CHART_COLORS[0]}" rx="2"/>`;
+    if (othH > 0.5) bars += `<rect x="${cx - barW - 2}" y="${y0 - revH - othH}" width="${barW}" height="${othH}" fill="${CHART_COLORS[3]}" rx="2"/>`;
+    bars += `<rect x="${cx + 2}" y="${y0 - expH}" width="${barW}" height="${expH}" fill="${CHART_COLORS[4]}" rx="2"/>`;
+    bars += `<rect x="${cx - colW / 2}" y="0" width="${colW}" height="${H}" fill="transparent"/></g>`;
+    const py = Math.max(-4, Math.min(y0, y0 - (profit / max) * plotH));
     points += `${cx},${py} `;
-    const dt = parseISO(m.month + '-01');
     bars += `<text x="${cx}" y="${H - 6}" font-size="10.5" fill="var(--muted)" text-anchor="middle">${MONTHS_SHORT[dt.getMonth()]}</text>`;
   });
-  return svgEl(`<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block;overflow:visible">
-    <line x1="0" y1="${plotH}" x2="${W}" y2="${plotH}" stroke="var(--border)"/>
+  return svgEl(`<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block;overflow:visible" role="img" aria-label="Доходы, расходы и прибыль по месяцам">
+    <line x1="0" y1="${y0}" x2="${W}" y2="${y0}" stroke="var(--border)"/>
     ${bars}
     <polyline points="${points.trim()}" fill="none" stroke="${CHART_COLORS[1]}" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
   </svg>`);
+}
+
+// Расходы по категориям помесячно — столбцы с накоплением. Показаны крупнейшие категории,
+// остальные слиты в «Остальные» (это делает сервер).
+function stackedExpenseChart(em) {
+  const W = 720, H = 220, padB = 24, plotH = H - padB - 8, y0 = plotH + 8;
+  const totals = em.rows.map((r) => Object.values(r.amounts).reduce((s, v) => s + Number(v), 0));
+  const max = Math.max(1, ...totals);
+  const colW = W / em.rows.length, barW = Math.min(30, colW * 0.6);
+  let bars = '';
+  em.rows.forEach((row, i) => {
+    const cx = colW * (i + 0.5);
+    let y = y0;
+    const tipLines = [];
+    em.categories.forEach((c) => {
+      const v = Number(row.amounts[c.category_id] || 0);
+      if (v <= 0) return;
+      const hgt = (v / max) * plotH;
+      y -= hgt;
+      bars += `<rect x="${cx - barW / 2}" y="${y}" width="${barW}" height="${Math.max(hgt, 0.5)}" fill="${safeColor(c.color)}"/>`;
+      tipLines.push(`${escHtml(c.name)}: ${fmtMoney(v)}`);
+    });
+    const dt = parseISO(row.month);
+    bars += `<rect x="${cx - colW / 2}" y="0" width="${colW}" height="${H}" fill="transparent"><title>${MONTHS_SHORT[dt.getMonth()]} ${dt.getFullYear()} — всего ${fmtMoney(totals[i])}\n${tipLines.join('\n')}</title></rect>`;
+    bars += `<text x="${cx}" y="${H - 6}" font-size="10.5" fill="var(--muted)" text-anchor="middle">${MONTHS_SHORT[dt.getMonth()]}</text>`;
+  });
+  return svgEl(`<svg viewBox="0 0 ${W} ${H}" width="100%" style="max-width:${W}px;display:block" role="img" aria-label="Расходы по категориям по месяцам">
+    <line x1="0" y1="${y0}" x2="${W}" y2="${y0}" stroke="var(--border)"/>${bars}</svg>`);
 }
 
 function weekdayChart(weekday) {
@@ -1213,7 +1429,7 @@ function expenseDonut(byCategory) {
   byCategory.forEach((x, i) => {
     const frac = Number(x.amount) / total;
     const len = frac * circ;
-    circles += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${x.color}" stroke-width="22"` +
+    circles += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${safeColor(x.color)}" stroke-width="22"` +
       ` stroke-dasharray="${len} ${circ - len}" stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})"/>`;
     offset += len;
   });
@@ -1227,8 +1443,8 @@ function deltaBadge(delta) {
     `${good ? '▲' : '▼'} ${Math.abs(delta).toFixed(1).replace('.', ',')}%`);
 }
 
-function kpiCard(label, value, unit, compare) {
-  const v = h('div', { class: 'v' }, value, unit ? h('small', {}, ` ${unit}`) : null);
+function kpiCard(label, value, unit, compare, text = false) {
+  const v = h('div', { class: 'v' + (text ? ' txt' : '') }, value, unit ? h('small', {}, ` ${unit}`) : null);
   const cmp = compare ? h('div', { class: 'small muted', style: { marginTop: '6px', display: 'flex', gap: '10px' } },
     h('span', {}, 'к периоду: ', deltaBadge(compare.period)), h('span', {}, 'к году: ', deltaBadge(compare.year))) : null;
   return h('div', { class: 'kpi' }, h('div', { class: 'l' }, label), v, cmp);
@@ -1279,7 +1495,8 @@ async function viewStats(main) {
 
     content.innerHTML = '';
     content.append(h('div', { class: 'kpis' },
-      kpiCard('Выручка', money(tt.revenue), null, { period: cmp.period.revenue_delta, year: cmp.year.revenue_delta }),
+      kpiCard('Выручка от проживания', money(tt.revenue), null, { period: cmp.period.revenue_delta, year: cmp.year.revenue_delta }),
+      kpiCard('Прочие доходы', money(tt.other_income), null, { period: cmp.period.other_income_delta, year: cmp.year.other_income_delta }),
       kpiCard('Расходы', money(tt.expenses), null, { period: cmp.period.expenses_delta, year: cmp.year.expenses_delta }),
       kpiCard('Прибыль', money(tt.profit), null, { period: cmp.period.profit_delta, year: cmp.year.profit_delta }),
       kpiCard('Рентабельность', tt.margin == null ? '—' : String(tt.margin).replace('.', ','), tt.margin == null ? null : '%'),
@@ -1292,37 +1509,48 @@ async function viewStats(main) {
 
     const chartsRow = h('div', { class: 'grid-2' });
     chartsRow.append(
-      h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, 'Выручка, расходы и прибыль по месяцам'),
+      h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, 'Доходы, расходы и прибыль по месяцам'),
         monthlyChart(r.monthly),
         h('div', { class: 'legend', style: { padding: '10px 0 0', border: 0 } },
-          h('span', {}, h('i', { class: 'dot', style: { background: CHART_COLORS[0] } }), 'Выручка'),
+          h('span', {}, h('i', { class: 'dot', style: { background: CHART_COLORS[0] } }), 'Проживание'),
+          h('span', {}, h('i', { class: 'dot', style: { background: CHART_COLORS[3] } }), 'Прочие доходы'),
           h('span', {}, h('i', { class: 'dot', style: { background: CHART_COLORS[4] } }), 'Расходы'),
           h('span', {}, h('i', { class: 'dot', style: { background: CHART_COLORS[1] } }), 'Прибыль (линия)'))),
       h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, 'Загрузка по дням недели'),
         weekdayChart(r.weekday_occupancy)));
     content.append(chartsRow);
 
-    const expenseCard = h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, 'Структура расходов'));
-    if (r.by_expense_category.length) {
-      const donutBox = h('div', { style: { display: 'flex', gap: '20px', alignItems: 'center', flexWrap: 'wrap' } });
-      donutBox.append(expenseDonut(r.by_expense_category),
-        h('div', { style: { flex: 1, minWidth: '220px' } }, r.by_expense_category.map((x) => h('div', {
-          style: { display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '4px 0' },
-        }, h('span', {}, h('i', { class: 'dot', style: { background: x.color } }), ' ', x.name), h('b', { class: 'num' }, money(x.amount))))));
-      expenseCard.append(donutBox);
-    } else {
-      expenseCard.append(h('div', { class: 'empty' }, 'Расходов за период нет'));
+    const structureCard = (title, items, emptyText) => {
+      const card = h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, title));
+      if (items.length) {
+        const total = items.reduce((s, x) => s + Number(x.amount), 0) || 1;
+        card.append(h('div', { class: 'donut-box' }, expenseDonut(items),
+          h('div', { style: { flex: 1, minWidth: '200px' } }, items.map((x) => h('div', {
+            style: { display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '4px 0' },
+          }, h('span', {}, h('i', { class: 'dot', style: { background: safeColor(x.color) } }), ' ', x.name,
+            h('span', { class: 'muted small' }, ` ${Math.round((Number(x.amount) / total) * 100)}%`)), h('b', { class: 'num' }, money(x.amount)))))));
+      } else card.append(h('div', { class: 'empty' }, emptyText));
+      return card;
+    };
+    content.append(h('div', { class: 'grid-2' },
+      structureCard('Структура расходов', r.by_expense_category, 'Расходов за период нет'),
+      structureCard('Структура прочих доходов', r.by_income_category, 'Прочих доходов за период нет')));
+
+    if (r.expense_monthly && r.expense_monthly.categories.length) {
+      content.append(h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, 'Расходы по категориям по месяцам'),
+        stackedExpenseChart(r.expense_monthly),
+        h('div', { class: 'legend', style: { padding: '10px 0 0', border: 0 } },
+          r.expense_monthly.categories.map((c) => h('span', {}, h('i', { class: 'dot', style: { background: safeColor(c.color) } }), c.name)))));
     }
-    content.append(expenseCard);
 
     if (r.by_property && r.by_property.length) {
       content.append(h('div', { class: 'card' },
         h('div', { class: 'card-head' }, h('h2', {}, 'По объектам')),
         h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
-          h('thead', {}, h('tr', {}, ['Объект', 'Номеров', 'Выручка', 'Расходы', 'Прибыль', 'Загрузка'].map((x) => h('th', {}, x)))),
+          h('thead', {}, h('tr', {}, ['Объект', 'Номеров', 'Выручка', 'Прочие доходы', 'Расходы', 'Прибыль', 'Загрузка'].map((x) => h('th', {}, x)))),
           h('tbody', {}, r.by_property.map((p) => h('tr', {},
             h('td', {}, p.property_name), h('td', { class: 'num' }, p.rooms),
-            h('td', { class: 'num' }, money(p.revenue)), h('td', { class: 'num' }, money(p.expenses)),
+            h('td', { class: 'num' }, money(p.revenue)), h('td', { class: 'num' }, money(p.other_income)), h('td', { class: 'num' }, money(p.expenses)),
             h('td', { class: 'num' }, money(p.profit)), h('td', { class: 'num' }, `${String(p.occupancy).replace('.', ',')}%`))))))));
     }
 
@@ -1336,24 +1564,34 @@ async function viewStats(main) {
             h('td', { class: 'num' }, x.nights), h('td', { class: 'num' }, money(x.revenue)))))))));
     }
 
-    let roomSort = { key: 'revenue', dir: -1 };
+    let roomSort = { key: 'profit', dir: -1 };
     const roomCard = h('div', { class: 'card' });
     const drawRoomTable = () => {
-      const rows = [...r.by_room].sort((a, b) => (a[roomSort.key] > b[roomSort.key] ? 1 : a[roomSort.key] < b[roomSort.key] ? -1 : 0) * roomSort.dir);
+      const rows = [...r.by_room].sort((a, b) => {
+        const av = isNaN(a[roomSort.key]) ? a[roomSort.key] : Number(a[roomSort.key]);
+        const bv = isNaN(b[roomSort.key]) ? b[roomSort.key] : Number(b[roomSort.key]);
+        return (av > bv ? 1 : av < bv ? -1 : 0) * roomSort.dir;
+      });
       const th = (key, label) => h('th', { style: { cursor: 'pointer' }, onclick: () => { roomSort.dir = roomSort.key === key ? -roomSort.dir : -1; roomSort.key = key; drawRoomTable(); } },
         label, roomSort.key === key ? (roomSort.dir === -1 ? ' ↓' : ' ↑') : '');
       roomCard.innerHTML = '';
-      const roomTableBody = rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
+      const multi = state.me.properties.length > 1;
+      const roomTableBody = rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'list cards-mobile' },
           h('thead', {}, h('tr', {}, th('room_name', 'Номер'), th('room_type_name', 'Категория'),
-            state.me.properties.length > 1 ? th('property_name', 'Объект') : null, th('nights', 'Ночей продано'),
-            th('occupancy', 'Загрузка'), th('revenue', 'Выручка'))),
+            multi ? th('property_name', 'Объект') : null, th('nights', 'Ночей'),
+            th('occupancy', 'Загрузка'), th('revenue', 'Выручка'), th('other_income', 'Др. доходы'),
+            th('expenses', 'Расходы'), th('profit', 'Прибыль'))),
           h('tbody', {}, rows.map((x) => h('tr', {},
-            h('td', {}, x.room_name), h('td', { class: 'muted small' }, x.room_type_name),
-            state.me.properties.length > 1 ? h('td', { class: 'muted small' }, x.property_name) : null,
-            h('td', { class: 'num' }, x.nights), h('td', { class: 'num' }, `${String(x.occupancy).replace('.', ',')}%`),
-            h('td', { class: 'num' }, money(x.revenue))))))) : h('div', { class: 'empty' }, 'В этом объекте пока нет номеров');
+            h('td', { 'data-l': 'Номер' }, h('b', {}, x.room_name)), h('td', { class: 'muted small', 'data-l': 'Категория' }, x.room_type_name),
+            multi ? h('td', { class: 'muted small', 'data-l': 'Объект' }, x.property_name) : null,
+            h('td', { class: 'num', 'data-l': 'Ночей' }, x.nights), h('td', { class: 'num', 'data-l': 'Загрузка' }, `${String(x.occupancy).replace('.', ',')}%`),
+            h('td', { class: 'num', 'data-l': 'Выручка' }, money(x.revenue)),
+            h('td', { class: 'num', 'data-l': 'Др. доходы' }, Number(x.other_income) ? money(x.other_income) : '—'),
+            h('td', { class: 'num', 'data-l': 'Расходы' }, Number(x.expenses) ? money(x.expenses) : '—'),
+            h('td', { class: 'num strong', 'data-l': 'Прибыль', style: { color: Number(x.profit) < 0 ? 'var(--clay)' : '' } }, money(x.profit))))))) : h('div', { class: 'empty' }, 'В этом объекте пока нет номеров');
       roomCard.append(h('div', { class: 'card-head' }, h('h2', {}, 'По номерам'), h('span', { class: 'muted small' }, 'нажмите на заголовок для сортировки')),
-        roomTableBody);
+        roomTableBody,
+        h('p', { class: 'muted small card-pad', style: { paddingTop: '8px' } }, 'Расходы и доходы здесь — только те, что записаны на сам номер (раздел «Финансы» → «Относится к»). Расходы объекта и общие между номерами не делятся.'));
     };
     drawRoomTable();
     content.append(roomCard);
@@ -1400,11 +1638,12 @@ async function downloadCsv(path, filename) {
   } catch (ex) { toast(ex.message, true); }
 }
 
-function categoryDrawer(cat) {
+function categoryDrawer(cat, cfg = FLOW.expense) {
   const g = {};
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
-  const COLORS = ['#23767E', '#4A5A6A', '#6E4A93', '#B4562E', '#B7791F', '#2F5D50', '#5E6B5A', '#7A3418', '#8A5A12', '#69755F'];
+  const COLORS = ['#23767E', '#4A5A6A', '#6E4A93', '#B4562E', '#B7791F', '#2F5D50', '#5E6B5A', '#7A3418', '#8A5A12', '#69755F', '#C1852B', '#3B7A9E'];
   let color = cat.color || COLORS[0];
+  if (!cat.id && cfg.kind === 'income') color = '#2F5D50';
   const swatches = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' } });
   const drawSwatches = () => {
     swatches.innerHTML = '';
@@ -1418,8 +1657,8 @@ function categoryDrawer(cat) {
     save.disabled = true; err.style.display = 'none';
     try {
       const payload = { name: g.name.value, color };
-      if (cat.id) await api('PATCH', `/api/expense-categories/${cat.id}`, payload);
-      else await api('POST', '/api/expense-categories', payload);
+      if (cat.id) await api('PATCH', `${cfg.catApi}/${cat.id}`, payload);
+      else await api('POST', cfg.catApi, payload);
       closeDrawer(); toast('Сохранено'); cat.onSaved?.();
     } catch (ex) { err.textContent = ex.message; err.style.display = ''; } finally { save.disabled = false; }
   } }, 'Сохранить');
@@ -1427,11 +1666,11 @@ function categoryDrawer(cat) {
   if (cat.id) {
     foot.unshift(h('button', { class: 'btn ghost danger', onclick: async () => {
       if (!confirm(`Архивировать категорию «${cat.name}»? Старые расходы останутся, но выбрать её для новых будет нельзя.`)) return;
-      try { await api('PATCH', `/api/expense-categories/${cat.id}`, { archived: true }); closeDrawer(); toast('Категория архивирована'); cat.onSaved?.(); }
+      try { await api('PATCH', `${cfg.catApi}/${cat.id}`, { archived: true }); closeDrawer(); toast('Категория архивирована'); cat.onSaved?.(); }
       catch (ex) { toast(ex.message, true); }
     } }, 'Архивировать'));
   }
-  openDrawer(cat.id ? 'Категория расходов' : 'Новая категория', h('div', {}, err,
+  openDrawer(cat.id ? (cfg.kind === 'income' ? 'Категория доходов' : 'Категория расходов') : 'Новая категория', h('div', {}, err,
     h('label', { class: 'field' }, h('span', {}, 'Название'), g.name = h('input', { class: 'input', value: cat.name || '', required: true })),
     h('div', { class: 'field' }, h('span', {}, 'Цвет'), swatches)), foot);
 }
@@ -1475,71 +1714,129 @@ function recurringDrawer(cats, rule, propertyOptions, onSaved) {
   foot);
 }
 
-function expenseDrawer(cats, propertyOptions, exp, onSaved) {
+// ---------- финансы: расходы и прочие доходы ----------
+// Расходы и прочие доходы (завтраки, парковка, трансфер…) устроены одинаково: свои категории,
+// привязка к объекту или к конкретному номеру либо «общая» запись на весь аккаунт.
+const FLOW = {
+  expense: {
+    kind: 'expense', api: '/api/expenses', catApi: '/api/expense-categories', csv: 'expenses', catColor: '#69755F',
+    tab: 'Расходы', one: 'Расход', newTitle: 'Новый расход', addBtn: 'Расход', listTitle: 'Расходы за период',
+    emptyList: 'Расходов не найдено', added: 'Расход добавлен', delConfirm: 'Удалить расход?',
+    noCats: 'Нет ни одной активной категории расходов — добавьте хотя бы одну ниже', catTitle: 'Категории расходов',
+    byRoomTitle: 'Расходы по номерам',
+  },
+  income: {
+    kind: 'income', api: '/api/incomes', catApi: '/api/income-categories', csv: 'incomes', catColor: '#2F5D50',
+    tab: 'Прочие доходы', one: 'Доход', newTitle: 'Новый доход', addBtn: 'Доход', listTitle: 'Доходы за период',
+    emptyList: 'Доходов не найдено', added: 'Доход добавлен', delConfirm: 'Удалить запись о доходе?',
+    noCats: 'Нет ни одной активной категории доходов — добавьте хотя бы одну ниже', catTitle: 'Категории доходов',
+    byRoomTitle: 'Доходы по номерам',
+  },
+};
+
+// Объекты и их номера для выбора «к чему относится запись». Сбрасывается при каждой перерисовке.
+let scopeCache = null;
+async function loadScopes() {
+  if (!scopeCache) {
+    scopeCache = await Promise.all(state.me.properties.map(async (p) => {
+      const full = await api('GET', `/api/properties/${p.id}`);
+      return { id: p.id, name: p.name, rooms: full.room_types.flatMap((t) => t.rooms.map((r) => ({ id: r.id, name: r.name, type: t.name }))) };
+    }));
+  }
+  return scopeCache;
+}
+function scopeSelect(scopes, current, { general = true, extra = [], attrs = {} } = {}) {
+  const sel = h('select', { class: 'input', ...attrs });
+  extra.forEach(([v, l]) => sel.append(h('option', { value: v }, l)));
+  if (general) sel.append(h('option', { value: '' }, 'Общий — по всем объектам'));
+  scopes.forEach((p) => {
+    const grp = h('optgroup', { label: p.name }, h('option', { value: `p:${p.id}` }, `${p.name} — весь объект`));
+    p.rooms.forEach((r) => grp.append(h('option', { value: `r:${r.id}` }, `№${r.name} · ${r.type} (${p.name})`)));
+    sel.append(grp);
+  });
+  sel.value = current;
+  return sel;
+}
+const scopePayload = (v) => (v.startsWith('r:') ? { room_id: v.slice(2), property_id: null }
+  : v.startsWith('p:') ? { property_id: v.slice(2), room_id: null } : { property_id: null, room_id: null });
+const scopeOf = (row) => (row.room_id ? `r:${row.room_id}` : row.property_id ? `p:${row.property_id}` : '');
+const scopeLabel = (row) => (row.property_name ? `${row.property_name}${row.room_name ? ` · №${row.room_name}` : ''}` : 'Общий');
+
+function flowDrawer(cfg, cats, scopes, rec, onSaved) {
   const readOnly = !can('manager');
   const g = {};
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
-  g.date = h('input', { class: 'input', type: 'date', value: exp.date || todayISO(), disabled: readOnly });
-  g.amount = h('input', { class: 'input', type: 'number', min: 0, value: exp.amount != null ? Math.round(exp.amount) : '', disabled: readOnly });
-  g.category_id = h('select', { class: 'input', disabled: readOnly }, cats.map((c) => h('option', { value: c.id, selected: c.id === exp.category_id }, c.name)));
-  g.property_id = h('select', { class: 'input', disabled: readOnly }, h('option', { value: '' }, 'Общий — по всем объектам'),
-    propertyOptions.map((p) => h('option', { value: p.id, selected: p.id === exp.property_id }, p.name)));
-  g.comment = h('textarea', { class: 'input', disabled: readOnly }, exp.comment || '');
+  g.date = h('input', { class: 'input', type: 'date', value: rec.date || todayISO(), disabled: readOnly });
+  g.amount = h('input', { class: 'input', type: 'number', inputmode: 'decimal', min: 0, step: '0.01', value: rec.amount != null ? Number(rec.amount) : '', disabled: readOnly });
+  g.category_id = h('select', { class: 'input', disabled: readOnly }, cats.map((c) => h('option', { value: c.id, selected: c.id === rec.category_id }, c.name)));
+  g.scope = scopeSelect(scopes, scopeOf(rec), { attrs: { disabled: readOnly } });
+  g.comment = h('textarea', { class: 'input', disabled: readOnly }, rec.comment || '');
   const save = h('button', { class: 'btn primary', onclick: async () => {
     save.disabled = true; err.style.display = 'none';
     try {
-      const payload = { date: g.date.value, amount: g.amount.value, category_id: g.category_id.value,
-        property_id: g.property_id.value || null, comment: g.comment.value };
-      if (exp.id) await api('PATCH', `/api/expenses/${exp.id}`, payload);
-      else await api('POST', '/api/expenses', payload);
-      closeDrawer(); toast(exp.id ? 'Сохранено' : 'Расход добавлен'); onSaved();
+      const payload = { date: g.date.value, amount: g.amount.value, category_id: g.category_id.value, comment: g.comment.value, ...scopePayload(g.scope.value) };
+      if (rec.id) await api('PATCH', `${cfg.api}/${rec.id}`, payload);
+      else await api('POST', cfg.api, payload);
+      closeDrawer(); toast(rec.id ? 'Сохранено' : cfg.added); onSaved();
     } catch (ex) { err.textContent = ex.message; err.style.display = ''; } finally { save.disabled = false; }
-  } }, exp.id ? 'Сохранить' : 'Добавить');
+  } }, rec.id ? 'Сохранить' : 'Добавить');
   const foot = readOnly ? null : [h('span', { class: 'spacer' }), save];
-  if (exp.id && can('owner')) {
+  if (rec.id && can('owner')) {
     foot.unshift(h('button', { class: 'btn ghost danger', onclick: async () => {
-      if (!confirm('Удалить расход?')) return;
-      try { await api('DELETE', `/api/expenses/${exp.id}`); closeDrawer(); toast('Удалено'); onSaved(); }
+      if (!confirm(cfg.delConfirm)) return;
+      try { await api('DELETE', `${cfg.api}/${rec.id}`); closeDrawer(); toast('Удалено'); onSaved(); }
       catch (ex) { toast(ex.message, true); }
     } }, 'Удалить'));
   }
-  openDrawer(exp.id ? 'Расход' : 'Новый расход', h('div', {}, err,
+  openDrawer(rec.id ? cfg.one : cfg.newTitle, h('div', {}, err,
     h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Дата'), g.date),
       h('label', { class: 'field' }, h('span', {}, 'Сумма, ₽'), g.amount)),
     h('label', { class: 'field' }, h('span', {}, 'Категория'), g.category_id),
-    h('label', { class: 'field' }, h('span', {}, 'Объект'), g.property_id),
+    h('label', { class: 'field' }, h('span', {}, 'Относится к'), g.scope),
+    h('p', { class: 'muted small', style: { marginTop: '-6px' } }, 'Можно записать на весь объект, на конкретный номер или оставить общим — тогда сумма делится между объектами пропорционально числу номеров.'),
     h('label', { class: 'field' }, h('span', {}, 'Комментарий'), g.comment)),
   foot);
 }
 
 async function viewExpenses(main) {
-  const filters = { from: addDays(todayISO(), -30), to: addDays(todayISO(), 1), property_id: state.propertyId, category_id: '' };
-  let cats = [];
+  scopeCache = null;
+  let cfg = FLOW[state.financeKind] || FLOW.expense;
+  const filters = { from: addDays(todayISO(), -30), to: addDays(todayISO(), 1), scope: `p:${state.propertyId}`, category_id: '' };
   let quickCat = null;
   const content = h('div', { class: 'stack' });
-  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Расходы'),
-    h('button', { class: 'btn', onclick: () => downloadCsv('/api/expenses/export.csv?' + qs(filters), `expenses_${filters.from}_${filters.to}.csv`) },
-      icon('download'), 'Выгрузить CSV')), content);
+  const tabs = h('div', { class: 'seg' });
+  const drawTabs = () => {
+    tabs.innerHTML = '';
+    Object.values(FLOW).forEach((f) => tabs.append(h('button', { class: f === cfg ? 'on' : '', onclick: () => {
+      cfg = f; state.financeKind = f.kind; filters.category_id = ''; quickCat = null; drawTabs(); csvBtn.lastChild.textContent = ' CSV'; run();
+    } }, f.tab)));
+  };
+  const flowQuery = () => ({
+    from: filters.from, to: filters.to, category_id: filters.category_id,
+    property_id: filters.scope === 'none' ? 'none' : filters.scope.startsWith('p:') ? filters.scope.slice(2) : undefined,
+    room_id: filters.scope.startsWith('r:') ? filters.scope.slice(2) : undefined,
+  });
+  const csvBtn = h('button', { class: 'btn', onclick: () => downloadCsv(`${cfg.api}/export.csv?` + qs(flowQuery()), `${cfg.csv}_${filters.from}_${filters.to}.csv`) },
+    icon('download'), ' CSV');
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Финансы'), tabs, csvBtn), content);
+  drawTabs();
 
   async function load() {
-    const [catsData, data] = await Promise.all([
-      api('GET', '/api/expense-categories'), api('GET', '/api/expenses?' + qs(filters))]);
-    cats = catsData;
+    const [scopes, cats, data] = await Promise.all([
+      loadScopes(), api('GET', cfg.catApi), api('GET', cfg.api + '?' + qs(flowQuery()))]);
     content.innerHTML = '';
 
     // быстрое добавление: сумма → категория → сохранить
-    const amountInp = h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Сумма, ₽', style: { width: '160px' } });
+    const amountInp = h('input', { class: 'input', type: 'number', inputmode: 'decimal', min: 0, step: '0.01', placeholder: 'Сумма, ₽', style: { width: '150px' } });
     const dateInp = h('input', { class: 'input', type: 'date', value: todayISO(), style: { width: '150px' } });
+    const quickScope = scopeSelect(scopes, filters.scope.startsWith('p:') || filters.scope.startsWith('r:') ? filters.scope : '', { attrs: { style: 'width:220px', 'aria-label': 'Относится к' } });
     const chips = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
     const quickSave = h('button', { class: 'btn primary', disabled: true, onclick: async () => {
       quickSave.disabled = true;
       try {
-        await api('POST', '/api/expenses', {
-          amount: amountInp.value, category_id: quickCat, date: dateInp.value,
-          property_id: filters.property_id && filters.property_id !== 'none' ? filters.property_id : null,
-        });
-        amountInp.value = ''; quickCat = null; drawChips(); toast('Расход добавлен'); load();
-      } catch (ex) { toast(ex.message, true); } finally { quickSave.disabled = false; }
+        await api('POST', cfg.api, { amount: amountInp.value, category_id: quickCat, date: dateInp.value, ...scopePayload(quickScope.value) });
+        amountInp.value = ''; quickCat = null; toast(cfg.added); load();
+      } catch (ex) { toast(ex.message, true); quickSave.disabled = false; }
     } }, 'Сохранить');
     const drawChips = () => {
       chips.innerHTML = '';
@@ -1554,16 +1851,13 @@ async function viewExpenses(main) {
       content.append(h('div', { class: 'card card-pad' },
         h('h3', { style: { marginBottom: '10px' } }, 'Быстрое добавление'),
         cats.length
-          ? [h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' } }, amountInp, dateInp, quickSave), chips]
-          : h('div', { class: 'empty' }, 'Нет ни одной активной категории расходов — добавьте хотя бы одну ниже')));
+          ? [h('div', { class: 'quick-row' }, amountInp, dateInp, quickScope, quickSave), chips]
+          : h('div', { class: 'empty' }, cfg.noCats)));
     }
 
     // фильтры
-    const propSel = h('select', { class: 'input', style: { width: '190px' } },
-      h('option', { value: '', selected: !filters.property_id }, 'Все объекты'),
-      state.me.properties.map((p) => h('option', { value: p.id, selected: p.id === filters.property_id }, p.name)),
-      h('option', { value: 'none', selected: filters.property_id === 'none' }, 'Общие (без объекта)'));
-    propSel.addEventListener('change', () => { filters.property_id = propSel.value; load(); });
+    const scopeSel = scopeSelect(scopes, filters.scope, { general: false, extra: [['', 'Все записи'], ['none', 'Только общие']], attrs: { style: 'width:230px' } });
+    scopeSel.addEventListener('change', () => { filters.scope = scopeSel.value; load(); });
     const catSel = h('select', { class: 'input', style: { width: '190px' } }, h('option', { value: '' }, 'Все категории'),
       cats.map((c) => h('option', { value: c.id, selected: c.id === filters.category_id }, c.name)));
     catSel.addEventListener('change', () => { filters.category_id = catSel.value; load(); });
@@ -1571,56 +1865,73 @@ async function viewExpenses(main) {
     const toInp = h('input', { class: 'input', type: 'date', value: filters.to, style: { width: '150px' } });
     fromInp.addEventListener('change', () => { filters.from = fromInp.value; load(); });
     toInp.addEventListener('change', () => { filters.to = toInp.value; load(); });
-    content.append(h('div', { class: 'board-tools' }, fromInp, '—', toInp, propSel, catSel,
-      can('manager') && cats.length ? h('button', { class: 'btn primary', style: { marginLeft: 'auto' },
-        onclick: () => expenseDrawer(cats, state.me.properties, {}, load) }, icon('plus'), 'Расход') : null));
+    content.append(h('div', { class: 'board-tools filters' }, fromInp, h('span', { class: 'dash' }, '—'), toInp, scopeSel, catSel,
+      can('manager') && cats.length ? h('button', { class: 'btn primary add-btn', style: { marginLeft: 'auto' },
+        onclick: () => flowDrawer(cfg, cats, scopes, {}, load) }, icon('plus'), cfg.addBtn) : null));
+
+    // итоги
+    const rowsWithRoom = data.rows.filter((r) => r.room_id);
+    content.append(h('div', { class: 'kpis' },
+      kpiCard(cfg.kind === 'expense' ? 'Расходов за период' : 'Доходов за период', fmtMoney(data.total)),
+      kpiCard('Записей', String(data.rows.length)),
+      kpiCard('Самая крупная категория', data.by_category[0] ? data.by_category[0].category_name : '—', null, null, true),
+      kpiCard('Записано на номера', fmtMoney(rowsWithRoom.reduce((s, r) => s + Number(r.amount), 0)))));
 
     // список
     const table = h('div', { class: 'card' });
     if (!data.rows.length) {
-      table.append(h('div', { class: 'empty' }, h('h3', {}, 'Расходов не найдено'), 'Измените период или фильтры.'));
+      table.append(h('div', { class: 'empty' }, h('h3', {}, cfg.emptyList), 'Измените период или фильтры.'));
     } else {
-      table.append(h('div', { class: 'card-head' }, h('h2', {}, 'Расходы за период'), h('b', {}, fmtMoney(data.total))),
-        h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
-          h('thead', {}, h('tr', {}, ['Дата', 'Категория', 'Объект', 'Сумма', 'Комментарий', 'Добавил'].map((t) => h('th', {}, t)))),
-          h('tbody', {}, data.rows.map((r) => h('tr', { class: 'click', onclick: () => expenseDrawer(cats, state.me.properties, r, load) },
-            h('td', { class: 'num' }, fmtShort(r.date)),
-            h('td', {}, h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, h('i', { class: 'dot', style: { background: r.category_color } }), r.category_name)),
-            h('td', { class: 'muted small' }, r.property_name || 'Общий', r.room_name ? ` · ${r.room_name}` : ''),
-            h('td', { class: 'num' }, fmtMoney(r.amount)),
-            h('td', { class: 'muted small' }, r.comment),
-            h('td', { class: 'muted small' }, r.created_by_name || '—')))))));
+      table.append(h('div', { class: 'card-head' }, h('h2', {}, cfg.listTitle), h('b', {}, fmtMoney(data.total))),
+        h('div', { class: 'table-wrap' }, h('table', { class: 'list cards-mobile' },
+          h('thead', {}, h('tr', {}, ['Дата', 'Категория', 'Относится к', 'Сумма', 'Комментарий', 'Добавил'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, data.rows.map((r) => h('tr', { class: 'click', onclick: () => flowDrawer(cfg, cats, scopes, r, load) },
+            h('td', { class: 'num', 'data-l': 'Дата' }, fmtShort(r.date)),
+            h('td', { 'data-l': 'Категория' }, h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, h('i', { class: 'dot', style: { background: r.category_color } }), r.category_name)),
+            h('td', { class: 'muted small', 'data-l': 'Относится к' }, scopeLabel(r)),
+            h('td', { class: 'num strong', 'data-l': 'Сумма' }, fmtMoney(r.amount)),
+            h('td', { class: 'muted small', 'data-l': 'Комментарий' }, r.comment),
+            h('td', { class: 'muted small', 'data-l': 'Добавил' }, r.created_by_name || '—')))))));
     }
     content.append(table);
 
-    // итоги по категориям
+    // итоги по категориям и по номерам
+    const summaryRow = h('div', { class: 'grid-2' });
     if (data.by_category.length) {
       const maxAmt = Math.max(1, ...data.by_category.map((x) => Number(x.amount)));
-      const catRow = (x) => {
-        const dot = h('i', { class: 'dot', style: { background: x.category_color } });
-        const label = h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, dot, x.category_name);
-        const barFill = h('i', { style: { width: `${(Number(x.amount) / maxAmt) * 100}%`, background: x.category_color } });
-        const bar = h('div', { class: 'bar-h' }, barFill);
-        return h('tr', {}, h('td', {}, label), h('td', { class: 'num' }, x.count),
-          h('td', { class: 'num' }, fmtMoney(x.amount)), h('td', { style: { width: '35%' } }, bar));
-      };
-      const rows = data.by_category.map(catRow);
-      const tbody = h('tbody', {}, rows);
-      const table = h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, tbody));
-      const head = h('div', { class: 'card-head' }, h('h2', {}, 'По категориям'));
-      content.append(h('div', { class: 'card' }, head, table));
+      summaryRow.append(h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'По категориям')),
+        h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, h('tbody', {}, data.by_category.map((x) => h('tr', {},
+          h('td', {}, h('span', { style: { display: 'inline-flex', gap: '7px', alignItems: 'center' } }, h('i', { class: 'dot', style: { background: x.category_color } }), x.category_name)),
+          h('td', { class: 'num' }, x.count), h('td', { class: 'num' }, fmtMoney(x.amount)),
+          h('td', { style: { width: '30%' } }, h('div', { class: 'bar-h' }, h('i', { style: { width: `${(Number(x.amount) / maxAmt) * 100}%`, background: x.category_color } }))))))))));
     }
+    if (rowsWithRoom.length) {
+      const byRoom = {};
+      rowsWithRoom.forEach((r) => {
+        const k = r.room_id;
+        const e = byRoom[k] ||= { name: r.room_name, property: r.property_name, amount: 0, count: 0 };
+        e.amount += Number(r.amount); e.count += 1;
+      });
+      const list = Object.values(byRoom).sort((a, b) => b.amount - a.amount);
+      const maxRoom = Math.max(1, ...list.map((x) => x.amount));
+      summaryRow.append(h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, cfg.byRoomTitle)),
+        h('div', { class: 'table-wrap' }, h('table', { class: 'list' }, h('tbody', {}, list.map((x) => h('tr', {},
+          h('td', {}, `№${x.name}`, state.me.properties.length > 1 ? h('div', { class: 'muted small' }, x.property) : null),
+          h('td', { class: 'num' }, x.count), h('td', { class: 'num' }, fmtMoney(x.amount)),
+          h('td', { style: { width: '30%' } }, h('div', { class: 'bar-h' }, h('i', { style: { width: `${(x.amount / maxRoom) * 100}%`, background: 'var(--pine)' } }))))))))));
+    }
+    if (summaryRow.children.length) content.append(summaryRow);
 
     // категории (владелец управляет, остальные видят список)
-    const catsCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'Категории расходов'),
-      can('owner') ? h('button', { class: 'btn small', onclick: () => categoryDrawer({ onSaved: load }) }, icon('plus'), 'Категория') : null),
+    content.append(h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, cfg.catTitle),
+      can('owner') ? h('button', { class: 'btn small', onclick: () => categoryDrawer({ onSaved: load }, cfg) }, icon('plus'), 'Своя категория') : null),
       h('div', { class: 'card-pad', style: { display: 'flex', gap: '8px', flexWrap: 'wrap', paddingTop: '10px' } },
         cats.map((c) => h('button', { class: 'btn small' + (can('owner') ? '' : ' ghost'), style: { borderColor: c.color, color: c.color },
-          onclick: () => can('owner') && categoryDrawer({ ...c, onSaved: load }) }, h('i', { class: 'dot', style: { background: c.color } }), c.name))));
-    content.append(catsCard);
+          onclick: () => can('owner') && categoryDrawer({ ...c, onSaved: load }, cfg) }, h('i', { class: 'dot', style: { background: c.color } }), c.name))),
+      !can('owner') ? h('p', { class: 'muted small card-pad', style: { paddingTop: 0 } }, 'Свои категории добавляет владелец аккаунта.') : null));
 
-    // повторяющиеся расходы
-    {
+    // повторяющиеся расходы (только для расходов)
+    if (cfg.kind === 'expense') {
       const recurring = await api('GET', '/api/expense-recurring');
       const recCard = h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'Повторяющиеся расходы'),
         can('owner') ? h('button', { class: 'btn small', onclick: () => recurringDrawer(cats, {}, state.me.properties, load) }, icon('plus'), 'Добавить') : null));
@@ -1638,7 +1949,8 @@ async function viewExpenses(main) {
       content.append(recCard);
     }
   }
-  load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
+  const run = () => { content.innerHTML = ''; content.append(loadingBox()); load().catch((ex) => { content.innerHTML = ''; content.append(h('div', { class: 'card empty' }, ex.message)); }); };
+  run();
 }
 
 // ---------- добавление объекта ----------
