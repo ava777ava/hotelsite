@@ -120,7 +120,46 @@ const store = {
 // ---------- API ----------
 class ApiError extends Error { constructor(msg, status, data) { super(msg); this.status = status; this.data = data; } }
 
-async function api(method, path, body) {
+// Полоска «Нет связи»: показываем, когда сервер недоступен и данные взяты из памяти устройства
+let netBanner = null;
+function setOffline(on, cachedAt) {
+  if (!on) { netBanner?.remove(); netBanner = null; return; }
+  if (!netBanner) { netBanner = h('div', { class: 'net-banner', role: 'status' }); document.body.append(netBanner); }
+  netBanner.textContent = cachedAt
+    ? `Нет связи с сервером. Показаны данные на ${fmtDateTime(Number(cachedAt))} — только для чтения. Как только связь появится, всё обновится само.`
+    : 'Нет связи с сервером. Проверьте интернет — введённое не потеряно, действие можно повторить.';
+}
+window.addEventListener('online', () => { setOffline(false); if (state.me) render(); });
+window.addEventListener('offline', () => setOffline(true));
+
+// Сессия истекла: просим пароль поверх открытого экрана, не сбрасывая введённое в формах, и повторяем запрос
+let reloginPromise = null;
+function relogin() {
+  if (reloginPromise) return reloginPromise;
+  reloginPromise = new Promise((resolve) => {
+    const pass = h('input', { class: 'input', type: 'password', autocomplete: 'current-password', placeholder: 'Пароль' });
+    const err = h('div', { class: 'note bad', style: { display: 'none' } });
+    const done = (ok) => { box.remove(); reloginPromise = null; resolve(ok); };
+    const go = async () => {
+      try {
+        const res = await fetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: state.me.email, password: pass.value }) });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || 'Не получилось войти');
+        store.set('token', data.token); done(true);
+      } catch (ex) { err.textContent = ex.message; err.style.display = ''; }
+    };
+    pass.addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+    const box = h('div', { class: 'relogin-wrap' }, h('div', { class: 'relogin', role: 'dialog', 'aria-label': 'Сессия истекла' },
+      h('h2', {}, 'Сессия истекла'), h('p', { class: 'muted small' }, `Введите пароль для ${state.me.email}, чтобы продолжить. Всё, что вы набрали на экране, сохранится.`), err, pass,
+      h('div', { style: { display: 'flex', gap: '10px', marginTop: '12px' } }, h('button', { class: 'btn primary', onclick: go }, 'Продолжить'),
+        h('span', { class: 'spacer' }), h('button', { class: 'btn ghost', onclick: () => done(false) }, 'Выйти'))));
+    document.body.append(box);
+    setTimeout(() => pass.focus(), 30);
+  });
+  return reloginPromise;
+}
+
+async function api(method, path, body, retried = false) {
   const headers = { 'Content-Type': 'application/json' };
   const token = store.get('token');
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -128,11 +167,16 @@ async function api(method, path, body) {
   try {
     res = await fetch(path, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   } catch {
-    throw new ApiError('Нет связи с сервером. Проверьте интернет', 0, {});
+    setOffline(true);
+    throw new ApiError(method === 'GET' ? 'Нет связи с сервером. Проверьте интернет' : 'Нет связи с сервером — действие не выполнено. Введённое осталось на экране: повторите, когда появится интернет', 0, {});
   }
+  if (res.headers.get('X-From-Cache')) setOffline(true, res.headers.get('X-Cached-At')); else if (netBanner && res.ok) setOffline(false);
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && token) { store.set('token', null); state.me = null; render(); }
-  if (!res.ok) throw new ApiError(data.error || `Ошибка ${res.status}`, res.status, data);
+  if (res.status === 401 && token && !retried && !path.startsWith('/api/auth/') && state.me) {
+    if (await relogin()) return api(method, path, body, true);
+  }
+  if (res.status === 401 && token && !path.startsWith('/api/auth/')) { logout(); }
+  if (!res.ok) throw new ApiError(data.error || (res.status >= 500 ? 'Сервер не отвечает. Попробуйте через минуту — данные не потеряны' : `Ошибка ${res.status}`), res.status, data);
   return data;
 }
 const qs = (o) => new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== '')).toString();
@@ -206,6 +250,7 @@ document.addEventListener('keydown', (e) => {
 });
 
 async function boot() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { /* без офлайн-режима тоже работаем */ });
   if (store.get('token')) {
     try { state.me = await api('GET', '/api/me'); } catch { state.me = null; }
   }
@@ -354,7 +399,11 @@ function moreSheet(items, route) {
     h('span', { class: 'muted small' }, `${state.me.name} · ${ROLE[state.me.role]}`)]);
 }
 
-function logout() { store.set('token', null); state.me = null; location.hash = ''; render(); }
+function logout() {
+  store.set('token', null); state.me = null; location.hash = '';
+  try { caches.delete('fligel-api-v1'); } catch { /* нет кэша */ }
+  setOffline(false); render();
+}
 
 function switchProperty(id) {
   if (id === state.propertyId) return;
@@ -886,7 +935,7 @@ async function moveDialog(b, change, reload) {
     if (f.check_in.value !== b.check_in) payload.check_in = f.check_in.value;
     if (f.check_out.value !== b.check_out) payload.check_out = f.check_out.value;
     try {
-      await api('PATCH', `/api/bookings/${b.id}`, payload);
+      await api('PATCH', `/api/bookings/${b.id}`, { ...payload, expected_updated_at: b.updated_at });
       closeModal(); reload();
       toastUndo('Бронь перенесена', () => api('PATCH', `/api/bookings/${b.id}`,
         b.status === 'blocked' ? { room_id: b.room_id, check_in: b.check_in, check_out: b.check_out } : { room_id: b.room_id, check_in: b.check_in, check_out: b.check_out, total_price: b.total_price }), reload);
@@ -1634,7 +1683,7 @@ async function bookingDrawer(b, onSaved) {
     h('label', { class: 'field' }, h('span', {}, 'Источник'), f.source),
     planField,
     h('div', { class: 'summary' }, nightsEl, totalEl), breakdownEl,
-    isNew || status.value === 'blocked' ? null : moneyBlock(b, (m) => { b.total_price = m.total; b.paid_amount = m.paid; f.total_price.value = Math.round(Number(m.total)); priceTouched = true; updateTotal(); }));
+    isNew || status.value === 'blocked' ? null : moneyBlock(b, (m) => { b.total_price = m.total; b.paid_amount = m.paid; b.updated_at = m.updated_at; f.total_price.value = Math.round(Number(m.total)); priceTouched = true; updateTotal(); }));
   guestBox.style.display = status.value === 'blocked' ? 'none' : '';
   bindPhone(f.guest_phone);
   let hintTimer;
@@ -1679,7 +1728,7 @@ async function bookingDrawer(b, onSaved) {
     try {
       let created = null;
       if (isNew) created = await api('POST', '/api/bookings', payload);
-      else await api('PATCH', `/api/bookings/${b.id}`, payload);
+      else await api('PATCH', `/api/bookings/${b.id}`, { ...payload, expected_updated_at: b.updated_at });
       if (isNew && status.value !== 'blocked' && (f.guest_phone.value || f.guest_email.value)) offerConfirmation = created;
       if (isNew) clearDraft();
       toast(isNew ? (status.value === 'blocked' ? (extra.size ? 'Даты закрыты в нескольких номерах' : 'Даты закрыты') : (extra.size ? `Создано броней: ${extra.size + 1}` : 'Бронь создана')) : 'Изменения сохранены');

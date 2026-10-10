@@ -2484,5 +2484,59 @@ class BellAndAuditTests(Base):
         self.assertEqual(self.client.get("/api/audit?before=не-дата", headers=ctx["h"]).status_code, 422)
 
 
+class RobustnessTests(Base):
+    """Некрасивые данные и «две вкладки»: сервис не должен падать и терять чужие правки."""
+
+    def test_stale_tab_does_not_overwrite(self):
+        ctx = self.register("rob1@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], "2041-01-10", "2041-01-12", guest="Иван").json()
+        tab1 = b["updated_at"]
+        r = self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"notes": "из второй вкладки", "expected_updated_at": tab1})
+        self.assertEqual(r.status_code, 200, r.text)
+        stale = self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"notes": "затру чужое", "expected_updated_at": tab1})
+        self.assertEqual((stale.status_code, stale.json()["code"]), (409, "stale"))
+        self.assertEqual(self.client.get(f"/api/bookings/{b['id']}", headers=ctx["h"]).json()["notes"], "из второй вкладки")
+        fresh = self.client.get(f"/api/bookings/{b['id']}", headers=ctx["h"]).json()["updated_at"]
+        self.assertEqual(self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"notes": "ок", "expected_updated_at": fresh}).status_code, 200)
+        # без параметра — как раньше (старые клиенты и импорт)
+        self.assertEqual(self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"notes": "без проверки"}).status_code, 200)
+
+    def test_ugly_values(self):
+        ctx = self.register("rob2@example.ru", rooms=(("Стандарт 🛏️", 2, 0),))
+        room = ctx["rooms"][0]
+        name = "Очень" + "длинное" * 80 + " 👨‍👩‍👧‍👦 Ёжик <script>alert(1)</script>"
+        r = self.book(ctx, room, "2041-02-01", "2041-05-02", guest=name, total_price=0, notes="😀" * 3000)  # 90 ночей, цена 0, огромная заметка
+        self.assertEqual(r.status_code, 200, r.text)
+        got = r.json()
+        self.assertLessEqual(len(got["guest_name"]), 200)
+        self.assertEqual(float(got["total_price"]), 0.0)
+        board = self.client.get("/api/board?from=2041-02-01&days=120", headers=ctx["h"])
+        self.assertEqual(board.status_code, 200)
+        self.assertEqual(self.client.get("/api/bookings/export.csv?from=2041-01-01&to=2041-12-31", headers=ctx["h"]).status_code, 200)
+        self.assertEqual(self.client.get("/api/reports?from=2041-02-01&to=2041-06-01", headers=ctx["h"]).status_code, 200)
+        self.assertEqual(self.client.get("/api/guests/list?q=%F0%9F%91%A8", headers=ctx["h"]).status_code, 200)
+
+    def test_no_rooms_and_many_rooms(self):
+        ctx = self.register("rob3@example.ru", rooms=(("Стандарт", 1, 1000),))
+        for room in ctx["rooms"]:
+            self.assertEqual(self.client.delete(f"/api/rooms/{room['id']}", headers=ctx["h"]).status_code, 200)
+        for url in ("/api/board", "/api/today?summary=1", "/api/reports", "/api/housekeeping", "/api/landlord/report", "/api/guests/list", "/api/bookings/free-rooms?check_in=2041-06-01&check_out=2041-06-02"):
+            self.assertEqual(self.client.get(url, headers=ctx["h"]).status_code, 200, url)
+        big = self.register("rob3b@example.ru", rooms=(("Эконом", 200, 1500),))
+        self.assertEqual(len(big["rooms"]), 200)
+        t = time.time()
+        board = self.client.get("/api/board?from=2041-06-01&days=92", headers=big["h"])
+        self.assertEqual(board.status_code, 200)
+        self.assertLess(time.time() - t, 3.0)  # 200 номеров × 92 дня — не должно тормозить
+
+    def test_service_worker_route(self):
+        r = self.client.get("/sw.js")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("javascript", r.headers["content-type"])
+        self.assertEqual(r.headers["service-worker-allowed"], "/")
+        self.assertIn("no-cache", r.headers["cache-control"])
+        self.assertIn("fligel-api", r.text)
+
+
 if __name__ == "__main__":
     unittest.main()

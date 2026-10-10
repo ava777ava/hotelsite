@@ -49,7 +49,7 @@ def add_payment(conn, account_id, booking_id, user_id, amount: Decimal, kind="pa
 
 def money_state(conn, account_id, booking_id) -> dict:
     b = one(conn, "SELECT id, total_price, paid_amount, discount_amount, discount_reason, deposit_amount,"
-                  " deposit_status FROM bookings WHERE id = %s AND account_id = %s", (booking_id, account_id))
+                  " deposit_status, updated_at FROM bookings WHERE id = %s AND account_id = %s", (booking_id, account_id))
     if not b:
         raise ApiError(404, "Бронь не найдена")
     payments = all_(conn, "SELECT p.id, p.kind, p.amount, p.method, p.paid_on, p.note, p.created_at,"
@@ -60,7 +60,7 @@ def money_state(conn, account_id, booking_id) -> dict:
                           " WHERE booking_id = %s AND account_id = %s ORDER BY created_at", (booking_id, account_id))
     services_sum = sum((Decimal(s["price"]) * s["qty"] for s in services), Decimal("0"))
     total, paid = Decimal(b["total_price"]), Decimal(b["paid_amount"])
-    return {"payments": payments, "services": services, "services_sum": services_sum,
+    return {"payments": payments, "services": services, "services_sum": services_sum, "updated_at": b["updated_at"],
             "discount_amount": b["discount_amount"], "discount_reason": b["discount_reason"],
             "deposit_amount": b["deposit_amount"], "deposit_status": b["deposit_status"],
             "stay_price": total + Decimal(b["discount_amount"]) - services_sum,

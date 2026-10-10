@@ -45,6 +45,12 @@ def legal_page(name: str):
     return handler
 
 
+def service_worker(request: Request):
+    """Скрипт офлайн-режима. Лежит в корне сайта, чтобы управлять всем приложением; кэшировать его самого нельзя."""
+    return FileResponse(STATIC / "sw.js", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache", "Service-Worker-Allowed": "/"})
+
+
 def favicon(request: Request):
     return FileResponse(STATIC / "icons" / "icon.svg", media_type="image/svg+xml")
 
@@ -123,6 +129,7 @@ routes = [
     Route("/legal/terms", legal_page("terms")),
     Route("/health", health),
     Route("/favicon.ico", favicon),
+    Route("/sw.js", service_worker),
     Route("/robots.txt", robots),
     Route("/sitemap.xml", sitemap),
     Route("/manifest.webmanifest", manifest),

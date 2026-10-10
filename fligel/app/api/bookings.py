@@ -319,6 +319,16 @@ def update_booking(c: Ctx):
         b = one(conn, "SELECT * FROM bookings WHERE id = %s AND account_id = %s FOR UPDATE", (bid, c.account_id))
         if not b:
             raise ApiError(404, "Бронь не найдена")
+        expected = d.get("expected_updated_at")
+        if expected:
+            # защита от «двух вкладок»: если бронь успели изменить после того, как её открыли, не затираем чужие правки
+            try:
+                same = datetime.fromisoformat(str(expected).replace("Z", "+00:00")) == b["updated_at"]
+            except ValueError:
+                same = True
+            if not same:
+                raise ApiError(409, "Эту бронь только что изменили в другой вкладке или другой сотрудник. Закройте карточку и откройте заново, чтобы увидеть свежие данные",
+                               {"code": "stale"})
         new = dict(b)
         moving = any(k in d for k in ("check_in", "check_out", "room_id"))
         if moving and b["feed_id"] and (

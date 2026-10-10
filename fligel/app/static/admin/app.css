@@ -676,3 +676,23 @@ kbd { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; background: v
 .bell-item.unread { border-left: 3px solid var(--clay); padding-left: 10px; background: var(--clay-soft); }
 .audit-item { align-items: flex-start; } .audit-when { width: 96px; flex: none; }
 .brand .btn.icon { width: 30px; min-width: 30px; padding: 0; }
+
+/* нет связи / сессия истекла */
+.net-banner { position: fixed; top: 0; left: 0; right: 0; z-index: 90; background: var(--ochre-soft); color: var(--ochre-ink); text-align: center; padding: 8px 14px; font-size: 13px; border-bottom: 1px solid var(--ochre); padding-top: max(8px, env(safe-area-inset-top)); }
+.relogin-wrap { position: fixed; inset: 0; z-index: 95; background: rgba(28,36,32,.55); display: grid; place-items: center; padding: 16px; }
+.relogin { background: var(--surface); border-radius: 14px; padding: 22px; width: min(380px, 100%); box-shadow: var(--shadow-md); }
+.relogin h2 { margin-top: 0; }
+
+/* очень длинные имена и названия не должны раздвигать страницу */
+.main { overflow-wrap: anywhere; }
+.grid-2 > *, .stack > *, .card, .day-list .item > div, .kpis > *, .hk-card { min-width: 0; }
+.seg { max-width: 100%; }
+.seg button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .ttl, .b-side span { text-overflow: ellipsis; }
+.board, .board * { overflow-wrap: normal; }
+.b-side { overflow: hidden; }
+.b-side span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.brand-sub { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mobile-top .brand-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+.b-room .b-side > span:first-child, .b-type .b-side > span:last-child { flex: none; }
+.b-room .b-side .rt { flex: 1 1 0; min-width: 0; }
