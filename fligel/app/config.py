@@ -28,7 +28,7 @@ if hasattr(time, "tzset"):  # на Windows (запуск без Docker) tzset н
     time.tzset()
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://postgres@127.0.0.1:5432/fligel")
-SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-change-me")
+SECRET_KEY = os.environ.get("SECRET_KEY", "").strip() or "dev-secret-change-me"
 TOKEN_TTL_HOURS = int(os.environ.get("TOKEN_TTL_HOURS", "720"))
 # Публичный адрес сервиса: из него строятся ссылки iCal для площадок
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "http://localhost:8000").rstrip("/")

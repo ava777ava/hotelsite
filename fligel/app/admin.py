@@ -70,8 +70,8 @@ def reset_password(conn, email: str) -> str:
     if not user:
         raise SystemExit(f"Пользователь {email} не найден")
     password = secrets.token_urlsafe(9)
-    run(conn, "UPDATE users SET password_hash = %s, failed_attempts = 0, locked_until = NULL WHERE id = %s",
-        (hash_password(password), user["id"]))
+    run(conn, "UPDATE users SET password_hash = %s, failed_attempts = 0, locked_until = NULL, sessions_valid_from = now()"
+              " WHERE id = %s", (hash_password(password), user["id"]))
     return password
 
 

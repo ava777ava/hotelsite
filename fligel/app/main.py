@@ -105,8 +105,9 @@ def health(request: Request):
 
 @asynccontextmanager
 async def lifespan(app: Starlette):
-    if config.SECRET_KEY == "dev-secret-change-me" and not config.PUBLIC_BASE_URL.startswith("http://localhost"):
-        raise RuntimeError("Задайте SECRET_KEY в .env перед запуском на сервере")
+    if not config.PUBLIC_BASE_URL.startswith(("http://localhost", "http://127.0.0.1")) and (
+            config.SECRET_KEY == "dev-secret-change-me" or len(config.SECRET_KEY) < 24):
+        raise RuntimeError("Задайте SECRET_KEY в .env (длинная случайная строка, не короче 24 символов) перед запуском на сервере")
     if os.environ.get("AUTO_MIGRATE", "1") == "1":
         migrate()
     db.init_pool()

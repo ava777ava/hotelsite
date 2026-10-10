@@ -686,7 +686,10 @@ def set_rates(c: Ctx):
     if (end - start).days > 400:
         raise ApiError(422, "Слишком длинный период (максимум 400 дней)")
     weekdays = d.get("weekdays")
-    weekdays = set(int(w) for w in weekdays) if weekdays else set(range(7))
+    try:
+        weekdays = {int(w) for w in weekdays if 0 <= int(w) <= 6} if weekdays else set(range(7))
+    except (TypeError, ValueError):
+        raise ApiError(422, "Дни недели: нужны числа от 0 до 6")
     dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     dates = [x for x in dates if x.weekday() in weekdays]
     if d.get("dates"):

@@ -178,10 +178,12 @@ async function api(method, path, body, retried = false) {
   }
   if (res.headers.get('X-From-Cache')) setOffline(true, res.headers.get('X-Cached-At')); else if (netBanner && res.ok) setOffline(false);
   const data = await res.json().catch(() => ({}));
-  if (res.status === 401 && token && !retried && !path.startsWith('/api/auth/') && state.me) {
+  // 401 с полем (неверный текущий пароль и т. п.) — ошибка формы, а не конец сессии
+  const sessionLost = res.status === 401 && token && !data.field && !path.startsWith('/api/auth/');
+  if (sessionLost && !retried && state.me) {
     if (await relogin()) return api(method, path, body, true);
   }
-  if (res.status === 401 && token && !path.startsWith('/api/auth/')) { logout(); }
+  if (sessionLost) { logout(); }
   if (!res.ok) throw new ApiError(data.error || (res.status >= 500 ? 'Сервер не отвечает. Попробуйте через минуту — данные не потеряны' : `Ошибка ${res.status}`), res.status, data);
   return data;
 }
@@ -3626,6 +3628,7 @@ async function viewProfile(main) {
     e.preventDefault(); submit.disabled = true; err.style.display = 'none'; ok.style.display = 'none';
     try {
       const r = await api('POST', '/api/auth/change-password', { current_password: current.value, new_password: next.value });
+      if (r.token) store.set('token', r.token);
       ok.textContent = r.message; ok.style.display = 'block'; current.value = ''; next.value = '';
     } catch (ex) { err.textContent = ex.message; err.style.display = 'block'; } finally { submit.disabled = false; }
   } },

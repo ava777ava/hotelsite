@@ -53,6 +53,7 @@ else
 fi
 
 echo "==> Настраиваю nginx…"
+cp deploy/fligel_proxy.conf /etc/nginx/fligel_proxy.conf
 sed "s#booking.example.ru#$DOMAIN#g" deploy/nginx.conf > /etc/nginx/sites-available/fligel
 ln -sf /etc/nginx/sites-available/fligel /etc/nginx/sites-enabled/fligel
 rm -f /etc/nginx/sites-enabled/default

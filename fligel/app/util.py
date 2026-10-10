@@ -76,6 +76,8 @@ def parse_money(value: Any, label: str = "Сумма") -> Decimal:
         d = Decimal(re.sub(r"\s", "", str(value)).replace(",", "."))
     except InvalidOperation:
         raise ApiError(422, f"{label}: нужно число")
+    if not d.is_finite():
+        raise ApiError(422, f"{label}: нужно число")
     if d < 0:
         raise ApiError(422, f"{label} не может быть отрицательной")
     if d > MAX_MONEY:

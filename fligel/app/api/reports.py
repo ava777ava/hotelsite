@@ -64,7 +64,7 @@ def _shift_years(d: date, n: int) -> date:
 def _delta(cur, prev) -> float | None:
     if not prev:
         return None
-    return round(float((cur - prev) * 100 / prev), 1)
+    return round(float((cur - prev) * 100 / abs(prev)), 1)
 
 
 # ---------- вспомогательные выборки ----------

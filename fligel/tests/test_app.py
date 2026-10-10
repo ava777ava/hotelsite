@@ -16,7 +16,7 @@ TEST_DB = os.environ.get("TEST_DATABASE_URL", "postgresql://postgres@127.0.0.1:5
 os.environ["DATABASE_URL"] = TEST_DB
 os.environ["SYNC_ENABLED"] = "0"
 os.environ["PUBLIC_BASE_URL"] = "https://fligel.test"
-os.environ["SECRET_KEY"] = "test-secret"
+os.environ["SECRET_KEY"] = "test-secret-key-for-unit-tests-0123456789"
 os.environ["PUBLIC_BOOKINGS_PER_HOUR"] = "100000"  # лимиты защиты от спама проверяются отдельными тестами
 os.environ["RESET_REQUESTS_PER_HOUR"] = "100000"
 
@@ -2536,6 +2536,76 @@ class RobustnessTests(Base):
         self.assertEqual(r.headers["service-worker-allowed"], "/")
         self.assertIn("no-cache", r.headers["cache-control"])
         self.assertIn("fligel-api", r.text)
+
+
+class SecurityFollowUpTests(Base):
+    """Исправления по результатам код-ревью: NaN в суммах, завершение сессий после смены пароля, слабый SECRET_KEY."""
+
+    def test_nan_and_infinity_amounts_are_rejected(self):
+        ctx = self.register("sec1@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], "2042-01-10", "2042-01-12").json()
+        for bad in ("NaN", "Infinity", "-Infinity", "1e999", "sNaN"):
+            r = self.client.post(f"/api/bookings/{b['id']}/payments", headers=ctx["h"], json={"amount": bad})
+            self.assertEqual(r.status_code, 422, (bad, r.text))
+        r = self.client.post("/api/bookings/import", headers=ctx["h"], json={"csv": "Заезд;Выезд;Номер;Стоимость\n10.01.2042;12.01.2042;101;NaN\n11.01.2042;12.01.2042;102;1e999\n"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((r.json()["created"], r.json()["skipped"]), (0, 2))
+
+    def test_password_change_ends_other_sessions(self):
+        ctx = self.register("sec2@example.ru")
+        old = ctx["h"]
+        # второй «вход» с другого устройства: токен, выданный секундой раньше смены пароля
+        tok = self.client.post("/api/auth/login", json={"email": "sec2@example.ru", "password": "password123"}).json()["token"]
+        import jwt as _jwt
+        stale = _jwt.encode({**_jwt.decode(tok, options={"verify_signature": False}), "iat": int(time.time()) - 120}, config.SECRET_KEY, algorithm="HS256")
+        self.assertEqual(self.client.get("/api/me", headers={"Authorization": f"Bearer {stale}"}).status_code, 200)
+        r = self.client.post("/api/auth/change-password", headers=old, json={"current_password": "password123", "new_password": "brand-new-pass-1"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(self.client.get("/api/me", headers={"Authorization": f"Bearer {stale}"}).status_code, 401)  # старый вход закрыт
+        fresh = {"Authorization": f"Bearer {r.json()['token']}"}
+        self.assertEqual(self.client.get("/api/me", headers=fresh).status_code, 200)  # а этот — продолжает работать
+
+    def test_wrong_current_password_keeps_session(self):
+        ctx = self.register("sec3@example.ru")
+        r = self.client.post("/api/auth/change-password", headers=ctx["h"], json={"current_password": "wrong-one", "new_password": "brand-new-pass-1"})
+        self.assertEqual((r.status_code, r.json().get("field")), (401, "current_password"))  # клиент отличает это от конца сессии по полю
+        self.assertEqual(self.client.get("/api/me", headers=ctx["h"]).status_code, 200)
+
+    def test_weak_secret_refused_on_server(self):
+        from app import main as main_mod
+        old = (config.SECRET_KEY, config.PUBLIC_BASE_URL)
+        try:
+            config.PUBLIC_BASE_URL = "https://real.example.ru"
+            for weak in ("", "dev-secret-change-me", "short"):
+                config.SECRET_KEY = weak or "dev-secret-change-me"
+                if weak == "short":
+                    config.SECRET_KEY = "short"
+                with self.assertRaises(RuntimeError):
+                    import asyncio
+                    async def go():
+                        async with main_mod.lifespan(main_mod.app):
+                            pass
+                    asyncio.run(go())
+        finally:
+            config.SECRET_KEY, config.PUBLIC_BASE_URL = old
+
+    def test_stale_hold_not_overwritten_and_negative_delta(self):
+        from app.api.reports import _delta
+        from decimal import Decimal
+        self.assertEqual(_delta(Decimal(50), Decimal(-100)), 150.0)  # прибыль выросла со −100 до 50: плюс, а не минус
+        self.assertEqual(_delta(Decimal(-50), Decimal(100)), -150.0)
+        ctx = self.register("sec4@example.ru")
+        slug = ctx["prop"]["public_slug"]
+        self.client.patch(f"/api/properties/{ctx['prop']['id']}", headers=ctx["h"], json={"booking_enabled": True})
+        r = self.client.post(f"/api/public/{slug}/book", json={"check_in": "2042-03-01", "check_out": "2042-03-03", "guests": 1, "guest_name": "Пётр",
+            "guest_phone": "+7 900 123-45-67", "consent": True, "room_type_id": ctx["prop"]["room_types"][0]["id"]})
+        bid = r.json()["booking_id"]
+        self.client.patch(f"/api/bookings/{bid}", headers=ctx["h"], json={"status": "confirmed"})
+        with db.tx() as conn:
+            db.run(conn, "UPDATE bookings SET status = 'pending', hold_expires_at = now() - interval '1 hour' WHERE id = %s", (bid,))
+            db.run(conn, "UPDATE bookings SET status = 'confirmed' WHERE id = %s", (bid,))  # администратор подтвердил до прохода планировщика
+        sync.expire_holds()
+        self.assertEqual(self.client.get(f"/api/bookings/{bid}", headers=ctx["h"]).json()["status"], "confirmed")
 
 
 if __name__ == "__main__":

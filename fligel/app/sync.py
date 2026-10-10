@@ -295,13 +295,14 @@ def claim_due_feeds(limit: int = 20) -> list:
 def expire_holds() -> int:
     """Неподтверждённые заявки с сайта с истёкшим сроком (REQUEST_TTL_HOURS) освобождают номер."""
     with tx() as conn:
-        rows = all_(conn, "SELECT id, account_id, guest_name FROM bookings WHERE status = 'pending'"
-                          " AND hold_expires_at IS NOT NULL AND hold_expires_at < now()")
+        # одним запросом и с повторной проверкой статуса: заявку, которую администратор успел подтвердить
+        # за секунду до этого, трогать нельзя
+        rows = all_(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now(),"
+                          " notes = notes || ' [снято: заявка не подтверждена вовремя]'"
+                          " WHERE status = 'pending' AND hold_expires_at IS NOT NULL AND hold_expires_at < now()"
+                          " RETURNING id, account_id, guest_name")
         if not rows:
             return 0
-        run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now(),"
-                  " notes = notes || ' [снято: заявка не подтверждена вовремя]' WHERE id = ANY(%s::uuid[])",
-            ([r["id"] for r in rows],))
         for r in rows:
             booklog.log(conn, r["account_id"], r["id"], None, "cancelled", {"reason": "Заявка не подтверждена вовремя"})
             notify.send(conn, r["account_id"], "cancellation",
@@ -321,6 +322,22 @@ def run_once() -> int:
         except Exception:
             log.exception("Ошибка синхронизации календаря %s", fid)
     return len(ids)
+
+
+def run_once_exclusive() -> int:
+    """Каждый воркер сервера запускает свой планировщик; чтобы они не дублировали работу (дважды слали утренний
+    дайджест, дважды снимали просроченные заявки), проход выполняет тот, кто взял блокировку PostgreSQL."""
+    from . import db
+    with db.init_pool().connection() as conn:
+        if not conn.execute("SELECT pg_try_advisory_lock(724502) AS ok").fetchone()["ok"]:
+            conn.commit()
+            return 0
+        conn.commit()
+        try:
+            return run_once()
+        finally:
+            conn.execute("SELECT pg_advisory_unlock(724502)")
+            conn.commit()
 
 
 _last_tick_at: float | None = None
@@ -362,7 +379,7 @@ class Scheduler:
         log.info("Синхронизация календарей запущена, интервал %s мин", config.SYNC_INTERVAL_MINUTES)
         while not self._stop.is_set():
             try:
-                run_once()
+                run_once_exclusive()
             except Exception:
                 log.exception("Сбой планировщика синхронизации")
             _last_tick_at = time.monotonic()

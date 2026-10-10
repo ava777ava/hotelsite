@@ -143,8 +143,8 @@ def reset_password(c: Ctx):
                         " AND used_at IS NULL AND expires_at > now()", (token,))
         if not row:
             raise ApiError(422, "Ссылка недействительна или срок её действия истёк")
-        run(conn, "UPDATE users SET password_hash = %s, failed_attempts = 0, locked_until = NULL WHERE id = %s",
-            (hash_password(password), row["user_id"]))
+        run(conn, "UPDATE users SET password_hash = %s, failed_attempts = 0, locked_until = NULL,"
+                  " sessions_valid_from = now() WHERE id = %s", (hash_password(password), row["user_id"]))
         run(conn, "UPDATE password_resets SET used_at = now() WHERE id = %s", (row["id"],))
     return {"message": "Пароль изменён. Теперь можно войти с новым паролем."}
 
@@ -160,8 +160,10 @@ def change_password(c: Ctx):
                    (c.p.user_id, c.account_id))
         if not user or not verify_password(current, user["password_hash"]):
             raise ApiError(401, "Текущий пароль указан неверно", {"field": "current_password"})
-        run(conn, "UPDATE users SET password_hash = %s WHERE id = %s", (hash_password(new), c.p.user_id))
-    return {"message": "Пароль изменён."}
+        run(conn, "UPDATE users SET password_hash = %s, sessions_valid_from = now() WHERE id = %s", (hash_password(new), c.p.user_id))
+        role = one(conn, "SELECT role FROM users WHERE id = %s", (c.p.user_id,))["role"]
+    # остальные устройства выйдут; на этом — новый вход, чтобы человека не выбросило из приложения
+    return {"message": "Пароль изменён. На других устройствах потребуется войти заново.", "token": make_token(c.p.user_id, c.account_id, role)}
 
 
 TRIAL_DAYS = 14
@@ -479,7 +481,7 @@ def create_room(c: Ctx):
         if not rt:
             raise ApiError(404, "Категория не найдена")
         name = req_str(c.data, "name", "Номер комнаты", 50)
-        order = int(name) if name.isdigit() else 10000
+        order = int(name) if name.isascii() and name.isdecimal() and len(name) <= 9 else 10000
         return one(
             conn,
             "INSERT INTO rooms (account_id, property_id, room_type_id, name, sort_order, ical_token)"

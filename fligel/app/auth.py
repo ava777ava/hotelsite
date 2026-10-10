@@ -51,6 +51,7 @@ class Principal:
     user_id: str
     account_id: str
     role: str
+    iat: int = 0
 
     def require(self, min_role: str) -> None:
         if ROLES_ORDER[self.role] < ROLES_ORDER[min_role]:
@@ -67,7 +68,7 @@ def principal(request: Request, min_role: str = "housekeeper") -> Principal:
         raise ApiError(401, "Сессия истекла, войдите заново")
     except jwt.InvalidTokenError:
         raise ApiError(401, "Нужно войти в систему")
-    p = Principal(user_id=data["sub"], account_id=data["acc"], role=data["role"])
+    p = Principal(user_id=data["sub"], account_id=data["acc"], role=data["role"], iat=int(data.get("iat") or 0))
     p.require(min_role)
     return p
 
@@ -77,10 +78,12 @@ def verify_active(conn, p: Principal) -> None:
     сотрудника могли удалить, а аккаунт — приостановить уже после того, как токен выдан.
     Проверяем это на каждый запрос (не только при входе), иначе доступ можно отозвать
     только сменой SECRET_KEY — сразу у всех клиентов сразу."""
-    row = one(conn, "SELECT a.status FROM users u JOIN accounts a ON a.id = u.account_id"
+    row = one(conn, "SELECT a.status, u.sessions_valid_from FROM users u JOIN accounts a ON a.id = u.account_id"
                     " WHERE u.id = %s AND u.account_id = %s", (p.user_id, p.account_id))
     if not row:
         raise ApiError(401, "Нужно войти в систему")
+    if p.iat < int(row["sessions_valid_from"].timestamp()):
+        raise ApiError(401, "Пароль был изменён — войдите заново")
     if row["status"] != "active":
         raise ApiError(403, "Аккаунт приостановлен. Свяжитесь с поддержкой")
 

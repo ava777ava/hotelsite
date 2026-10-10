@@ -59,7 +59,7 @@ def parse_amount(raw: str) -> Decimal | None:
         d = Decimal(s)
     except InvalidOperation:
         return None
-    return d if d >= 0 else None
+    return d if d.is_finite() and 0 <= d < Decimal("1e9") else None
 
 
 def read_table(text: str) -> tuple[list[str], list[dict]]:
