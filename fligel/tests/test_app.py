@@ -1956,5 +1956,95 @@ class TariffTests(Base):
         self.assertEqual(sorted(k for k, v in rates.items() if v["price"] is not None), ["2034-09-05", "2034-09-12", "2034-09-19"])
 
 
+class GuestTests(Base):
+    """Раздел «Гости», чёрный список, шаблоны сообщений."""
+
+    def test_list_card_and_phone_formats(self):
+        ctx = self.register("guests1@example.ru")
+        r0, r1, r2 = ctx["rooms"][:3]
+        self.book(ctx, r0, "2035-01-10", "2035-01-12", guest="Иван Петров", guest_phone="+7 900 111-22-33", total_price=7000)
+        self.book(ctx, r1, "2035-02-10", "2035-02-13", guest="Иван П.", guest_phone="8 (900) 111-22-33", total_price=9000)
+        self.book(ctx, r2, "2035-03-10", "2035-03-11", guest="Анна", guest_phone="+7 911 000-00-00", total_price=3500)
+        lst = self.client.get("/api/guests/list", headers=ctx["h"]).json()
+        self.assertEqual(len(lst["items"]), 2)  # разные записи телефона — один гость
+        ivan = next(g for g in lst["items"] if g["visits"] == 2)
+        self.assertEqual((float(ivan["spent"]), int(ivan["nights"])), (16000.0, 5))
+        self.assertEqual(len(self.client.get("/api/guests/list?q=анна", headers=ctx["h"]).json()["items"]), 1)
+        self.assertEqual(len(self.client.get("/api/guests/list?q=9001112233", headers=ctx["h"]).json()["items"]), 1)
+        card = self.client.get("/api/guests/card?phone=%2B79001112233", headers=ctx["h"]).json()
+        self.assertEqual((card["visits"], card["returning"], len(card["stays"])), (2, True, 2))
+        self.assertEqual(self.client.get("/api/guests/list?sort=bad", headers=ctx["h"]).status_code, 422)
+        self.assertEqual(self.client.get("/api/guests/card?phone=12", headers=ctx["h"]).status_code, 422)
+
+    def test_profile_blacklist_and_flags(self):
+        ctx = self.register("guests2@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], "2035-05-10", "2035-05-14", guest="Олег", guest_phone="+7 922 333-44-55").json()
+        r = self.client.put("/api/guests/profile", headers=ctx["h"], json={"phone": "+7 922 333-44-55", "name": "Олег", "blacklisted": True})
+        self.assertEqual(r.status_code, 422)  # без причины нельзя
+        r = self.client.put("/api/guests/profile", headers=ctx["h"], json={
+            "phone": "89223334455", "name": "Олег", "tags": ["VIP", "vip", " с собакой "], "notes": "любит тишину",
+            "birthday": "1990-05-12", "blacklisted": True, "blacklist_reason": "Курил в номере"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["tags"], ["vip", "с собакой"])
+        chk = self.client.get("/api/guests/check?phone=%2B7+922+333-44-55", headers=ctx["h"]).json()
+        self.assertEqual((chk["blacklisted"], chk["blacklist_reason"], chk["visits"]), (True, "Курил в номере", 1))
+        board = self.client.get("/api/board?from=2035-05-01&days=30", headers=ctx["h"]).json()
+        self.assertEqual(board["guest_flags"][b["id"]], {"blacklisted": True, "birthday": "2035-05-12"})
+        self.assertEqual(len(self.client.get("/api/guests/list?q=vip", headers=ctx["h"]).json()["items"]), 1)
+        # сайт: заявка от гостя из чёрного списка создаётся, но с пометкой
+        slug = ctx["prop"]["public_slug"]
+        self.client.patch(f"/api/properties/{ctx['prop']['id']}", headers=ctx["h"], json={"booking_enabled": True})
+        r = self.client.post(f"/api/public/{slug}/book", json={
+            "check_in": "2035-06-01", "check_out": "2035-06-03", "guests": 1, "guest_name": "Олег", "guest_phone": "+7 922 333-44-55",
+            "consent": True, "room_type_id": ctx["prop"]["room_types"][0]["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        created = self.client.get(f"/api/bookings/{r.json()['booking_id']}", headers=ctx["h"]).json()
+        self.assertIn("ЧЁРНОМ СПИСКЕ", created["notes"])
+        # убрать из списка
+        self.client.put("/api/guests/profile", headers=ctx["h"], json={"phone": "89223334455", "blacklisted": False})
+        self.assertFalse(self.client.get("/api/guests/check?phone=89223334455", headers=ctx["h"]).json()["blacklisted"])
+
+    def test_templates_and_messages(self):
+        ctx = self.register("guests3@example.ru")
+        tpl = self.client.get("/api/message-templates", headers=ctx["h"]).json()
+        self.assertGreaterEqual(len(tpl["items"]), 5)
+        b = self.book(ctx, ctx["rooms"][0], "2035-07-10", "2035-07-13", guest="Мария Иванова", guest_email="m@example.ru",
+                      total_price=10500, paid_amount=2500).json()
+        r = self.client.post(f"/api/bookings/{b['id']}/message", headers=ctx["h"], json={"template_id": tpl["items"][0]["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        text = r.json()["text"]
+        self.assertIn("Мария", text)
+        self.assertNotIn("Иванова", text)
+        self.assertIn("8 000", text)  # сумма к оплате
+        self.assertNotIn("{", text)
+        r = self.client.post(f"/api/bookings/{b['id']}/message", headers=ctx["h"], json={"body": "{имя}, {срок}, {неизвестное}"})
+        self.assertEqual(r.json()["text"], "Мария, 3 ночи, {неизвестное}")
+        sent = []
+        orig = mail.send_or_log
+        mail.send_or_log = lambda to, subject, body: sent.append((to, subject, body))
+        try:
+            ok = self.client.post(f"/api/bookings/{b['id']}/message/email", headers=ctx["h"], json={"subject": "Бронь", "text": "Привет"})
+        finally:
+            mail.send_or_log = orig
+        self.assertEqual((ok.status_code, sent[0][0]), (200, "m@example.ru"))
+        nomail = self.book(ctx, ctx["rooms"][1], "2035-07-10", "2035-07-12", guest="Без почты").json()
+        self.assertEqual(self.client.post(f"/api/bookings/{nomail['id']}/message/email", headers=ctx["h"], json={"subject": "x", "text": "y"}).status_code, 422)
+        # свои шаблоны + изоляция
+        mine = self.client.post("/api/message-templates", headers=ctx["h"], json={"name": "Свой", "body": "Привет, {имя}"}).json()
+        other = self.register("guests3b@example.ru")
+        self.assertEqual(self.client.patch(f"/api/message-templates/{mine['id']}", headers=other["h"], json={"name": "x", "body": "y"}).status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/message-templates/{mine['id']}", headers=other["h"]).status_code, 404)
+        self.assertEqual(self.client.post(f"/api/bookings/{b['id']}/message", headers=other["h"], json={"body": "x"}).status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/message-templates/{mine['id']}", headers=ctx["h"]).status_code, 200)
+
+    def test_housekeeper_cannot_open_guests(self):
+        ctx = self.register("guests4@example.ru")
+        self.client.post("/api/users", headers=ctx["h"], json={"email": "hk4@example.ru", "name": "Горничная", "password": "password123", "role": "housekeeper"})
+        tok = self.client.post("/api/auth/login", json={"email": "hk4@example.ru", "password": "password123"}).json()["token"]
+        hh = {"Authorization": f"Bearer {tok}"}
+        for url in ("/api/guests/list", "/api/guests/card?phone=89001112233", "/api/message-templates"):
+            self.assertEqual(self.client.get(url, headers=hh).status_code, 403, url)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -16,6 +16,7 @@ from ..util import csv_safe, opt_str, parse_date, parse_int, parse_money, parse_
 from .base import Ctx, api
 from .common import selected_property
 from .tariffs import get_plan
+from .guests import BK_KEY, flags_for, phone_key
 from .money import DEPOSIT_STATUSES, METHODS, add_payment
 from .reports import SOURCE_LABELS
 
@@ -454,6 +455,7 @@ def board(c: Ctx):
         )
         conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
                         (c.account_id,))["n"]
+        flags = flags_for(conn, c.account_id, bookings)
     rate_map: dict = {}
     for r in rates:
         rate_map.setdefault(str(r["room_type_id"]), {})[r["date"].isoformat()] = {
@@ -463,7 +465,7 @@ def board(c: Ctx):
         t["rates"] = rate_map.get(str(t["id"]), {})
     days = [(start + timedelta(days=i)).isoformat() for i in range((end - start).days)]
     return {"property": prop, "from": start, "to": end, "days": days, "room_types": types,
-            "bookings": bookings, "open_conflicts": conflicts}
+            "bookings": bookings, "open_conflicts": conflicts, "guest_flags": flags}
 
 
 # ---------- цены ----------
@@ -576,9 +578,9 @@ def guest_history(c: Ctx):
             conn,
             f"SELECT {BOOKING_COLS}, r.name AS room_name, p.name AS property_name FROM bookings b"
             " JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
-            " WHERE b.account_id = %s AND b.guest_phone = %s AND b.status <> 'cancelled'"
+            " WHERE b.account_id = %s AND b.guest_phone <> '' AND " + BK_KEY + " = %s AND b.status <> 'cancelled'"
             " ORDER BY b.check_in DESC LIMIT 200",
-            (c.account_id, phone),
+            (c.account_id, phone_key(phone)),
         )
     return {
         "phone": phone,

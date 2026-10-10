@@ -12,6 +12,7 @@ from ..errors import ApiError
 from ..pricing import quote
 from ..util import opt_str, parse_date, parse_int, parse_uuid, req_str
 from .base import Ctx, api
+from .guests import phone_key
 from .tariffs import COLS as PLAN_COLS
 
 MAX_NIGHTS = 60
@@ -165,6 +166,12 @@ def create_request(c: Ctx):
         q = quote(conn, t, check_in, check_out, guests, plan)
         if not q.ok:
             raise ApiError(422, "На эти даты номер недоступен для онлайн-бронирования")
+        comment = opt_str(d, "comment", max_len=1000)
+        black = one(conn, "SELECT blacklist_reason FROM guest_profiles WHERE account_id = %s AND phone_key = %s AND blacklisted",
+                    (prop["account_id"], phone_key(phone)))
+        if black:
+            # заявку не отклоняем автоматически — решение за хозяином, но он увидит предупреждение сразу
+            comment = f"⚠ ГОСТЬ В ЧЁРНОМ СПИСКЕ: {black['blacklist_reason']}\n{comment}".strip()
         # Пробуем номера по очереди: ограничение в БД не даст занять номер дважды,
         # даже если два гостя бронируют одновременно
         for room in _free_rooms(conn, t["id"], check_in, check_out):
@@ -179,7 +186,7 @@ def create_request(c: Ctx):
                         " RETURNING id, check_in, check_out, total_price",
                         (prop["account_id"], prop["id"], room["id"], check_in, check_out, name, phone,
                          opt_str(d, "guest_email", max_len=200), guests, q.total,
-                         opt_str(d, "comment", max_len=1000), config.REQUEST_TTL_HOURS, config.REQUEST_TTL_HOURS,
+                         comment, config.REQUEST_TTL_HOURS, config.REQUEST_TTL_HOURS,
                          plan["id"] if plan else None, plan["name"] if plan else ""),
                     )
                 break
@@ -192,7 +199,7 @@ def create_request(c: Ctx):
                      "source": "direct"})
         telegram.notify(conn, prop["account_id"], "new_booking",
                         f"Новая заявка с сайта: {t['name']}, {check_in.strftime('%d.%m')}–"
-                        f"{check_out.strftime('%d.%m')}, {name}, {phone}.")
+                        f"{check_out.strftime('%d.%m')}, {name}, {phone}." + (" ⚠ Гость в чёрном списке!" if black else ""))
     _email_staff(prop, t, name, phone, check_in, check_out, q.total)
     guest_email = opt_str(d, "guest_email", max_len=200)
     if guest_email and "@" in guest_email:
