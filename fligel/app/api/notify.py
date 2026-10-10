@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from starlette.routing import Route
 
-from .. import config, maxbot, notify, telegram
+from .. import config, maxbot, notify, ratelimit, telegram
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..util import parse_uuid
@@ -79,6 +79,8 @@ def settings(c: Ctx):
 @api(public=True)
 def max_webhook(c: Ctx):
     """Сюда MAX присылает события бота («Начать» по ссылке привязки, сообщения). Секрет — в заголовке."""
+    if not ratelimit.allow(f"maxhook:{ratelimit.client_ip(c.request)}", 120, 60):
+        raise ApiError(429, "Слишком много запросов")
     if config.MAX_WEBHOOK_SECRET and c.request.headers.get("x-max-bot-api-secret", "") != config.MAX_WEBHOOK_SECRET:
         raise ApiError(403, "Неверный секрет вебхука")
     if not maxbot.enabled():

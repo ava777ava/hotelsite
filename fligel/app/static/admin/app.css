@@ -684,7 +684,7 @@ kbd { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; background: v
 .relogin h2 { margin-top: 0; }
 
 /* очень длинные имена и названия не должны раздвигать страницу */
-.main { overflow-wrap: anywhere; }
+.main { overflow-wrap: break-word; }
 .grid-2 > *, .stack > *, .card, .day-list .item > div, .kpis > *, .hk-card { min-width: 0; }
 .seg { max-width: 100%; }
 .seg button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

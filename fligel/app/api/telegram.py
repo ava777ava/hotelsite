@@ -2,7 +2,7 @@
 и приём вебхука от Telegram (когда сотрудник пишет боту «/start <код>»)."""
 from starlette.routing import Route
 
-from .. import config, telegram
+from .. import config, ratelimit, telegram
 from ..db import tx
 from ..errors import ApiError
 from .base import Ctx, api
@@ -58,6 +58,8 @@ def set_events(c: Ctx):
 def webhook(c: Ctx):
     """Сюда Telegram присылает обновления бота. Секрет проверяется заголовком, который
     Telegram возвращает нам же (задаётся при подключении вебхука — см. .env.example)."""
+    if not ratelimit.allow(f"tghook:{ratelimit.client_ip(c.request)}", 120, 60):
+        raise ApiError(429, "Слишком много запросов")
     if config.TELEGRAM_WEBHOOK_SECRET:
         got = c.request.headers.get("x-telegram-bot-api-secret-token", "")
         if got != config.TELEGRAM_WEBHOOK_SECRET:
