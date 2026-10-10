@@ -663,3 +663,5 @@ kbd { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; background: v
 .nights-chips { display: flex; gap: 6px; align-items: center; margin: -4px 0 12px; flex-wrap: wrap; }
 .nights-chips .chip { padding: 2px 10px; }
 .ref-line { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; font-size: 12.5px; }
+.toast { cursor: pointer; }
+.b-room:hover .b-side { background: var(--surface-2); } .b-room:hover .b-cell:not(.sel) { background-color: rgba(127,127,127,.05); }

@@ -89,7 +89,7 @@ const ago = (s) => {
 const loadingBox = () => h('div', { class: 'card' }, skeleton(5));
 
 function toast(msg, bad = false) {
-  const t = h('div', { class: 'toast' + (bad ? ' bad' : '') }, msg);
+  const t = h('div', { class: 'toast' + (bad ? ' bad' : ''), title: 'Нажмите, чтобы закрыть', onclick: () => t.remove() }, msg);
   document.getElementById('toasts').append(t);
   setTimeout(() => t.remove(), bad ? 5000 : 2800);
 }
@@ -1406,6 +1406,7 @@ async function bookingDrawer(b, onSaved) {
     rooms.map((r) => h('option', { value: r.id, selected: r.id === b.room_id }, `${r.name} · ${r.type}`)));
   f.check_in = h('input', { class: 'input', type: 'date', value: b.check_in || todayISO(), disabled: readOnly || imported, onchange: () => {
     if (f.check_out.value <= f.check_in.value) f.check_out.value = addDays(f.check_in.value, 1);
+    f.check_out.min = addDays(f.check_in.value, 1);
     requote();
   } });
   f.check_out = h('input', { class: 'input', type: 'date', value: b.check_out || addDays(b.check_in || todayISO(), 1), disabled: readOnly || imported, onchange: requote });
@@ -1608,7 +1609,7 @@ async function bookingDrawer(b, onSaved) {
     } catch (ex) { toast(ex.message, true); }
   };
   guestBox.append(
-    inp('guest_name', 'Гость', { autocomplete: 'off', placeholder: 'Имя и фамилия' }),
+    inp('guest_name', 'Гость', { autocomplete: 'off', autocapitalize: 'words', placeholder: 'Имя и фамилия' }),
     h('div', { class: 'row2' }, inp('guest_phone', 'Телефон', { type: 'tel', placeholder: '+7 900 000-00-00', autocomplete: 'off' }), inp('guest_email', 'Email', { type: 'email' })),
     guestHint,
     h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' } },
@@ -1634,6 +1635,7 @@ async function bookingDrawer(b, onSaved) {
   const checkGuest = async () => {
     guestHint.innerHTML = '';
     if (readOnly || phoneDigits(f.guest_phone.value).length < 10) return;
+    guestHint.append(h('div', { style: { marginBottom: '6px' } }, phoneActions(f.guest_phone.value)));
     try {
       const g = await api('GET', '/api/guests/check?' + qs({ phone: f.guest_phone.value }));
       if (!g.known) return;
@@ -1698,6 +1700,10 @@ async function bookingDrawer(b, onSaved) {
   openDrawer(title, body, readOnly ? null : [remove, h('span', { class: 'spacer' }), h('button', { class: 'btn foot-close', onclick: requestCloseDrawer }, 'Закрыть'), save],
     { guard: !readOnly, onDismiss: isNew ? () => true : undefined });
   if (isNew) { body.addEventListener('input', saveDraft); body.addEventListener('change', saveDraft); }
+  // Enter в обычном поле сохраняет бронь (в заметке и в блоке платежей — нет)
+  if (!readOnly) body.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.tagName === 'INPUT' && !e.target.closest('.money-box') && e.target.type !== 'checkbox') { e.preventDefault(); save.click(); }
+  });
   if (restored) {
     note.className = 'note'; note.style.display = '';
     note.append('Восстановлен черновик брони, который вы не успели сохранить. ', h('button', { type: 'button', class: 'link', onclick: () => { clearDraft(); closeDrawer(); bookingDrawer({}, onSaved); } }, 'Начать заново'));
@@ -1822,6 +1828,7 @@ async function viewToday(main) {
     dateInput,
     h('button', { class: 'btn icon', 'aria-label': 'Следующий день', onclick: () => { day = addDays(day, 1); dateInput.value = day; load(); } }, icon('right')),
     scopeSeg(scope, () => load()),
+    h('button', { class: 'btn', onclick: () => { day = todayISO(); dateInput.value = day; load(); } }, 'Сегодня'),
     h('button', { class: 'btn', onclick: () => lastData && printDaySheet(day, lastData) }, icon('print'), 'Печать')), content);
   const item = (b, kind) => {
     const due = Number(b.total_price) - Number(b.paid_amount);
