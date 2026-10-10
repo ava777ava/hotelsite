@@ -617,3 +617,16 @@ table.list tbody tr { transition: background .1s; }
 .or-line.sub { font-weight: 600; } .or-line.total { border-bottom: 0; font-size: 18px; padding-top: 12px; } .or-line.total b { color: var(--pine); }
 .print-only { display: none; }
 @media print { .print-only { display: block; margin-bottom: 14px; } .no-print { display: none !important; } }
+
+/* главная: требует внимания и итог месяца */
+.home-summary { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-bottom: 18px; }
+.alert-list { display: flex; flex-direction: column; gap: 6px; }
+.alert-item { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; text-decoration: none; color: var(--ink); background: var(--surface-2); border-left: 4px solid var(--border); }
+.alert-item.warn { background: var(--ochre-soft); border-left-color: var(--ochre); } .alert-item.bad { background: var(--clay-soft); border-left-color: var(--clay); }
+.alert-item small { display: block; color: var(--muted); font-size: 12px; } .alert-item b { font-variant-numeric: tabular-nums; }
+.month-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.month-grid > div { display: flex; flex-direction: column; } .month-grid b { font-size: 18px; font-variant-numeric: tabular-nums; }
+.month-grid b.pos { color: var(--pine); } .month-grid b.neg { color: var(--clay); }
+@media (max-width: 860px) { .home-summary { grid-template-columns: 1fr; } }
+.free-box { margin: -4px 0 12px; }
+.onboard-next { margin: 4px 0 10px; width: 100%; justify-content: center; } @media (min-width: 861px) { .onboard-next { width: auto; } }

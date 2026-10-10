@@ -152,9 +152,10 @@ const ROUTES = {
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
 const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
 const RANK = { landlord: -1, housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['ownerreport', 'board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'help', 'profile'];
+const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'help', 'profile'];
+const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
-const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || 'board'; const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
+const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 
 window.addEventListener('hashchange', () => render());
 
@@ -259,7 +260,7 @@ function guestSearchDrawer() {
 
 function layout(route, main) {
   const visible = Object.entries(ROUTES).filter(([, d]) => routeVisible(d));
-  if (state.me.role === 'landlord') visible.sort((a, b2) => MOBILE_ORDER.indexOf(a[0]) - MOBILE_ORDER.indexOf(b2[0]));
+  if (state.me.role === 'landlord') visible.sort((a, b2) => LANDLORD_ORDER.indexOf(a[0]) - LANDLORD_ORDER.indexOf(b2[0]));
   const BADGE = { bookings: 'requests', channels: 'conflicts' };
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
     BADGE[key] ? h('span', { class: 'badge', 'data-badge': BADGE[key], style: { display: state[BADGE[key]] ? '' : 'none' } }, state[BADGE[key]] || 0) : null);
@@ -267,7 +268,7 @@ function layout(route, main) {
   const sideSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { color: '#C3CCC0' }, onclick: guestSearchDrawer }, icon('search')) : null;
   const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { marginLeft: 'auto', color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
   // На телефоне в нижней панели помещается 5 пунктов: четыре главных и «Ещё» со всеми остальными разделами.
-  const ordered = MOBILE_ORDER.map((k) => visible.find(([v]) => v === k)).filter(Boolean);
+  const ordered = (state.me.role === 'landlord' ? LANDLORD_ORDER : MOBILE_ORDER).map((k) => visible.find(([v]) => v === k)).filter(Boolean);
   const mainItems = ordered.length <= 5 ? ordered : ordered.slice(0, 4);
   const rest = ordered.slice(mainItems.length);
   const moreBtn = rest.length ? h('button', { class: 'more-btn' + (rest.some(([k]) => k === route) ? ' active' : ''), onclick: () => moreSheet(rest, route) },
@@ -369,7 +370,7 @@ function viewAuth() {
           const res = await api('POST', mode === 'login' ? '/api/auth/login' : '/api/auth/register', payload);
           store.set('token', res.token);
           state.me = await api('GET', '/api/me');
-          location.hash = '#/board';
+          location.hash = '#/' + currentRoute();
           render();
         } catch (ex) {
           err.textContent = ex.message; err.style.display = 'block';
@@ -523,12 +524,14 @@ async function drawOnboarding(box) {
   try { o = await api('GET', '/api/onboarding'); } catch { return; }
   if (o.done >= o.total) return;
   const bookingUrl = o.booking_page_slug ? `${location.origin}/book/${o.booking_page_slug}` : null;
+  const next = o.steps.find((st) => !st.done);
   box.append(h('div', { class: 'card card-pad onboard' },
     h('div', { class: 'onboard-head' }, h('div', {}, h('h3', {}, 'Быстрый старт'), h('div', { class: 'muted small' }, `Настроено ${o.done} из ${o.total} — так сервис начнёт приносить пользу сразу`)),
       h('button', { class: 'btn small ghost', onclick: () => { store.set('onboardHidden', '1'); box.innerHTML = ''; } }, 'Скрыть')),
     h('div', { class: 'bar-h', style: { margin: '10px 0 12px' } }, h('i', { style: { width: `${(o.done / o.total) * 100}%`, background: 'var(--pine)' } })),
-    h('button', { class: 'btn small onboard-toggle', onclick: (e) => { const el = e.target.parentNode.querySelector('.onboard-steps'); el.classList.toggle('open'); e.target.textContent = el.classList.contains('open') ? 'Свернуть шаги' : 'Показать шаги'; } }, 'Показать шаги'),
-    h('div', { class: 'onboard-steps' }, o.steps.map((st) => h('a', { class: 'onboard-step' + (st.done ? ' done' : ''), href: `#/${st.route}` },
+    next ? h('a', { class: 'btn primary onboard-next', href: `#/${next.route}` }, `Дальше: ${next.title}`, icon('right')) : null,
+    h('button', { class: 'btn small onboard-toggle', onclick: (e) => { const el = e.target.parentNode.querySelector('.onboard-steps'); el.classList.toggle('open'); e.target.textContent = el.classList.contains('open') ? 'Свернуть шаги' : 'Все шаги'; } }, o.done <= 2 ? 'Свернуть шаги' : 'Все шаги'),
+    h('div', { class: 'onboard-steps' + (o.done <= 2 ? ' open' : '') }, o.steps.map((st) => h('a', { class: 'onboard-step' + (st.done ? ' done' : ''), href: `#/${st.route}` },
       h('span', { class: 'chk' }, st.done ? '✓' : ''), h('span', {}, st.title)))),
     bookingUrl ? h('div', { class: 'muted small', style: { marginTop: '10px' } }, 'Ваша страница бронирования для гостей: ', h('a', { href: bookingUrl, target: '_blank', rel: 'noopener' }, bookingUrl)) : null));
 }
@@ -1115,6 +1118,13 @@ async function messageDialog(b) {
     h('a', { class: 'btn', target: '_blank', rel: 'noopener', href: `https://t.me/share/url?${qs({ url: ctx.share_url || location.origin, text: text.value })}` }, 'В Telegram'), mail]);
 }
 
+// После создания брони по телефону — сразу предложить отправить гостю подтверждение
+function offerSendConfirmation(created) {
+  openModal('Бронь создана', h('div', {}, h('p', { style: { marginTop: 0 } }, 'Отправить гостю подтверждение? Подставим даты, цену и адрес из шаблона.')),
+    [h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Позже'), h('span', { class: 'spacer' }),
+      h('button', { class: 'btn primary', onclick: () => { closeModal(); messageDialog(created); } }, 'Написать гостю')]);
+}
+
 // Переселение посреди проживания: до выбранной даты гость остаётся в прежнем номере, дальше — в новом
 function relocateDialog(b, rooms, onSaved) {
   const today = todayISO();
@@ -1286,6 +1296,7 @@ async function bookingDrawer(b, onSaved) {
   const totalEl = h('b');
   const nightsEl = h('span', { class: 'muted' });
   const breakdownEl = h('div', { class: 'muted small breakdown' });
+  const freeBox = h('div', { class: 'free-box', style: { display: 'none' } });
 
   const inp = (key, label, attrs = {}) => h('label', { class: 'field' }, h('span', {}, label),
     f[key] = h('input', { class: 'input', value: b[key] ?? '', disabled: readOnly, ...attrs }));
@@ -1334,6 +1345,7 @@ async function bookingDrawer(b, onSaved) {
       if (!f.check_in.value || !f.check_out.value || f.check_out.value <= f.check_in.value) return;
       try {
         await loadPlans();
+        loadFree();
         const q = await api('GET', '/api/bookings/quote?' + qs({ room_id: f.room_id.value, check_in: f.check_in.value, check_out: f.check_out.value, exclude: b.id,
           guests: f.guests_count?.value || 1, rate_plan_id: f.rate_plan_id.value }));
         nightsEl.textContent = `${q.nights} ${nightsWord(q.nights)}, ${fmtDate(f.check_in.value)} — ${fmtDate(f.check_out.value)}`;
@@ -1351,9 +1363,30 @@ async function bookingDrawer(b, onSaved) {
       } catch { /* покажем при сохранении */ }
     }, 200);
   }
+  // Свободные номера на выбранные даты: удобно, когда гость звонит и спрашивает «что есть»
+  let freeSeq = 0;
+  async function loadFree() {
+    if (readOnly || imported || status.value === 'blocked' || (!isNew && b.status === 'cancelled')) { freeBox.style.display = 'none'; return; }
+    const seq = ++freeSeq;
+    try {
+      const r = await api('GET', '/api/bookings/free-rooms?' + qs({ property_id: state.propertyId, check_in: f.check_in.value, check_out: f.check_out.value, guests: f.guests_count?.value || 1, exclude: b.id }));
+      if (seq !== freeSeq) return;
+      freeBox.innerHTML = '';
+      const rows = r.types.filter((t) => t.rooms.length);
+      if (!rows.length) { freeBox.append(h('div', { class: 'note bad' }, 'На эти даты свободных номеров нет. Попробуйте сдвинуть даты.')); freeBox.style.display = ''; return; }
+      freeBox.append(h('div', { class: 'muted small', style: { marginBottom: '4px' } }, 'Свободны на эти даты (нажмите, чтобы выбрать):'),
+        ...rows.map((t) => h('div', { class: 'type-filter', style: { margin: '0 0 4px' } },
+          h('span', { class: 'small', style: { minWidth: '88px', fontWeight: 600 } }, t.type, !t.fits ? h('small', { class: 'muted' }, ` до ${t.capacity}`) : null),
+          ...t.rooms.map((rm) => h('button', { type: 'button', class: 'chip' + (rm.id === f.room_id.value ? ' on' : ''), disabled: readOnly,
+            onclick: () => { f.room_id.value = rm.id; priceTouched = !isNew; requote(); } }, rm.name)),
+          h('span', { class: 'muted small' }, fmtMoney(t.price)))));
+      freeBox.style.display = '';
+    } catch { freeBox.style.display = 'none'; }
+  }
   const updateTotal = () => {
     const total = Number(f.total_price.value || 0); const paid = Number(f.paid_amount ? f.paid_amount.value || 0 : b.paid_amount || 0);
     totalEl.textContent = fmtMoney(total);
+    const pm = document.querySelector('.drawer [data-prepay]'); if (pm) pm.style.display = paid > 0 ? '' : 'none';
     totalEl.title = paid ? `Оплачено ${fmtMoney(paid)}, к оплате ${fmtMoney(total - paid)}` : '';
   };
 
@@ -1406,6 +1439,7 @@ async function bookingDrawer(b, onSaved) {
     h('label', { class: 'field' }, h('span', {}, 'Номер'), f.room_id),
     extraToggle, extraBox, extraHint,
     h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Заезд'), f.check_in), h('label', { class: 'field' }, h('span', {}, 'Выезд'), f.check_out)),
+    freeBox,
     groupBox,
     guestBox,
     h('label', { class: 'field' }, h('span', {}, 'Комментарий'), f.notes));
@@ -1484,6 +1518,7 @@ async function bookingDrawer(b, onSaved) {
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1, oninput: () => requote() }),
       inp('total_price', 'Стоимость, ₽', { type: 'number', min: 0, value: b.total_price != null ? Math.round(b.total_price) : '', oninput: () => { priceTouched = true; updateTotal(); } }),
       isNew ? inp('paid_amount', 'Предоплата, ₽', { type: 'number', min: 0, value: 0, oninput: updateTotal }) : h('div')),
+    isNew ? h('label', { class: 'field', style: { display: 'none' }, 'data-prepay': '1' }, h('span', {}, 'Как оплачена предоплата'), f.pay_method = h('select', { class: 'input' }, Object.entries(PAY_METHOD).map(([k, l]) => h('option', { value: k }, l)))) : null,
     h('label', { class: 'field' }, h('span', {}, 'Источник'), f.source),
     planField,
     h('div', { class: 'summary' }, nightsEl, totalEl), breakdownEl,
@@ -1513,6 +1548,7 @@ async function bookingDrawer(b, onSaved) {
     body.append(h('button', { type: 'button', class: 'btn small ghost', onclick: showChangeLog }, 'История изменений'), changeLogBox);
   }
 
+  let offerConfirmation = null;
   const save = h('button', { class: 'btn primary', onclick: async () => {
     save.disabled = true;
     const payload = {
@@ -1523,15 +1559,18 @@ async function bookingDrawer(b, onSaved) {
       guest_name: f.guest_name.value, guest_phone: f.guest_phone.value, guest_email: f.guest_email.value,
       guests_count: f.guests_count.value || 1, total_price: f.total_price.value, source: f.source.value,
     });
-    if (isNew && f.paid_amount) payload.paid_amount = f.paid_amount.value || 0;
+    if (isNew && f.paid_amount) { payload.paid_amount = f.paid_amount.value || 0; payload.payment_method = f.pay_method.value; }
     if (isNew && f.rate_plan_id.value && status.value !== 'blocked') payload.rate_plan_id = f.rate_plan_id.value;
     if (isNew && extra.size) payload.extra_room_ids = [...extra];
     if (imported) { delete payload.room_id; delete payload.check_in; delete payload.check_out; delete payload.source; }
     try {
-      if (isNew) await api('POST', '/api/bookings', payload);
+      let created = null;
+      if (isNew) created = await api('POST', '/api/bookings', payload);
       else await api('PATCH', `/api/bookings/${b.id}`, payload);
+      if (isNew && status.value !== 'blocked' && (f.guest_phone.value || f.guest_email.value)) offerConfirmation = created;
       toast(isNew ? (status.value === 'blocked' ? (extra.size ? 'Даты закрыты в нескольких номерах' : 'Даты закрыты') : (extra.size ? `Создано броней: ${extra.size + 1}` : 'Бронь создана')) : 'Изменения сохранены');
       closeDrawer(); onSaved ? onSaved() : render();
+      if (offerConfirmation) offerSendConfirmation(offerConfirmation);
     } catch (ex) {
       note.className = 'note bad'; note.textContent = ex.message; note.style.display = '';
       if (ex.data?.field && f[ex.data.field]) f[ex.data.field].classList.add('invalid');
@@ -1697,12 +1736,13 @@ async function viewToday(main) {
     list.length ? h('div', { class: 'day-list' }, list.map((b) => item(b, kind))) : h('div', { class: 'empty' }, emptyText));
   const load = async () => {
     try {
-      const d = await api('GET', '/api/today?' + qs({ date: day, property_id: scope.value === 'current' ? state.propertyId : undefined }));
+      const d = await api('GET', '/api/today?' + qs({ date: day, property_id: scope.value === 'current' ? state.propertyId : undefined, summary: can('manager') && day === todayISO() ? 1 : undefined }));
       lastData = d;
       content.innerHTML = '';
       const dueToday = [...d.arrivals, ...d.departures].reduce((sum, b) => sum + Math.max(Number(b.total_price) - Number(b.paid_amount), 0), 0);
       content.append(
         h('p', { class: 'muted', style: { marginTop: '-6px' } }, `${fmtDate(day)}, ${WD[parseISO(day).getDay()].toLowerCase()}`),
+        d.summary ? homeSummary(d.summary) : '',
         h('div', { class: 'kpis' },
           kpiCard('Заезды', String(d.arrivals.length)), kpiCard('Выезды', String(d.departures.length)),
           kpiCard('Проживают', String(d.staying.length)),
@@ -1717,6 +1757,29 @@ async function viewToday(main) {
   };
   load();
   autoRefresh(load);
+}
+
+// Главное за минуту: что требует внимания и итог месяца на сегодня (вверху страницы «Сегодня» у владельца и администратора)
+function homeSummary(sm) {
+  const a = sm.alerts, m = sm.month;
+  const items = [
+    a.requests ? ['Заявки с сайта ждут ответа', `${a.requests}`, '#/bookings', 'warn'] : null,
+    a.conflicts ? ['Конфликты с площадок', `${a.conflicts}`, '#/channels', 'bad'] : null,
+    a.debt_count ? ['Гости должны', fmtMoney(a.debt_amount), '#/bookings', 'warn', `${a.debt_count} ${plural(a.debt_count, ['бронь', 'брони', 'броней'])}`] : null,
+    a.repairs ? ['Номера в ремонте', `${a.repairs}`, '#/cleaning', 'bad'] : null,
+  ].filter(Boolean);
+  const month = MONTHS_NOM[parseISO(m.from).getMonth()];
+  return h('div', { class: 'home-summary' },
+    h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '10px' } }, 'Требует внимания'),
+      items.length ? h('div', { class: 'alert-list' }, items.map(([t, v, href, cls, sub]) => h('a', { href, class: `alert-item ${cls}` }, h('span', {}, t, sub ? h('small', {}, sub) : null), h('b', {}, v))))
+        : h('div', { class: 'muted' }, 'Всё спокойно: заявок, конфликтов, долгов и поломок нет.')),
+    h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '10px' } }, `${month}: итог на сегодня`),
+      h('div', { class: 'month-grid' },
+        h('div', {}, h('span', { class: 'muted small' }, 'Выручка'), h('b', {}, fmtMoney(m.revenue))),
+        h('div', {}, h('span', { class: 'muted small' }, 'Расходы'), h('b', {}, fmtMoney(m.expenses))),
+        h('div', {}, h('span', { class: 'muted small' }, 'Прибыль'), h('b', { class: Number(m.profit) < 0 ? 'neg' : 'pos' }, fmtMoney(m.profit))),
+        h('div', {}, h('span', { class: 'muted small' }, 'Загрузка'), h('b', {}, `${m.occupancy}%`))),
+      h('a', { href: '#/stats', class: 'small', style: { display: 'inline-block', marginTop: '8px' } }, 'Подробнее в отчётах →')));
 }
 
 // ---------- печатный лист ----------

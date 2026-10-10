@@ -2098,6 +2098,22 @@ class HousekeepingTests(Base):
         row = next(x for x in self.hk(ctx)["rooms"] if x["id"] == room["id"])
         self.assertEqual((row["status"], row["hk_note"]), ("dirty", ""))
 
+    def test_housekeeper_does_not_see_contacts_or_money(self):
+        ctx = self.register("hk4@example.ru", rooms=(("Стандарт", 2, 3500),))
+        hh, _ = self.staff(ctx, "hk4maid@example.ru")
+        today = date.today()
+        self.book(ctx, ctx["rooms"][0], today.isoformat(), (today + timedelta(days=2)).isoformat(), guest="Иван Тест", guest_phone="+7 900 111-22-33",
+                  guest_email="i@example.ru", total_price=7000, paid_amount=2000, notes="Поздний заезд")
+        for url in (f"/api/board?from={today.isoformat()}&days=5", "/api/today"):
+            data = self.client.get(url, headers=hh).json()
+            rows = data["bookings"] if "bookings" in data else data["arrivals"]
+            self.assertEqual(len(rows), 1)
+            self.assertEqual((rows[0]["guest_phone"], rows[0]["guest_email"], float(rows[0]["total_price"]), float(rows[0]["paid_amount"])), ("", "", 0.0, 0.0))
+            self.assertEqual((rows[0]["guest_name"], rows[0]["notes"]), ("Иван Тест", "Поздний заезд"))  # имя и заметка нужны в работе
+        # у администратора всё на месте
+        row = self.client.get(f"/api/board?from={today.isoformat()}&days=5", headers=ctx["h"]).json()["bookings"][0]
+        self.assertEqual((row["guest_phone"], float(row["paid_amount"])), ("+7 900 111-22-33", 2000.0))
+
     def test_assignment_and_room_note(self):
         ctx = self.register("hk3@example.ru", rooms=(("Стандарт", 3, 3500),))
         hh, hid = self.staff(ctx, "hk3maid@example.ru")
@@ -2266,6 +2282,26 @@ class LandlordTests(Base):
         self.client.post("/api/users", headers=a["h"], json={"email": "ll3hk@example.ru", "name": "Горничная", "password": "password123", "role": "housekeeper"})
         tok = self.client.post("/api/auth/login", json={"email": "ll3hk@example.ru", "password": "password123"}).json()["token"]
         self.assertEqual(self.client.get("/api/landlord/report", headers={"Authorization": f"Bearer {tok}"}).status_code, 403)
+
+
+class FreeRoomsTests(Base):
+    def test_free_rooms_for_dates(self):
+        ctx = self.register("free1@example.ru", rooms=(("Стандарт", 3, 3500), ("Делюкс", 2, 5500)))
+        std = [r for r in ctx["rooms"]][:3]
+        self.book(ctx, std[0], "2038-01-10", "2038-01-13")
+        r = self.client.get("/api/bookings/free-rooms?check_in=2038-01-11&check_out=2038-01-12&guests=2", headers=ctx["h"])
+        self.assertEqual(r.status_code, 200, r.text)
+        types = {t["type"]: t for t in r.json()["types"]}
+        self.assertEqual([x["name"] for x in types["Стандарт"]["rooms"]], [std[1]["name"], std[2]["name"]])
+        self.assertEqual((len(types["Делюкс"]["rooms"]), float(types["Делюкс"]["price"])), (2, 5500.0))
+        # при редактировании брони сам номер не считается занятым
+        b = self.client.get("/api/board?from=2038-01-01&days=30", headers=ctx["h"]).json()["bookings"][0]
+        r = self.client.get(f"/api/bookings/free-rooms?check_in=2038-01-11&check_out=2038-01-12&exclude={b['id']}", headers=ctx["h"]).json()
+        self.assertEqual(len({x["name"] for x in r["types"][0]["rooms"]}), 3)
+        self.assertEqual(self.client.get("/api/bookings/free-rooms?check_in=2038-01-12&check_out=2038-01-11", headers=ctx["h"]).status_code, 422)
+        other = self.register("free1b@example.ru")
+        r = self.client.get("/api/bookings/free-rooms?check_in=2038-01-11&check_out=2038-01-12", headers=other["h"]).json()
+        self.assertEqual(sum(len(t["rooms"]) for t in r["types"]), 12)  # у другого аккаунта своя картина
 
 
 if __name__ == "__main__":

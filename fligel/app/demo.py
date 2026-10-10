@@ -84,14 +84,15 @@ def main() -> None:
                 d += timedelta(days=rnd.randint(0, 3))
                 nights = rnd.choice([1, 2, 2, 3, 3, 4, 5, 7])
                 src = rnd.choice(sources)
-                status = "pending" if src == "direct" and rnd.random() < 0.5 else "confirmed"
+                # заявки с сайта «висят» только у будущих заездов — старые снимаются сами через REQUEST_TTL_HOURS
+                status = "pending" if src == "direct" and d >= today and rnd.random() < 0.5 else "confirmed"
                 guest = rnd.choice(GUESTS)
                 total = price * nights
                 run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source,"
                           " guest_name, guest_phone, guests_count, total_price, paid_amount)"
                           " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (acc, prop, rid, d, d + timedelta(days=nights), status, src, guest, guest_phones[guest],
-                     rnd.choice([1, 2, 2]), total, total if status == "confirmed" and rnd.random() < 0.6 else 0))
+                     rnd.choice([1, 2, 2]), total, total if status == "confirmed" and (d + timedelta(days=nights) <= today or rnd.random() < 0.6) else 0))
                 d += timedelta(days=nights)
         # ремонт в одном номере
         run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, notes)"
@@ -118,14 +119,15 @@ def main() -> None:
                 d += timedelta(days=rnd.randint(0, 3))
                 nights = rnd.choice([1, 2, 2, 3, 4])
                 src = rnd.choice(sources)
-                status = "pending" if src == "direct" and rnd.random() < 0.5 else "confirmed"
+                # заявки с сайта «висят» только у будущих заездов — старые снимаются сами через REQUEST_TTL_HOURS
+                status = "pending" if src == "direct" and d >= today and rnd.random() < 0.5 else "confirmed"
                 guest = rnd.choice(GUESTS)
                 total = price * nights
                 run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source,"
                           " guest_name, guest_phone, guests_count, total_price, paid_amount)"
                           " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (acc, prop2, rid, d, d + timedelta(days=nights), status, src, guest, guest_phones[guest],
-                     rnd.choice([1, 2]), total, total if status == "confirmed" and rnd.random() < 0.6 else 0))
+                     rnd.choice([1, 2]), total, total if status == "confirmed" and (d + timedelta(days=nights) <= today or rnd.random() < 0.6) else 0))
                 d += timedelta(days=nights)
 
         # расходы за последние 12 месяцев по разным категориям

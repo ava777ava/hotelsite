@@ -196,18 +196,29 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
       <div style="color:var(--muted)">${fmtDate(d.check_in)} — ${fmtDate(d.check_out)}, ${o.nights} ${nightsWord(o.nights)}, гостей: ${d.guests}</div>
       <form id="bf"><div class="grid2">
         <label>Имя и фамилия<input class="input" name="guest_name" autocomplete="name" required></label>
-        <label>Телефон<input class="input" name="guest_phone" type="tel" autocomplete="tel" placeholder="+7" required></label>
+        <label>Телефон<input class="input" name="guest_phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 900 000-00-00" required></label>
         <label class="full">Email (необязательно)<input class="input" name="guest_email" type="email" autocomplete="email"></label>
         <label class="full">Пожелания (необязательно)<textarea class="input" name="comment" placeholder="Время заезда, детская кроватка…"></textarea></label>
       </div>
       <div class="hp" aria-hidden="true"><label>Не заполняйте это поле<input name="website" tabindex="-1" autocomplete="off"></label></div>
-      <label class="consent"><input type="checkbox" name="consent" required> Я согласен на <a href="/legal/pdn-consent" target="_blank" rel="noopener">обработку персональных данных</a> для оформления бронирования и принимаю <a href="/legal/terms" target="_blank" rel="noopener">условия использования сервиса</a></label>
+      <label class="consent"><input type="checkbox" name="consent" required><span>Я согласен на <a href="/legal/pdn-consent" target="_blank" rel="noopener">обработку персональных данных</a> для оформления бронирования и принимаю <a href="/legal/terms" target="_blank" rel="noopener">условия использования сервиса</a></span></label>
       <div class="total"><span>Итого</span><b>${money(o.total)}</b></div>
       <div id="err"></div>
       <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" type="submit">Отправить заявку</button><button class="btn ghost" type="button" id="back">Выбрать другой номер</button></div>
       </form></div>`;
     $('back').addEventListener('click', search);
     const f = $('bf');
+    // телефон подставляется в виде +7 900 123-45-67 (только если курсор в конце — чтобы не мешать правке)
+    f.guest_phone.addEventListener('input', () => {
+      if (f.guest_phone.selectionStart !== f.guest_phone.value.length) return;
+      const raw = f.guest_phone.value.trim(); let d = raw.replace(/\D/g, '');
+      if (!d) { f.guest_phone.value = raw.startsWith('+') ? '+' : ''; return; }
+      if (raw.startsWith('+') && d[0] !== '7' && d[0] !== '8') { f.guest_phone.value = '+' + d.slice(0, 15); return; }
+      if (d[0] === '8') d = '7' + d.slice(1); else if (d[0] !== '7') d = '7' + d;
+      d = d.slice(0, 11);
+      let out = '+7'; if (d.length > 1) out += ' ' + d.slice(1, 4); if (d.length > 4) out += ' ' + d.slice(4, 7); if (d.length > 7) out += '-' + d.slice(7, 9); if (d.length > 9) out += '-' + d.slice(9, 11);
+      f.guest_phone.value = out;
+    });
     f.guest_name.focus();
     f.addEventListener('submit', async (e) => {
       e.preventDefault();
@@ -221,7 +232,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
         });
         out.innerHTML = `<div class="panel done"><div class="mark">✓</div><h2>Заявка отправлена</h2>
           <p>${esc(r.room_type)}, ${fmtDate(r.check_in)} — ${fmtDate(r.check_out)}, ${money(r.total)}</p>
-          <p style="color:var(--muted)">${esc(r.message)}${info.phone ? ` Телефон: ${esc(info.phone)}` : ''}</p>
+          <p style="color:var(--muted)">${esc(r.message)}${info.phone ? ` Телефон: <a href="tel:${esc(info.phone.replace(/[^\d+]/g, ''))}">${esc(info.phone)}</a>` : ''}</p>
           <div class="ref">Номер заявки ${esc(r.reference)}</div></div>`;
         $('search').style.display = 'none';
       } catch (ex) {

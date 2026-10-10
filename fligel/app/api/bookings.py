@@ -20,7 +20,7 @@ from .tariffs import get_plan
 from .housekeeping import EFFECTIVE_SQL
 from .guests import BK_KEY, flags_for, phone_key
 from .money import DEPOSIT_STATUSES, METHODS, add_payment
-from .reports import SOURCE_LABELS
+from .reports import SOURCE_LABELS, _booking_metrics, _expenses_total, _overlap_rows, _rooms_count
 
 STATUSES = ("confirmed", "pending", "blocked", "cancelled")
 SOURCES = ("manual", "direct", "avito", "yandex", "sutochno", "ostrovok", "other")
@@ -532,6 +532,31 @@ def booking_history(c: Ctx):
 
 
 @api()
+def free_rooms(c: Ctx):
+    """Какие номера свободны на даты — для быстрого подбора при звонке гостя."""
+    check_in = parse_date(c.q.get("check_in"), "Дата заезда")
+    check_out = parse_date(c.q.get("check_out"), "Дата выезда")
+    if check_out <= check_in:
+        raise ApiError(422, "Дата выезда должна быть позже даты заезда")
+    guests = parse_int(c.q.get("guests"), "Гостей", 1, default=1)
+    exclude = parse_uuid(c.q["exclude"]) if c.q.get("exclude") else None
+    with tx() as conn:
+        prop = selected_property(conn, c.account_id, c.q.get("property_id"))
+        types = all_(conn, "SELECT * FROM room_types WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
+        out = []
+        for t in types:
+            q = quote(conn, t, check_in, check_out, guests)
+            rooms = all_(conn, "SELECT r.id, r.name FROM rooms r WHERE r.room_type_id = %s AND NOT EXISTS ("
+                               " SELECT 1 FROM bookings b WHERE b.room_id = r.id AND b.status <> 'cancelled'"
+                               " AND b.check_in < %s AND b.check_out > %s AND (%s::uuid IS NULL OR b.id <> %s::uuid))"
+                               " ORDER BY r.sort_order, r.name", (t["id"], check_out, check_in, exclude, exclude))
+            out.append({"room_type_id": t["id"], "type": t["name"], "capacity": t["capacity"], "price": q.total, "nights": q.nights,
+                        "fits": t["capacity"] >= guests, "closed": bool(q.closed_dates), "min_stay": q.min_stay,
+                        "rooms": rooms})
+    return {"types": out, "check_in": check_in, "check_out": check_out}
+
+
+@api()
 def quote_booking(c: Ctx):
     check_in = parse_date(c.q.get("check_in"), "Дата заезда")
     check_out = parse_date(c.q.get("check_out"), "Дата выезда")
@@ -558,7 +583,22 @@ def board(c: Ctx):
     start, end = _date_range(c, 31)
     with tx() as conn:
         prop = selected_property(conn, c.account_id, c.q.get("property_id"))
-        return board_payload(conn, c.account_id, prop, start, end)
+        data = board_payload(conn, c.account_id, prop, start, end)
+    if c.p.role == "housekeeper":
+        hide_private(data["bookings"])
+        data["guest_flags"] = {}
+    return data
+
+
+def hide_private(rows: list[dict]) -> None:
+    """Горничной контакты и деньги гостей не нужны (152-ФЗ: только необходимые данные) — убираем их из ответа."""
+    for b in rows:
+        for k in ("guest_phone", "guest_email", "discount_reason", "rate_plan_name"):
+            if k in b:
+                b[k] = ""
+        for k in ("total_price", "paid_amount", "discount_amount", "deposit_amount"):
+            if k in b:
+                b[k] = 0
 
 
 def board_payload(conn, account_id, prop, start, end, contacts: bool = True) -> dict:
@@ -684,6 +724,11 @@ def today(c: Ctx):
             conn, "SELECT count(DISTINCT b.room_id) AS n FROM bookings b WHERE b.account_id = %s AND b.status = 'blocked'"
                   f" AND b.check_in <= %s AND b.check_out > %s{prop_filter}",
             (c.account_id, day, day, *prop_params))["n"]
+        summary = None
+        if c.q.get("summary") and c.p.role in ("owner", "manager"):
+            summary = _home_summary(conn, c.account_id, prop_id, date.today())
+    if c.p.role == "housekeeper":
+        hide_private(rows)
     arrivals = [r for r in rows if r["check_in"] == day]
     staying = [r for r in rows if r["check_in"] < day < r["check_out"]]
     # ночь «на эту дату» занимают заезжающие сегодня и те, кто уже проживает
@@ -695,7 +740,33 @@ def today(c: Ctx):
         "staying": staying,
         "rooms_total": rooms_total, "occupied_tonight": occupied, "blocked_rooms": blocked_now,
         "free_tonight": max(rooms_total - occupied - blocked_now, 0),
+        "summary": summary,
     }
+
+
+def _home_summary(conn, account_id, prop_id, today: date) -> dict:
+    """Главное за минуту: что требует внимания и сколько заработано в этом месяце (для главной страницы владельца)."""
+    prop_ids = [prop_id] if prop_id else [str(r["id"]) for r in all_(conn, "SELECT id FROM properties WHERE account_id = %s", (account_id,))]
+    pf = " AND b.property_id = ANY(%s::uuid[])"
+    alerts = {
+        "requests": one(conn, "SELECT count(*) AS n FROM bookings b WHERE b.account_id = %s AND b.source = 'direct' AND b.status = 'pending'" + pf,
+                        (account_id, prop_ids))["n"],
+        "conflicts": one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved", (account_id,))["n"],
+        "repairs": one(conn, "SELECT count(*) AS n FROM rooms r WHERE r.account_id = %s AND r.hk_status = 'repair' AND r.property_id = ANY(%s::uuid[])",
+                       (account_id, prop_ids))["n"],
+    }
+    debt = one(conn, "SELECT count(*) AS n, coalesce(sum(b.total_price - b.paid_amount), 0) AS amount FROM bookings b"
+                     " WHERE b.account_id = %s AND b.status = 'confirmed' AND b.check_in <= %s AND b.check_out >= %s"
+                     " AND b.total_price > b.paid_amount" + pf,
+               (account_id, today, today - timedelta(days=60), prop_ids))
+    alerts["debt_count"], alerts["debt_amount"] = debt["n"], debt["amount"]
+    start, end = today.replace(day=1), today + timedelta(days=1)
+    total_rooms = _rooms_count(conn, [str(r["id"]) for r in all_(conn, "SELECT id FROM properties WHERE account_id = %s", (account_id,))])
+    scope_rooms = _rooms_count(conn, prop_ids)
+    m = _booking_metrics(_overlap_rows(conn, account_id, prop_ids, start, end), scope_rooms, (end - start).days)
+    expenses = _expenses_total(conn, account_id, prop_ids, scope_rooms, total_rooms, start, end)
+    return {"alerts": alerts, "month": {"from": start, "revenue": m["revenue"], "expenses": expenses,
+                                        "profit": m["revenue"] - expenses, "occupancy": m["occupancy"], "sold_nights": m["sold_nights"]}}
 
 
 # ---------- карточка гостя ----------
@@ -732,6 +803,7 @@ routes = [
     Route("/api/bookings/import-template.csv", import_template),
     Route("/api/bookings/import", import_bookings, methods=["POST"]),
     Route("/api/bookings/quote", quote_booking),
+    Route("/api/bookings/free-rooms", free_rooms),
     Route("/api/bookings/{id}/log", booking_history),
     Route("/api/bookings/{id}/relocate", relocate_booking, methods=["POST"]),
     Route("/api/bookings/{id}/group", group_members),
