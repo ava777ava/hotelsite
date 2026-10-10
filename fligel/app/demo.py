@@ -1,5 +1,6 @@
 """Демо-данные для знакомства с системой: python -m app.demo
-Создаёт аккаунт demo@fligel.ru / demo12345 с гостиницей на 12 номеров и бронями."""
+Создаёт аккаунт demo@fligel.ru / demo12345 с гостиницей на 12 номеров и бронями.
+Также: администратор manager@fligel.ru, горничная anna@fligel.ru, собственник landlord@fligel.ru (пароль тот же)."""
 import random
 from datetime import date, timedelta
 
@@ -8,15 +9,33 @@ from .db import all_, one, run, tx
 from .expenses import create_default_categories
 from .migrate import migrate
 
-GUESTS = ["Анна Ковалёва", "Игорь Петров", "Семья Смирновых", "Ольга Белова", "Дмитрий Орлов", "Марина Фролова",
-          "Алексей Никитин", "Татьяна Гусева", "Сергей Волков", "Екатерина Зайцева", "Павел Сорокин", "Наталья Егорова",
-          "Роман Лебедев", "Ирина Козлова", "Виктор Морозов"]
+MALE = ["Алексей", "Андрей", "Антон", "Артём", "Виктор", "Владимир", "Дмитрий", "Евгений", "Игорь", "Илья", "Максим",
+        "Михаил", "Николай", "Олег", "Павел", "Роман", "Сергей", "Тимур", "Юрий", "Ринат", "Ильдар", "Марат"]
+FEMALE = ["Анна", "Анастасия", "Виктория", "Дарья", "Евгения", "Екатерина", "Елена", "Ирина", "Лариса", "Марина", "Мария",
+          "Наталья", "Ольга", "Светлана", "Татьяна", "Юлия", "Алсу", "Гульнара", "Диана"]
+SURNAMES = ["Иванов", "Петров", "Смирнов", "Кузнецов", "Попов", "Васильев", "Соколов", "Михайлов", "Новиков", "Фёдоров",
+            "Морозов", "Волков", "Алексеев", "Лебедев", "Семёнов", "Егоров", "Павлов", "Козлов", "Степанов", "Николаев",
+            "Орлов", "Андреев", "Макаров", "Никитин", "Захаров", "Зайцев", "Соловьёв", "Борисов", "Яковлев", "Григорьев",
+            "Романов", "Воробьёв", "Сергеев", "Кузьмин", "Фролов", "Александров", "Дмитриев", "Королёв", "Гусев", "Киселёв"]
+
+
+def make_guests(rnd: random.Random, n: int) -> list[str]:
+    """Правдоподобные имена: мужские и женские фамилии согласованы по роду, имена не повторяются."""
+    out: set[str] = set()
+    while len(out) < n:
+        sur = rnd.choice(SURNAMES)
+        if rnd.random() < 0.5:
+            out.add(f"{rnd.choice(MALE)} {sur}")
+        else:
+            out.add(f"{rnd.choice(FEMALE)} {sur}а" if not sur.endswith("ий") else f"{rnd.choice(FEMALE)} {sur[:-2]}ая")
+    return sorted(out)
 
 
 def main() -> None:
     migrate()
     rnd = random.Random(7)
     today = date.today()
+    GUESTS = make_guests(rnd, 700)
     # один и тот же гость всегда с одним и тем же телефоном — иначе в «Истории гостя»
     # никогда не наберётся больше одного визита и «постоянных гостей» не появится
     guest_phones = {
@@ -25,7 +44,7 @@ def main() -> None:
     }
     with tx() as conn:
         if one(conn, "SELECT 1 FROM users WHERE email = 'demo@fligel.ru'"):
-            print("Демо-аккаунт уже есть: demo@fligel.ru / demo12345 (администратор: manager@fligel.ru, горничная: anna@fligel.ru, пароль тот же)")
+            print("Демо-аккаунт уже есть: demo@fligel.ru / demo12345 (также manager@, anna@, landlord@ — пароль тот же)")
             return
         acc = one(conn, "INSERT INTO accounts (name) VALUES ('Гостиница «Флигель»') RETURNING id")["id"]
         run(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, %s, %s, %s, 'owner')",
@@ -182,8 +201,95 @@ def main() -> None:
         for channel, percent in (("avito", 12), ("yandex", 15), ("sutochno", 10)):
             run(conn, "INSERT INTO channel_commissions (account_id, channel, percent) VALUES (%s, %s, %s)",
                 (acc, channel, percent))
+        _seed_new_features(conn, rnd, acc, prop, prop2, rooms, rooms2, today)
     print("Готово: войдите как demo@fligel.ru / demo12345, страница бронирования — /book/demo")
 
+
+
+def _seed_new_features(conn, rnd, acc, prop, prop2, rooms, rooms2, today) -> None:
+    """Данные для новых функций, чтобы всё было видно сразу после входа: платежи, услуги, тарифы, теги и чёрный
+    список, уборка, заметки на даты, группа номеров и переселение, собственник с комиссией УК."""
+    from .api.guests import phone_key
+
+    # --- платежи: оплата в брони превращается в историю (часть броней — предоплата и доплата отдельно)
+    run(conn, "INSERT INTO booking_payments (account_id, booking_id, kind, amount, method, paid_on, note)"
+              " SELECT account_id, id, 'payment', paid_amount, (ARRAY['cash', 'card', 'transfer', 'online'])[1 + floor(random() * 4)::int],"
+              " greatest(check_in - 3, created_at::date), '' FROM bookings WHERE paid_amount > 0 AND status = 'confirmed' AND random() < 0.7")
+    run(conn, "INSERT INTO booking_payments (account_id, booking_id, kind, amount, method, paid_on, note)"
+              " SELECT b.account_id, b.id, 'payment', round(b.paid_amount * 0.3), 'online', greatest(b.check_in - 10, b.created_at::date), 'Предоплата'"
+              " FROM bookings b WHERE b.paid_amount > 0 AND NOT EXISTS (SELECT 1 FROM booking_payments p WHERE p.booking_id = b.id)")
+    run(conn, "INSERT INTO booking_payments (account_id, booking_id, kind, amount, method, paid_on, note)"
+              " SELECT b.account_id, b.id, 'payment', b.paid_amount - round(b.paid_amount * 0.3), 'cash', b.check_in, 'Доплата при заселении'"
+              " FROM bookings b WHERE b.paid_amount > 0 AND (SELECT count(*) FROM booking_payments p WHERE p.booking_id = b.id) = 1"
+              " AND (SELECT p.note FROM booking_payments p WHERE p.booking_id = b.id) = 'Предоплата'")
+    # --- справочник услуг и услуги в ближайших бронях
+    for name, price in (("Завтрак", 500), ("Трансфер из аэропорта", 1800), ("Поздний выезд", 1000), ("Дополнительное место", 800)):
+        run(conn, "INSERT INTO services (account_id, name, price) VALUES (%s, %s, %s)", (acc, name, price))
+    upcoming = all_(conn, "SELECT id, check_in, check_out FROM bookings WHERE account_id = %s AND status = 'confirmed' AND check_in >= %s"
+                          " AND check_in < %s ORDER BY check_in LIMIT 12", (acc, today, today + timedelta(days=10)))
+    for i, b in enumerate(upcoming):
+        if i % 3 == 0:
+            run(conn, "INSERT INTO booking_services (account_id, booking_id, name, price, qty) VALUES (%s, %s, 'Завтрак', 500, %s)",
+                (acc, b["id"], (b["check_out"] - b["check_in"]).days))
+            run(conn, "UPDATE bookings SET total_price = total_price + 500 * %s WHERE id = %s", ((b["check_out"] - b["check_in"]).days, b["id"]))
+        elif i % 3 == 1:
+            run(conn, "UPDATE bookings SET discount_amount = 500, discount_reason = 'Постоянный гость', total_price = greatest(total_price - 500, 0),"
+                      " deposit_amount = 3000, deposit_status = 'expected' WHERE id = %s", (b["id"],))
+    # --- тарифы
+    for rt in all_(conn, "SELECT id, name FROM room_types WHERE property_id = %s", (prop,)):
+        run(conn, "INSERT INTO rate_plans (account_id, room_type_id, name, description, percent_delta, refundable, sort_order)"
+                  " VALUES (%s, %s, 'Невозвратный', 'Скидка 10%%, отмена без возврата', -10, false, 1)", (acc, rt["id"]))
+        run(conn, "INSERT INTO rate_plans (account_id, room_type_id, name, description, fixed_delta, breakfast, sort_order)"
+                  " VALUES (%s, %s, 'С завтраком', 'Завтрак включён в стоимость', 500, true, 2)", (acc, rt["id"]))
+        run(conn, "UPDATE room_types SET week_discount_percent = 5, month_discount_percent = 15 WHERE id = %s", (rt["id"],))
+    # --- гости: теги, заметки, чёрный список, дни рождения
+    frequent = all_(conn, f"SELECT right(regexp_replace(guest_phone, '\\D', '', 'g'), 10) AS k, (array_agg(guest_name))[1] AS name, count(*) AS n"
+                          " FROM bookings WHERE account_id = %s AND guest_phone <> '' GROUP BY 1 ORDER BY n DESC, k LIMIT 8", (acc,))
+    tag_sets = [(["vip", "постоянный"], "Любит тихий номер на верхнем этаже"), (["с собакой"], "Всегда с лабрадором, нужна миска"),
+                (["командировка"], "Нужны документы для бухгалтерии"), (["поздний заезд"], "Обычно приезжает после 22:00"),
+                (["vip"], ""), (["с детьми"], "Просит детскую кроватку")]
+    for g, (tags, note) in zip(frequent, tag_sets):
+        run(conn, "INSERT INTO guest_profiles (account_id, phone_key, name, tags, notes) VALUES (%s, %s, %s, %s, %s)", (acc, g["k"], g["name"], tags, note))
+    if len(frequent) > 6:
+        run(conn, "INSERT INTO guest_profiles (account_id, phone_key, name, notes, blacklisted, blacklist_reason) VALUES (%s, %s, %s, %s, true, %s)",
+            (acc, frequent[6]["k"], frequent[6]["name"], "", "Курил в номере, не оплатил ущерб"))
+    for b in all_(conn, "SELECT guest_phone, check_in FROM bookings WHERE account_id = %s AND status = 'confirmed' AND check_in BETWEEN %s AND %s"
+                        " AND guest_phone <> '' ORDER BY check_in LIMIT 2", (acc, today + timedelta(days=1), today + timedelta(days=9))):
+        run(conn, "INSERT INTO guest_profiles (account_id, phone_key, birthday) VALUES (%s, %s, %s)"
+                  " ON CONFLICT (account_id, phone_key) DO UPDATE SET birthday = EXCLUDED.birthday",
+            (acc, phone_key(b["guest_phone"]), date(1988, b["check_in"].month, b["check_in"].day)))
+    # --- уборка: почти всё чисто, несколько номеров в разных состояниях
+    run(conn, "UPDATE rooms SET cleaned_on = current_date WHERE account_id = %s", (acc,))
+    staff = one(conn, "SELECT id FROM users WHERE email = 'anna@fligel.ru'")
+    ids = [r[0] for r in rooms]
+    run(conn, "UPDATE rooms SET cleaned_on = current_date - 2 WHERE id = ANY(%s::uuid[]) AND EXISTS (SELECT 1 FROM bookings b WHERE b.room_id = rooms.id"
+              " AND b.check_out = current_date AND b.status = 'confirmed')", (ids,))
+    run(conn, "UPDATE rooms SET hk_status = 'cleaning', hk_updated_at = now() WHERE id = %s", (ids[2],))
+    run(conn, "UPDATE rooms SET hk_status = 'inspect', hk_updated_at = now() WHERE id = %s", (ids[4],))
+    run(conn, "UPDATE rooms SET hk_status = 'repair', hk_note = 'Протекает кран в ванной', hk_updated_at = now() WHERE id = %s", (ids[7],))
+    run(conn, "UPDATE rooms SET note = 'Ключ у администратора, диван раскладывается' WHERE id = %s", (ids[1],))
+    if staff:
+        run(conn, "UPDATE rooms SET hk_assigned_to = %s, hk_assigned_on = current_date WHERE id = ANY(%s::uuid[])", (staff["id"], ids[:6]))
+    # --- заметки на даты
+    for offset, text in ((4, "Праздник в городе: ждём много заездов, цены выше"), (9, "Проверка пожарной инспекции с 10:00")):
+        run(conn, "INSERT INTO date_notes (account_id, property_id, day, text) VALUES (%s, %s, %s, %s)", (acc, prop, today + timedelta(days=offset), text))
+    # --- группа из трёх номеров и переселение посреди проживания (даты после основной загрузки — свободны)
+    import uuid as _uuid
+    g = str(_uuid.uuid4())
+    for rid, price in rooms[:3]:
+        run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source, guest_name, guest_phone,"
+                  " guests_count, total_price, group_id) VALUES (%s, %s, %s, %s, %s, 'confirmed', 'manual', 'Свадьба Кузнецовых', '+7 927 555-01-01',"
+                  " 2, %s, %s)", (acc, prop, rid, today + timedelta(days=60), today + timedelta(days=62), price * 2, g))
+    g2 = str(_uuid.uuid4())
+    for rid, a, b_, total in ((rooms[3][0], 70, 73, 7500), (rooms[4][0], 73, 75, 5000)):
+        run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source, guest_name, guest_phone,"
+                  " guests_count, total_price, group_id) VALUES (%s, %s, %s, %s, %s, 'confirmed', 'avito', 'Дмитрий Крылов', '+7 903 777-12-12',"
+                  " 1, %s, %s)", (acc, prop, rid, today + timedelta(days=a), today + timedelta(days=b_), total, g2))
+    # --- собственник квартир и комиссия управляющей компании
+    run(conn, "UPDATE properties SET mc_commission_percent = 15, mc_commission_base = 'net' WHERE id = %s", (prop2,))
+    lid = one(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, 'landlord@fligel.ru', %s, 'Пётр (собственник квартир)', 'landlord') RETURNING id",
+              (acc, hash_password("demo12345")))["id"]
+    run(conn, "INSERT INTO user_properties (account_id, user_id, property_id) VALUES (%s, %s, %s)", (acc, lid, prop2))
 
 if __name__ == "__main__":
     main()
