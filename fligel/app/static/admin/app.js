@@ -912,6 +912,114 @@ async function ensureBoardData() {
   }
 }
 
+// ---------- деньги в брони: платежи, услуги, скидка, залог ----------
+const PAY_METHOD = { cash: 'Наличные', card: 'Карта', transfer: 'Перевод', online: 'Онлайн', other: 'Другое' };
+const DEPOSIT = { none: 'Без залога', expected: 'Ожидается', held: 'Внесён', returned: 'Возвращён', kept: 'Удержан' };
+
+function moneyBlock(b, onChange) {
+  const box = h('div', { class: 'money-box' });
+  let m = null;
+  async function load() {
+    try { m = await api('GET', `/api/bookings/${b.id}/money`); } catch (ex) { box.textContent = ex.message; return; }
+    draw();
+  }
+  const act = async (fn) => {
+    try { m = await fn(); onChange?.(m); draw(); } catch (ex) { toast(ex.message, true); }
+  };
+  function draw() {
+    box.innerHTML = '';
+    const due = Number(m.due);
+    box.append(
+      h('div', { class: 'money-sum' },
+        h('div', {}, h('span', { class: 'muted small' }, 'Итого'), h('b', {}, fmtMoney(m.total))),
+        h('div', {}, h('span', { class: 'muted small' }, 'Оплачено'), h('b', {}, fmtMoney(m.paid))),
+        h('div', { class: due > 0 ? 'due' : 'ok' }, h('span', { class: 'muted small' }, due > 0 ? 'К оплате' : 'Оплачено полностью'), h('b', {}, fmtMoney(due)))));
+    // платежи
+    const amount = h('input', { class: 'input', type: 'number', min: 1, placeholder: 'Сумма, ₽', value: due > 0 ? Math.round(due) : '' });
+    const method = h('select', { class: 'input' }, Object.entries(PAY_METHOD).map(([k, l]) => h('option', { value: k }, l)));
+    const day = h('input', { class: 'input', type: 'date', value: todayISO() });
+    const note = h('input', { class: 'input', placeholder: 'Комментарий (необязательно)' });
+    const addPay = (kind) => act(async () => {
+      const r = await api('POST', `/api/bookings/${b.id}/payments`, { amount: amount.value, method: method.value, paid_on: day.value, note: note.value, kind });
+      toast(kind === 'refund' ? 'Возврат записан' : 'Платёж записан'); return r;
+    });
+    box.append(h('h3', {}, 'Платежи'),
+      m.payments.length ? h('div', { class: 'pay-list' }, m.payments.map((p) => h('div', { class: 'pay-row' + (p.kind === 'refund' ? ' refund' : '') },
+        h('span', { class: 'pay-sum' }, `${p.kind === 'refund' ? '−' : '+'}${fmtMoney(p.amount)}`),
+        h('span', { class: 'muted small' }, `${fmtDate(p.paid_on)} · ${PAY_METHOD[p.method]}${p.note ? ' · ' + p.note : ''}${p.user_name ? ' · ' + p.user_name : ''}`),
+        h('button', { class: 'btn icon ghost small', type: 'button', title: 'Удалить запись', 'aria-label': 'Удалить запись', onclick: () => {
+          if (confirm('Удалить эту запись о платеже?')) act(() => api('DELETE', `/api/payments/${p.id}`));
+        } }, icon('close')))))
+        : h('div', { class: 'muted small', style: { marginBottom: '8px' } }, 'Платежей пока нет.'),
+      h('div', { class: 'row3' }, h('label', { class: 'field' }, h('span', {}, 'Сумма'), amount), h('label', { class: 'field' }, h('span', {}, 'Способ'), method), h('label', { class: 'field' }, h('span', {}, 'Дата'), day)),
+      h('div', { class: 'money-actions', style: { marginBottom: '14px' } }, note,
+        h('button', { class: 'btn primary small', type: 'button', onclick: () => addPay('payment') }, 'Принять оплату'),
+        Number(m.paid) > 0 ? h('button', { class: 'btn small', type: 'button', onclick: () => addPay('refund') }, 'Вернуть') : null));
+    // услуги
+    const svcSel = h('select', { class: 'input' }, h('option', { value: '' }, 'Выбрать из справочника…'));
+    api('GET', '/api/services').then((list) => list.filter((x) => x.active).forEach((x) => svcSel.append(h('option', { value: x.id }, `${x.name} — ${fmtMoney(x.price)}`)))).catch(() => {});
+    const svcName = h('input', { class: 'input', placeholder: 'или своя услуга' });
+    const svcPrice = h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Цена, ₽' });
+    const svcQty = h('input', { class: 'input', type: 'number', min: 1, value: 1, style: { maxWidth: '80px' } });
+    box.append(h('h3', {}, 'Дополнительные услуги'),
+      m.services.length ? h('div', { class: 'pay-list' }, m.services.map((x) => h('div', { class: 'pay-row' },
+        h('span', { class: 'pay-sum' }, `${x.name}${x.qty > 1 ? ' × ' + x.qty : ''}`),
+        h('span', { class: 'muted small' }, fmtMoney(Number(x.price) * x.qty)),
+        h('button', { class: 'btn icon ghost small', type: 'button', title: 'Убрать услугу', 'aria-label': 'Убрать услугу', onclick: () => act(() => api('DELETE', `/api/booking-services/${x.id}`)) }, icon('close')))))
+        : h('div', { class: 'muted small', style: { marginBottom: '8px' } }, 'Услуг нет. Завтрак, трансфер, поздний выезд — добавьте здесь, и сумма пересчитается.'),
+      h('div', { class: 'money-actions', style: { marginBottom: '14px' } }, svcSel, svcName, svcPrice, svcQty,
+        h('button', { class: 'btn small', type: 'button', onclick: () => {
+          if (!svcSel.value && !svcName.value.trim()) { toast('Выберите услугу или введите название', true); return; }
+          act(() => api('POST', `/api/bookings/${b.id}/services`, svcSel.value ? { service_id: svcSel.value, qty: svcQty.value } : { name: svcName.value, price: svcPrice.value, qty: svcQty.value }));
+        } }, icon('plus'), 'Добавить')));
+    // скидка и залог
+    const disc = h('input', { class: 'input', type: 'number', min: 0, value: Math.round(Number(m.discount_amount)) || '', placeholder: '0' });
+    const discWhy = h('input', { class: 'input', value: m.discount_reason, placeholder: 'Причина: постоянный гость, акция…' });
+    const dep = h('input', { class: 'input', type: 'number', min: 0, value: Math.round(Number(m.deposit_amount)) || '', placeholder: '0' });
+    const depSt = h('select', { class: 'input' }, Object.entries(DEPOSIT).map(([k, l]) => h('option', { value: k, selected: k === m.deposit_status }, l)));
+    const patch = (payload) => act(async () => { await api('PATCH', `/api/bookings/${b.id}`, payload); return api('GET', `/api/bookings/${b.id}/money`); });
+    box.append(h('h3', {}, 'Скидка и залог'),
+      h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Скидка, ₽'), disc), h('label', { class: 'field' }, h('span', {}, 'Причина скидки'), discWhy)),
+      h('div', { class: 'money-actions', style: { marginBottom: '8px' } }, h('button', { class: 'btn small', type: 'button', onclick: () => patch({ discount_amount: disc.value || 0, discount_reason: discWhy.value }) }, 'Применить скидку')),
+      h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Залог, ₽'), dep), h('label', { class: 'field' }, h('span', {}, 'Статус залога'), depSt)),
+      h('div', { class: 'money-actions' }, h('button', { class: 'btn small', type: 'button', onclick: () => patch({ deposit_amount: dep.value || 0, deposit_status: dep.value && depSt.value === 'none' ? 'expected' : depSt.value }) }, 'Сохранить залог'),
+        h('span', { class: 'muted small' }, 'Залог не входит в стоимость и в выручку.')));
+  }
+  load();
+  box.reload = load;
+  return box;
+}
+
+async function printInvoice(b) {
+  try {
+    const [prop, m] = await Promise.all([api('GET', `/api/properties/${b.property_id}`), api('GET', `/api/bookings/${b.id}/money`)]);
+    const room = allRooms().find((r) => r.id === b.room_id);
+    const nights = Math.round((parseISO(b.check_out) - parseISO(b.check_in)) / 86400000);
+    const th = (t, right) => h('th', { style: { textAlign: right ? 'right' : 'left', padding: '6px 8px', borderBottom: '2px solid #000', fontSize: '13px' } }, t);
+    const td = (t, right, bold) => h('td', { style: { textAlign: right ? 'right' : 'left', padding: '6px 8px', borderBottom: '1px solid #ccc', fontWeight: bold ? 700 : 400 } }, t);
+    const rows = [
+      [`Проживание, номер ${room ? room.name : ''}, ${fmtDate(b.check_in)} — ${fmtDate(b.check_out)} (${nights} ${nightsWord(nights)})`, 1, Number(m.stay_price) + Number(m.discount_amount)],
+      ...m.services.map((x) => [x.name, x.qty, Number(x.price) * x.qty]),
+    ];
+    document.getElementById('print-sheet')?.remove();
+    document.body.append(h('div', { id: 'print-sheet' },
+      h('h1', { style: { fontSize: '22px', marginBottom: '2px' } }, `Счёт № ${String(b.id).slice(0, 8).toUpperCase()}`),
+      h('p', { style: { marginTop: 0, color: '#555' } }, `от ${fmtDate(todayISO())} ${new Date().getFullYear()}`),
+      h('p', { style: { margin: '0 0 4px' } }, h('b', {}, prop.name)), h('p', { style: { margin: '0 0 14px', color: '#333' } }, [prop.address, prop.phone].filter(Boolean).join(' · ')),
+      h('p', { style: { margin: '0 0 14px' } }, 'Гость: ', h('b', {}, b.guest_name || '—'), b.guest_phone ? `, ${b.guest_phone}` : ''),
+      h('table', { style: { borderCollapse: 'collapse', width: '100%', fontSize: '14px' } },
+        h('thead', {}, h('tr', {}, th('Наименование'), th('Кол-во', 1), th('Сумма', 1))),
+        h('tbody', {}, rows.map(([n, q, sum]) => h('tr', {}, td(n), td(String(q), 1), td(fmtMoney(sum), 1))),
+          Number(m.discount_amount) ? h('tr', {}, td(`Скидка${m.discount_reason ? ': ' + m.discount_reason : ''}`), td('', 1), td('−' + fmtMoney(m.discount_amount), 1)) : null,
+          h('tr', {}, td('Итого', 0, 1), td('', 1), td(fmtMoney(m.total), 1, 1)),
+          h('tr', {}, td('Оплачено'), td('', 1), td(fmtMoney(m.paid), 1)),
+          h('tr', {}, td('К оплате', 0, 1), td('', 1), td(fmtMoney(m.due), 1, 1)))),
+      Number(m.deposit_amount) ? h('p', { style: { marginTop: '14px', color: '#333' } }, `Залог: ${fmtMoney(m.deposit_amount)} (${DEPOSIT[m.deposit_status].toLowerCase()}). Возвращается при выезде, если нет претензий.`) : null,
+      h('p', { style: { marginTop: '28px', color: '#555' } }, 'Спасибо, что выбрали нас!')));
+    window.print();
+  } catch (ex) { toast(ex.message, true); }
+}
+
 async function bookingDrawer(b, onSaved) {
   await ensureBoardData();
   const isNew = !b.id;
@@ -970,7 +1078,7 @@ async function bookingDrawer(b, onSaved) {
     }, 200);
   }
   const updateTotal = () => {
-    const total = Number(f.total_price.value || 0); const paid = Number(f.paid_amount.value || 0);
+    const total = Number(f.total_price.value || 0); const paid = Number(f.paid_amount ? f.paid_amount.value || 0 : b.paid_amount || 0);
     totalEl.textContent = fmtMoney(total);
     totalEl.title = paid ? `Оплачено ${fmtMoney(paid)}, к оплате ${fmtMoney(total - paid)}` : '';
   };
@@ -998,7 +1106,7 @@ async function bookingDrawer(b, onSaved) {
     try {
       const rows = await api('GET', `/api/bookings/${b.id}/log`);
       changeLogBox.innerHTML = ''; changeLogBox.style.display = '';
-      const ACTION = { created: 'Создана', updated: 'Изменена', cancelled: 'Отменена' };
+      const ACTION = { created: 'Создана', updated: 'Изменена', cancelled: 'Отменена', payment: 'Платёж' };
       changeLogBox.append(h('div', {}, h('h3', { style: { margin: '4px 0 8px' } }, 'История изменений'),
         rows.length ? rows.map((r) => h('div', { class: 'log-row' },
           h('div', { class: 'small' }, h('b', {}, ACTION[r.action] || r.action), h('span', { class: 'muted' }, ` · ${r.user_name} · ${fmtDateTime(r.created_at)}`)),
@@ -1027,8 +1135,8 @@ async function bookingDrawer(b, onSaved) {
           line('Выезд', `${fmtDate(f.check_out.value)} ${parseISO(f.check_out.value).getFullYear()}, до ${String(prop.check_out_time).slice(0, 5)}`),
           line('Гостей', f.guests_count.value || '1'),
           line('Стоимость', fmtMoney(f.total_price.value || total)),
-          line('Оплачено', fmtMoney(f.paid_amount.value || paidSum)),
-          line('К оплате при заселении', fmtMoney(Math.max(Number(f.total_price.value || total) - Number(f.paid_amount.value || paidSum), 0))))),
+          line('Оплачено', fmtMoney(f.paid_amount ? f.paid_amount.value || paidSum : paidSum)),
+          line('К оплате при заселении', fmtMoney(Math.max(Number(f.total_price.value || total) - Number(f.paid_amount ? f.paid_amount.value || paidSum : paidSum), 0))))),
         h('p', { style: { marginTop: '28px', color: '#555' } }, 'Ждём вас в гости!')));
       window.print();
     } catch (ex) { toast(ex.message, true); }
@@ -1056,15 +1164,17 @@ async function bookingDrawer(b, onSaved) {
     h('div', { class: 'row2' }, inp('guest_phone', 'Телефон', { type: 'tel', placeholder: '+7' }), inp('guest_email', 'Email', { type: 'email' })),
     h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '14px' } },
       h('button', { type: 'button', class: 'btn small ghost', onclick: showGuestHistory }, 'История гостя по телефону'),
-      readOnly ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => { f.paid_amount.value = f.total_price.value || 0; updateTotal(); } }, 'Оплачено полностью'),
-      isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: printVoucher }, 'Печать подтверждения')),
+      readOnly || !isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => { f.paid_amount.value = f.total_price.value || 0; updateTotal(); } }, 'Оплачено полностью'),
+      isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: printVoucher }, 'Печать подтверждения'),
+      isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => printInvoice(b) }, 'Счёт')),
     guestHistoryBox,
     h('div', { class: 'row3' },
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1 }),
       inp('total_price', 'Стоимость, ₽', { type: 'number', min: 0, value: b.total_price != null ? Math.round(b.total_price) : '', oninput: () => { priceTouched = true; updateTotal(); } }),
-      inp('paid_amount', 'Оплачено, ₽', { type: 'number', min: 0, value: b.paid_amount != null ? Math.round(b.paid_amount) : 0, oninput: updateTotal })),
+      isNew ? inp('paid_amount', 'Предоплата, ₽', { type: 'number', min: 0, value: 0, oninput: updateTotal }) : h('div')),
     h('label', { class: 'field' }, h('span', {}, 'Источник'), f.source),
-    h('div', { class: 'summary' }, nightsEl, totalEl));
+    h('div', { class: 'summary' }, nightsEl, totalEl),
+    isNew || status.value === 'blocked' ? null : moneyBlock(b, (m) => { b.total_price = m.total; b.paid_amount = m.paid; f.total_price.value = Math.round(Number(m.total)); priceTouched = true; updateTotal(); }));
   guestBox.style.display = status.value === 'blocked' ? 'none' : '';
   if (!isNew && can('manager')) {
     body.append(h('button', { type: 'button', class: 'btn small ghost', onclick: showChangeLog }, 'История изменений'), changeLogBox);
@@ -1078,8 +1188,9 @@ async function bookingDrawer(b, onSaved) {
     };
     if (status.value !== 'blocked') Object.assign(payload, {
       guest_name: f.guest_name.value, guest_phone: f.guest_phone.value, guest_email: f.guest_email.value,
-      guests_count: f.guests_count.value || 1, total_price: f.total_price.value, paid_amount: f.paid_amount.value || 0, source: f.source.value,
+      guests_count: f.guests_count.value || 1, total_price: f.total_price.value, source: f.source.value,
     });
+    if (isNew && f.paid_amount) payload.paid_amount = f.paid_amount.value || 0;
     if (imported) { delete payload.room_id; delete payload.check_in; delete payload.check_out; delete payload.source; }
     try {
       if (isNew) await api('POST', '/api/bookings', payload);
@@ -2239,6 +2350,33 @@ function photoManager(typeId, onChange) {
     h('span', { class: 'muted small', style: { fontWeight: 400 } }, 'Гости увидят их в карточке номера. Первое фото — главное.'));
 }
 
+// Справочник дополнительных услуг (завтрак, трансфер…): добавляются в бронь одним выбором
+function servicesCard() {
+  const card = h('div', { class: 'card card-pad' });
+  async function draw() {
+    const list = await api('GET', '/api/services');
+    card.innerHTML = '';
+    const name = h('input', { class: 'input', placeholder: 'Например: Завтрак' });
+    const price = h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Цена, ₽', style: { maxWidth: '140px' } });
+    card.append(h('h2', { style: { marginBottom: '6px' } }, 'Дополнительные услуги'),
+      h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Завтрак, трансфер, поздний выезд, доп. место — добавляются в бронь одним выбором и входят в счёт.'),
+      list.length ? h('div', { class: 'pay-list' }, list.map((x) => h('div', { class: 'pay-row' },
+        h('span', { class: 'pay-sum', style: { flex: 1 } }, x.name + (x.active ? '' : ' (скрыта)')),
+        h('span', { class: 'muted small' }, fmtMoney(x.price)),
+        h('button', { class: 'btn small ghost', type: 'button', onclick: async () => { await api('PATCH', `/api/services/${x.id}`, { active: !x.active }); draw(); } }, x.active ? 'Скрыть' : 'Показать'),
+        h('button', { class: 'btn icon ghost small', type: 'button', 'aria-label': 'Удалить услугу', onclick: async () => {
+          if (confirm(`Удалить услугу «${x.name}»? В уже созданных бронях она останется.`)) { await api('DELETE', `/api/services/${x.id}`); draw(); }
+        } }, icon('trash')))))
+        : h('div', { class: 'muted small', style: { marginBottom: '10px' } }, 'Пока пусто. Добавьте первую услугу.'),
+      h('div', { class: 'money-actions' }, name, price, h('button', { class: 'btn small primary', type: 'button', onclick: async () => {
+        if (!name.value.trim()) { toast('Введите название услуги', true); return; }
+        try { await api('POST', '/api/services', { name: name.value, price: price.value || 0 }); draw(); } catch (ex) { toast(ex.message, true); }
+      } }, icon('plus'), 'Добавить')));
+  }
+  draw().catch((ex) => { card.textContent = ex.message; });
+  return card;
+}
+
 // ---------- настройки ----------
 async function viewSettings(main) {
   const content = h('div', { class: 'stack' });
@@ -2357,6 +2495,8 @@ async function viewSettings(main) {
         } catch (ex) { toast(ex.message, true); }
       } }, 'Сохранить'));
     content.append(commissionsCard);
+
+    content.append(servicesCard());
 
     // данные аккаунта: выгрузка и удаление
     content.append(h('div', { class: 'card card-pad' },

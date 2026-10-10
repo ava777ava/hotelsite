@@ -1778,5 +1778,94 @@ class ImportTests(Base):
         self.assertEqual(r["created"], 1)  # у другого аккаунта номер 101 свободен
 
 
+class MoneyTests(Base):
+    """История платежей, услуги, скидка и залог."""
+
+    def mk(self, ctx, **kw):
+        r = self.book(ctx, ctx["rooms"][0], "2033-05-10", "2033-05-13", total_price=9000, **kw)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def money(self, ctx, b):
+        return self.client.get(f"/api/bookings/{b['id']}/money", headers=ctx["h"]).json()
+
+    def test_payments_refunds_and_paid_cache(self):
+        ctx = self.register("money1@example.ru")
+        b = self.mk(ctx)
+        r = self.client.post(f"/api/bookings/{b['id']}/payments", headers=ctx["h"], json={"amount": 3000, "method": "card"})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((float(r.json()["paid"]), float(r.json()["due"])), (3000.0, 6000.0))
+        self.client.post(f"/api/bookings/{b['id']}/payments", headers=ctx["h"], json={"amount": 6000, "method": "cash", "note": "остаток"})
+        got = self.client.get(f"/api/bookings/{b['id']}", headers=ctx["h"]).json()
+        self.assertEqual(float(got["paid_amount"]), 9000.0)  # кэш в брони совпадает с историей
+        over = self.client.post(f"/api/bookings/{b['id']}/payments", headers=ctx["h"], json={"amount": 10000, "kind": "refund"})
+        self.assertEqual(over.status_code, 422)
+        ok = self.client.post(f"/api/bookings/{b['id']}/payments", headers=ctx["h"], json={"amount": 1000, "kind": "refund"})
+        self.assertEqual(float(ok.json()["paid"]), 8000.0)
+        for bad in ({"amount": 0}, {"amount": -5}, {"amount": "abc"}, {"amount": 10, "method": "bitcoin"}, {"amount": 10, "kind": "x"}):
+            self.assertEqual(self.client.post(f"/api/bookings/{b['id']}/payments", headers=ctx["h"], json=bad).status_code, 422, bad)
+        first = self.money(ctx, b)["payments"][0]
+        d = self.client.delete(f"/api/payments/{first['id']}", headers=ctx["h"])
+        self.assertEqual(d.status_code, 200, d.text)
+        self.assertEqual(float(d.json()["paid"]), 5000.0)
+        log = self.client.get(f"/api/bookings/{b['id']}/log", headers=ctx["h"]).json()
+        self.assertTrue(any(r["action"] == "payment" for r in log))
+
+    def test_legacy_paid_amount_becomes_payment(self):
+        ctx = self.register("money2@example.ru")
+        b = self.mk(ctx, paid_amount=2000)
+        self.assertEqual(float(self.money(ctx, b)["paid"]), 2000.0)
+        self.assertEqual(len(self.money(ctx, b)["payments"]), 1)
+        r = self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"paid_amount": 9000})
+        self.assertEqual(r.status_code, 200, r.text)
+        m = self.money(ctx, b)
+        self.assertEqual((float(m["paid"]), len(m["payments"])), (9000.0, 2))
+        self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"paid_amount": 4000})
+        m = self.money(ctx, b)
+        self.assertEqual(float(m["paid"]), 4000.0)
+        self.assertEqual(m["payments"][-1]["kind"], "refund")
+
+    def test_services_discount_deposit(self):
+        ctx = self.register("money3@example.ru")
+        b = self.mk(ctx)
+        svc = self.client.post("/api/services", headers=ctx["h"], json={"name": "Завтрак", "price": 500}).json()
+        r = self.client.post(f"/api/bookings/{b['id']}/services", headers=ctx["h"], json={"service_id": svc["id"], "qty": 3})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual((float(r.json()["total"]), float(r.json()["services_sum"]), float(r.json()["stay_price"])), (10500.0, 1500.0, 9000.0))
+        self.client.patch(f"/api/services/{svc['id']}", headers=ctx["h"], json={"price": 900})  # старые счета не меняются
+        self.assertEqual(float(self.money(ctx, b)["services"][0]["price"]), 500.0)
+        r = self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"discount_amount": 1000, "discount_reason": "Постоянный гость"})
+        self.assertEqual(float(r.json()["total_price"]), 9500.0)
+        r = self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"discount_amount": 500})
+        self.assertEqual(float(r.json()["total_price"]), 10000.0)
+        m = self.money(ctx, b)
+        self.assertEqual((m["discount_reason"], float(m["stay_price"])), ("Постоянный гость", 9000.0))
+        sid = m["services"][0]["id"]
+        self.assertEqual(float(self.client.delete(f"/api/booking-services/{sid}", headers=ctx["h"]).json()["total"]), 8500.0)
+        r = self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"deposit_amount": 3000})
+        self.assertEqual((r.json()["deposit_status"], float(r.json()["deposit_amount"])), ("expected", 3000.0))
+        r = self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"deposit_status": "held"})
+        self.assertEqual(r.json()["deposit_status"], "held")
+        self.assertEqual(self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"deposit_status": "??"}).status_code, 422)
+        self.assertEqual(self.client.post(f"/api/bookings/{b['id']}/services", headers=ctx["h"], json={"name": "", "price": 1}).status_code, 422)
+
+    def test_cash_summary_and_isolation(self):
+        a, other = self.register("money4a@example.ru"), self.register("money4b@example.ru")
+        b = self.mk(a)
+        today = date.today().isoformat()
+        self.client.post(f"/api/bookings/{b['id']}/payments", headers=a["h"], json={"amount": 4000, "method": "cash", "paid_on": today})
+        self.client.post(f"/api/bookings/{b['id']}/payments", headers=a["h"], json={"amount": 1000, "method": "card", "paid_on": today})
+        self.client.post(f"/api/bookings/{b['id']}/payments", headers=a["h"], json={"amount": 500, "kind": "refund", "method": "cash", "paid_on": today})
+        s = self.client.get(f"/api/payments/summary?from={today}&to={today}", headers=a["h"]).json()
+        self.assertEqual((float(s["received"]), float(s["refunded"]), float(s["net"])), (5000.0, 500.0, 4500.0))
+        self.assertEqual({m["method"] for m in s["by_method"]}, {"cash", "card"})
+        # чужой аккаунт ничего не видит и не меняет
+        self.assertEqual(self.client.get(f"/api/bookings/{b['id']}/money", headers=other["h"]).status_code, 404)
+        self.assertEqual(self.client.post(f"/api/bookings/{b['id']}/payments", headers=other["h"], json={"amount": 1}).status_code, 404)
+        pid = self.money(a, b)["payments"][0]["id"]
+        self.assertEqual(self.client.delete(f"/api/payments/{pid}", headers=other["h"]).status_code, 404)
+        self.assertEqual(self.client.get(f"/api/payments/summary?from={today}&to={today}", headers=other["h"]).json()["received"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

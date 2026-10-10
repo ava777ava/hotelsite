@@ -15,6 +15,7 @@ from ..pricing import quote
 from ..util import csv_safe, opt_str, parse_date, parse_int, parse_money, parse_uuid
 from .base import Ctx, api
 from .common import selected_property
+from .money import DEPOSIT_STATUSES, METHODS, add_payment
 from .reports import SOURCE_LABELS
 
 STATUSES = ("confirmed", "pending", "blocked", "cancelled")
@@ -22,6 +23,7 @@ SOURCES = ("manual", "direct", "avito", "yandex", "sutochno", "ostrovok", "other
 BOOKING_COLS = (
     "b.id, b.property_id, b.room_id, b.check_in, b.check_out, b.status, b.source, b.guest_name,"
     " b.guest_phone, b.guest_email, b.guests_count, b.total_price, b.paid_amount, b.notes,"
+    " b.discount_amount, b.discount_reason, b.deposit_amount, b.deposit_status,"
     " b.feed_id, b.external_uid, b.hold_expires_at, b.created_at, b.updated_at"
 )
 
@@ -188,6 +190,9 @@ def import_bookings(c: Ctx):
                 except psycopg.errors.ExclusionViolation:
                     errors.append({"line": n, "error": _overlap_info(conn, room["id"], row["check_in"], row["check_out"], None)})
                     continue
+                if row["paid_amount"] > 0:
+                    add_payment(conn, c.account_id, b["id"], c.p.user_id, row["paid_amount"], "payment", "other", None,
+                                "Из файла импорта", log=False)
                 booklog.log(conn, c.account_id, b["id"], c.p.user_id, "created", {
                     "summary": f"{row['check_in'].strftime('%d.%m')}–{row['check_out'].strftime('%d.%m')}, номер {room['name']}, импорт из файла",
                     "source": row["source"]})
@@ -222,10 +227,16 @@ def create_booking(c: Ctx):
     source = d.get("source") or "manual"
     if source not in SOURCES:
         raise ApiError(422, "Неверный источник")
+    discount = parse_money(d.get("discount_amount"), "Скидка")
+    deposit = parse_money(d.get("deposit_amount"), "Залог")
+    deposit_status = d.get("deposit_status") or ("expected" if deposit else "none")
+    if deposit_status not in DEPOSIT_STATUSES:
+        raise ApiError(422, "Неверный статус залога")
+    paid_in = parse_money(d.get("paid_amount"), "Оплачено")
     with tx() as conn:
         room = _load_room(conn, c.account_id, d.get("room_id"))
         if d.get("total_price") in (None, "") and status != "blocked":
-            total = quote(conn, _room_type(conn, room), check_in, check_out).total
+            total = max(quote(conn, _room_type(conn, room), check_in, check_out).total - discount, Decimal("0"))
         else:
             total = parse_money(d.get("total_price"), "Стоимость")
         try:
@@ -233,16 +244,22 @@ def create_booking(c: Ctx):
                 booking = one(
                     conn,
                     "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
-                    " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                    " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes,"
+                    " discount_amount, discount_reason, deposit_amount, deposit_status)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s) RETURNING *",
                     (c.account_id, room["property_id"], room["id"], check_in, check_out, status, source,
                      opt_str(d, "guest_name", max_len=200), opt_str(d, "guest_phone", max_len=50),
                      opt_str(d, "guest_email", max_len=200),
                      parse_int(d.get("guests_count"), "Гостей", 1, default=1), total,
-                     parse_money(d.get("paid_amount"), "Оплачено"), opt_str(d, "notes")),
+                     opt_str(d, "notes"), discount, opt_str(d, "discount_reason", max_len=200), deposit, deposit_status),
                 )
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, room["id"], check_in, check_out, None), {"code": "overlap"})
+        if paid_in > 0:
+            add_payment(conn, c.account_id, booking["id"], c.p.user_id, paid_in, "payment",
+                        d.get("payment_method") if d.get("payment_method") in METHODS else "cash", None,
+                        "Предоплата при создании брони", log=False)
+            booking["paid_amount"] = paid_in
         booklog.log(conn, c.account_id, booking["id"], c.p.user_id, "created", {
             "summary": f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}, номер {room['name']}",
             "source": source})
@@ -305,22 +322,46 @@ def update_booking(c: Ctx):
             new["guests_count"] = parse_int(d["guests_count"], "Гостей", 1)
         if "total_price" in d:
             new["total_price"] = parse_money(d["total_price"], "Стоимость")
+        if "discount_amount" in d:
+            # скидка меняет итог на разницу, если итог не задан вручную в этом же запросе
+            new["discount_amount"] = parse_money(d["discount_amount"], "Скидка")
+            if "total_price" not in d:
+                new["total_price"] = max(Decimal(b["total_price"]) + Decimal(b["discount_amount"]) - new["discount_amount"], Decimal("0"))
+        if "discount_reason" in d:
+            new["discount_reason"] = opt_str(d, "discount_reason", max_len=200)
+        if "deposit_amount" in d:
+            new["deposit_amount"] = parse_money(d["deposit_amount"], "Залог")
+            if new["deposit_amount"] and b["deposit_status"] == "none" and "deposit_status" not in d:
+                new["deposit_status"] = "expected"
+        if "deposit_status" in d:
+            if d["deposit_status"] not in DEPOSIT_STATUSES:
+                raise ApiError(422, "Неверный статус залога")
+            new["deposit_status"] = d["deposit_status"]
+        paid_delta = Decimal("0")
         if "paid_amount" in d:
-            new["paid_amount"] = parse_money(d["paid_amount"], "Оплачено")
+            # прежний способ: «Оплачено» — число. Превращаем разницу в запись истории платежей
+            target = parse_money(d["paid_amount"], "Оплачено")
+            paid_delta = target - Decimal(b["paid_amount"])
+            new["paid_amount"] = target
         try:
             with conn.transaction():
                 updated = one(
                     conn,
                     "UPDATE bookings SET room_id=%s, check_in=%s, check_out=%s, status=%s, source=%s,"
                     " guest_name=%s, guest_phone=%s, guest_email=%s, guests_count=%s, total_price=%s,"
-                    " paid_amount=%s, notes=%s, hold_expires_at=%s, updated_at=now() WHERE id=%s RETURNING *",
+                    " paid_amount=%s, notes=%s, hold_expires_at=%s, discount_amount=%s, discount_reason=%s,"
+                    " deposit_amount=%s, deposit_status=%s, updated_at=now() WHERE id=%s RETURNING *",
                     (new["room_id"], new["check_in"], new["check_out"], new["status"], new["source"],
                      new["guest_name"], new["guest_phone"], new["guest_email"], new["guests_count"],
-                     new["total_price"], new["paid_amount"], new["notes"], new["hold_expires_at"], bid),
+                     new["total_price"], new["paid_amount"], new["notes"], new["hold_expires_at"],
+                     new["discount_amount"], new["discount_reason"], new["deposit_amount"], new["deposit_status"], bid),
                 )
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, new["room_id"], new["check_in"], new["check_out"], bid),
                            {"code": "overlap"})
+        if paid_delta:
+            add_payment(conn, c.account_id, bid, c.p.user_id, abs(paid_delta), "payment" if paid_delta > 0 else "refund",
+                        "other", None, "Корректировка суммы оплаты", log=False)
         changes = booklog.diff(conn, b, updated)
         if changes:
             cancelled_now = new["status"] == "cancelled" and b["status"] != "cancelled"

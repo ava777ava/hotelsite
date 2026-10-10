@@ -8,7 +8,10 @@ FIELD_LABELS = {
     "room_id": "Номер", "check_in": "Заезд", "check_out": "Выезд", "status": "Статус", "source": "Источник",
     "guest_name": "Гость", "guest_phone": "Телефон", "guest_email": "Email", "guests_count": "Гостей",
     "total_price": "Стоимость", "paid_amount": "Оплачено", "notes": "Комментарий",
+    "discount_amount": "Скидка", "discount_reason": "Причина скидки", "deposit_amount": "Залог",
+    "deposit_status": "Статус залога",
 }
+DEPOSIT_LABELS = {"none": "нет", "expected": "ожидается", "held": "внесён", "returned": "возвращён", "kept": "удержан"}
 STATUS_LABELS = {"confirmed": "Подтверждена", "pending": "Ждёт оплаты", "blocked": "Даты закрыты",
                  "cancelled": "Отменена"}
 SOURCE_LABELS = {"manual": "Вручную", "direct": "Сайт", "avito": "Авито", "yandex": "Яндекс", "sutochno": "Суточно",
@@ -31,7 +34,9 @@ def _show(field: str, value, room_names: dict) -> str:
         return SOURCE_LABELS.get(value, str(value))
     if field in ("check_in", "check_out"):
         return value.strftime("%d.%m.%Y")
-    if field in ("total_price", "paid_amount"):
+    if field == "deposit_status":
+        return DEPOSIT_LABELS.get(value, str(value))
+    if field in ("total_price", "paid_amount", "discount_amount", "deposit_amount"):
         return f"{Decimal(value):.0f} ₽"
     return str(value)
 
@@ -39,7 +44,7 @@ def _show(field: str, value, room_names: dict) -> str:
 def diff(conn, old: dict, new: dict) -> list[dict]:
     """Список изменений между старым и новым состоянием брони: [{"field", "from", "to"}]."""
     changed = [k for k in FIELD_LABELS if k in old and k in new and (
-        (Decimal(old[k]) != Decimal(new[k])) if k in ("total_price", "paid_amount") else old[k] != new[k])]
+        (Decimal(old[k]) != Decimal(new[k])) if k in ("total_price", "paid_amount", "discount_amount", "deposit_amount") else old[k] != new[k])]
     if not changed:
         return []
     room_names: dict = {}
