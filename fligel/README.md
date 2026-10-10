@@ -203,7 +203,7 @@ certbot --nginx -d booking.вашдомен.ru
 
 **Запуск и проверка**
 ```bash
-TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/fligel_test python -m unittest discover -s tests   # ~30 с, 150 тестов
+TEST_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:5432/fligel_test python -m unittest discover -s tests   # ~30 с, 154 теста
 python -m app.demo                       # демо-данные: demo@fligel.ru / demo12345
 SYNC_ENABLED=0 uvicorn app.main:app      # без фонового опроса площадок
 PLAYWRIGHT_CHROMIUM=/путь/к/chromium python tests/ui_smoke.py http://localhost:8000   # проверка всех разделов в браузере (нужен playwright)
