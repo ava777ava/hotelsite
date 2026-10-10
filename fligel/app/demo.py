@@ -287,6 +287,18 @@ def _seed_new_features(conn, rnd, acc, prop, prop2, rooms, rooms2, today) -> Non
         run(conn, "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source, guest_name, guest_phone,"
                   " guests_count, total_price, group_id) VALUES (%s, %s, %s, %s, %s, 'confirmed', 'avito', 'Дмитрий Крылов', '+7 903 777-12-12',"
                   " 1, %s, %s)", (acc, prop, rid, today + timedelta(days=a), today + timedelta(days=b_), total, g2))
+    # --- колокольчик и журнал действий
+    for minutes, kind, text, link in ((12, "new_booking", "Новая заявка с сайта: Стандарт, заезд через 3 дня", "#/bookings"),
+                                      (95, "room_issue", "Номер 108: поломка — Протекает кран в ванной", "#/cleaning"),
+                                      (400, "sync_error", "Не удалось обновить календарь с площадки Авито: страница недоступна", "#/channels")):
+        run(conn, "INSERT INTO notifications (account_id, kind, text, link, created_at) VALUES (%s, %s, %s, %s, now() - make_interval(mins => %s))",
+            (acc, kind, text, link, minutes))
+    run(conn, "UPDATE users SET notifications_seen_at = now() - interval '5 hours' WHERE account_id = %s", (acc,))
+    owner = one(conn, "SELECT id FROM users WHERE email = 'demo@fligel.ru'")["id"]
+    for hours, summary in ((30, "Добавлен сотрудник Марина (администратор) (manager)"), (29, "Подключён календарь площадки Авито"),
+                           (6, "Изменены цены или ограничения: 14 записей"), (2, "Изменены настройки объекта «Гостиница «Флигель»»")):
+        run(conn, "INSERT INTO audit_log (account_id, user_id, action, summary, created_at) VALUES (%s, %s, 'demo', %s, now() - make_interval(hours => %s))",
+            (acc, owner, summary, hours))
     # --- собственник квартир и комиссия управляющей компании
     run(conn, "UPDATE properties SET mc_commission_percent = 15, mc_commission_base = 'net' WHERE id = %s", (prop2,))
     lid = one(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, 'landlord@fligel.ru', %s, 'Пётр (собственник квартир)', 'landlord') RETURNING id",

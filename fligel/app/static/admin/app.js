@@ -146,6 +146,7 @@ const state = {
   conflicts: 0,
   requests: 0,
   financeKind: store.get('finance_kind', 'expense'),
+  bell: 0,
 };
 
 const ROUTES = {
@@ -161,13 +162,14 @@ const ROUTES = {
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
   profile: { title: 'Профиль', icon: 'user', view: viewProfile, landlord: true },
+  audit: { title: 'Журнал действий', icon: 'list', view: viewAudit, role: 'owner' },
   ownerreport: { title: 'Отчёт собственнику', icon: 'stats', view: viewOwnerReport, roles: ['landlord', 'manager', 'owner'] },
   help: { title: 'Справка', icon: 'help', view: viewHelp, landlord: true },
 };
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
 const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
 const RANK = { landlord: -1, housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'help', 'profile'];
+const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
 const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
 const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
@@ -217,6 +219,8 @@ async function refreshBadges() {
   try {
     const b = await api('GET', '/api/badges');
     state.requests = b.requests; state.conflicts = b.conflicts; updateTitle();
+    try { state.bell = (await api('GET', '/api/notifications')).unread; } catch { /* колокольчик необязателен */ }
+    document.querySelectorAll('[data-bell]').forEach((el) => { el.textContent = state.bell || ''; el.style.display = state.bell ? '' : 'none'; });
     document.querySelectorAll('[data-badge]').forEach((el) => {
       const n = state[el.dataset.badge] || 0;
       el.textContent = n; el.style.display = n ? '' : 'none';
@@ -314,8 +318,10 @@ function layout(route, main) {
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
     BADGE[key] ? h('span', { class: 'badge', 'data-badge': BADGE[key], style: { display: state[BADGE[key]] ? '' : 'none' } }, state[BADGE[key]] || 0) : null);
   const prop = state.me.properties.find((p) => p.id === state.propertyId);
+  const bellBtn = (cls, color) => (can('manager') ? h('button', { class: `btn icon ghost bell-btn ${cls}`, title: 'Уведомления', 'aria-label': 'Уведомления', style: { color }, onclick: bellDrawer },
+    icon('bell'), h('span', { class: 'bell-dot', 'data-bell': '1', style: { display: state.bell ? '' : 'none' } }, state.bell || '')) : null);
   const sideSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { color: '#C3CCC0' }, onclick: guestSearchDrawer }, icon('search')) : null;
-  const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { marginLeft: 'auto', color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
+  const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
   // На телефоне в нижней панели помещается 5 пунктов: четыре главных и «Ещё» со всеми остальными разделами.
   const ordered = (state.me.role === 'landlord' ? LANDLORD_ORDER : MOBILE_ORDER).map((k) => visible.find(([v]) => v === k)).filter(Boolean);
   const mainItems = ordered.length <= 5 ? ordered : ordered.slice(0, 4);
@@ -327,14 +333,14 @@ function layout(route, main) {
       h('div', { class: 'brand' }, h('div', { class: 'brand-mark' }),
         h('div', { style: { flex: 1, minWidth: 0 } }, h('div', { class: 'brand-name' }, 'Флигель'),
         propertySwitcher('prop-switch') || h('div', { class: 'brand-sub' }, prop ? prop.name : '')),
-        sideSearchBtn),
+        bellBtn('', '#C3CCC0'), sideSearchBtn),
       h('nav', { class: 'nav' }, visible.map(link)),
       h('div', { class: 'side-foot' }, h('b', {}, state.me.name), ROLE[state.me.role],
         h('br'), h('button', { onclick: logout }, 'Выйти'), ' · ', h('button', { class: 'desk-only', title: 'Горячие клавиши', onclick: hotkeysDialog }, '⌨'), ' · ', h('button', { title: 'Светлая / тёмная тема', onclick: () => { const dark = getComputedStyle(document.documentElement).colorScheme === 'dark'; store.set('theme', dark ? 'light' : 'dark'); applyTheme(); } }, 'Тема'))),
     h('div', {},
       h('div', { class: 'mobile-top' }, h('div', { class: 'brand-mark' }),
         propertySwitcher('prop-switch') || h('div', { class: 'brand-name' }, prop ? prop.name : 'Флигель'),
-        mobileSearchBtn,
+        bellBtn('', '#fff'), mobileSearchBtn,
         h('button', { class: 'btn small ghost', style: { color: '#fff' }, onclick: logout }, 'Выйти')),
       main),
     h('nav', { class: 'mobile-nav', 'aria-label': 'Разделы' }, mainItems.map(link), moreBtn));
@@ -3291,63 +3297,79 @@ function deleteAccountDialog() {
 }
 
 // ---------- уведомления в Telegram ----------
+const CHANNEL_HELP_TEXT = {
+  telegram: {
+    off: ['Не настроены на сервере: администратору сервиса нужно создать бота через @BotFather и указать токен ', h => h('code', {}, 'TELEGRAM_BOT_TOKEN'), ' в файле .env (см. deploy/DEPLOY.md).'],
+    how: 'Откройте бота в Telegram и отправьте ему сообщение:',
+  },
+  max: {
+    off: ['Не настроены на сервере. Боты MAX создаются только от верифицированного юридического лица или ИП в РФ (правило платформы MAX): зарегистрируйте бота на платформе MAX для бизнеса, получите токен и укажите его в файле .env как ', h => h('code', {}, 'MAX_BOT_TOKEN'), ' (см. deploy/DEPLOY.md). Пока токена нет, всё остальное в сервисе работает как обычно.'],
+    how: 'Откройте бота в MAX по ссылке ниже (или отправьте боту сообщение):',
+  },
+};
+
+// Каналы уведомлений (Telegram и MAX): каждый сотрудник подключает свои чаты и сам выбирает, куда и что получать
 async function viewNotifications(main) {
   const content = h('div', { class: 'stack' });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Уведомления')), content);
   async function load() {
+    const s = await api('GET', '/api/notify/status');
     content.innerHTML = '';
-    const s = await api('GET', '/api/telegram/status');
-    if (!s.enabled) {
-      content.append(h('div', { class: 'card card-pad' },
-        h('h2', { style: { marginBottom: '6px' } }, 'Telegram-уведомления'),
-        h('p', { class: 'muted small', style: { marginTop: 0 } },
-          'Не настроены на сервере: администратору нужно создать бота через @BotFather и указать',
-          h('code', {}, ' TELEGRAM_BOT_TOKEN '), 'в файле .env (см. deploy/DEPLOY.md).')));
-      return;
+    const flags = {};
+    const channelCard = (ch) => {
+      const help = CHANNEL_HELP_TEXT[ch.name];
+      const card = h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '6px' } }, `${ch.label}-уведомления`));
+      if (!ch.server_enabled) {
+        card.append(h('p', { class: 'muted small', style: { marginTop: 0 } }, ...help.off.map((x) => (typeof x === 'function' ? x(h) : x))));
+        return card;
+      }
+      if (ch.linked) {
+        flags[ch.name] = h('input', { type: 'checkbox', checked: ch.user_enabled });
+        card.append(h('p', {}, h('span', { class: 'pill ok' }, 'Подключено'), ch.linked_at ? ` · с ${fmtDateTime(ch.linked_at)}` : ''),
+          h('label', { class: 'check', style: { marginBottom: '10px' } }, flags[ch.name], `Присылать сюда уведомления`),
+          h('button', { class: 'btn small ghost danger', onclick: async () => {
+            if (!confirm(`Отключить ${ch.label}? Чат можно будет подключить заново.`)) return;
+            await api('POST', `/api/notify/${ch.name}/unlink`); load();
+          } }, 'Отвязать чат'));
+      } else {
+        const codeBox = h('div');
+        const draw = () => {
+          codeBox.innerHTML = '';
+          if (ch.pending_code) {
+            const text = ch.name === 'telegram' ? `/start ${ch.pending_code}` : (ch.deep_link || `/start ${ch.pending_code}`);
+            codeBox.append(h('p', {}, help.how),
+              h('div', { class: 'copy-line' }, h('input', { class: 'input', readonly: true, value: text }),
+                h('button', { class: 'btn small', 'aria-label': 'Скопировать', onclick: () => copyText(text) }, icon('copy'))),
+              ch.deep_link ? h('p', {}, h('a', { class: 'btn small', href: ch.deep_link, target: '_blank', rel: 'noopener' }, 'Открыть в MAX')) : null,
+              h('p', { class: 'muted small' }, `Код действует 30 минут (до ${fmtDateTime(ch.pending_code_expires_at)}). После отправки обновите страницу.`));
+          }
+        };
+        draw();
+        card.append(codeBox, h('button', { class: 'btn primary', style: { marginTop: '8px' }, onclick: async () => {
+          const r = await api('POST', `/api/notify/${ch.name}/link`);
+          Object.assign(ch, r.channels.find((x) => x.name === ch.name)); draw();
+        } }, ch.pending_code ? 'Получить новый код' : `Подключить ${ch.label}`));
+      }
+      return card;
+    };
+    content.append(h('div', { class: 'card card-pad' }, h('p', { style: { margin: 0 } },
+      'Новые заявки, отмены, конфликты, поломки и утренний дайджест можно получать в Telegram, в MAX или в оба мессенджера сразу. Внутри сервиса их всегда видно в колокольчике.')),
+      ...s.channels.map(channelCard));
+    if (s.channels.some((c) => c.server_enabled)) {
+      const eventsCard = h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '10px' } }, 'Какие события присылать мне'));
+      const boxes = {};
+      s.available_events.forEach((e) => {
+        eventsCard.append(h('label', { class: 'check', style: { display: 'block', marginBottom: '8px' } },
+          boxes[e.key] = h('input', { type: 'checkbox', checked: s.events.includes(e.key) }), ' ' + e.label));
+      });
+      eventsCard.append(h('button', { class: 'btn primary', onclick: async () => {
+        const events = Object.entries(boxes).filter(([, el]) => el.checked).map(([k]) => k);
+        const channels = {};
+        s.channels.forEach((c) => { channels[c.name] = flags[c.name] ? flags[c.name].checked : c.user_enabled; });
+        try { await api('PUT', '/api/notify/settings', { events, channels }); toast('Сохранено'); } catch (ex) { toast(ex.message, true); }
+      } }, 'Сохранить'));
+      content.append(eventsCard);
     }
-    const card = h('div', { class: 'card card-pad' });
-    card.append(h('h2', { style: { marginBottom: '6px' } }, 'Telegram-уведомления'),
-      h('p', { class: 'muted small', style: { marginTop: 0 } },
-        'Каждый сотрудник подключает свой личный чат и сам выбирает, какие уведомления получать.'));
-    if (s.linked) {
-      card.append(h('p', {}, h('span', { class: 'pill ok' }, 'Подключено'),
-        s.linked_at ? ` · с ${fmtDateTime(s.linked_at)}` : ''),
-        h('button', { class: 'btn small ghost danger', onclick: async () => {
-          if (!confirm('Отключить уведомления в этом чате?')) return;
-          await api('POST', '/api/telegram/unlink'); load();
-        } }, 'Отвязать чат'));
-    } else {
-      const codeBox = h('div');
-      const draw = () => {
-        codeBox.innerHTML = '';
-        if (s.pending_code) {
-          codeBox.append(
-            h('p', {}, 'Напишите боту в Telegram сообщение:'),
-            h('div', { class: 'copy-line' },
-              h('input', { class: 'input', readonly: true, value: `/start ${s.pending_code}` }),
-              h('button', { class: 'btn small', onclick: () => navigator.clipboard?.writeText(`/start ${s.pending_code}`).then(() => toast('Скопировано')) }, icon('copy'))),
-            h('p', { class: 'muted small' }, `Код действует 30 минут (до ${fmtDateTime(s.pending_code_expires_at)}). Обновите страницу после отправки, чтобы увидеть статус.`));
-        }
-      };
-      draw();
-      card.append(codeBox, h('button', { class: 'btn primary', style: { marginTop: '8px' }, onclick: async () => {
-        const r = await api('POST', '/api/telegram/link'); Object.assign(s, r); draw();
-      } }, s.pending_code ? 'Получить новый код' : 'Подключить Telegram'));
-    }
-    content.append(card);
-
-    const eventsCard = h('div', { class: 'card card-pad' },
-      h('h2', { style: { marginBottom: '10px' } }, 'Какие события присылать мне'));
-    const boxes = {};
-    s.available_events.forEach((e) => {
-      eventsCard.append(h('label', { class: 'check', style: { display: 'block', marginBottom: '8px' } },
-        boxes[e.key] = h('input', { type: 'checkbox', checked: s.events.includes(e.key) }), ' ' + e.label));
-    });
-    eventsCard.append(h('button', { class: 'btn primary', onclick: async () => {
-      const events = Object.entries(boxes).filter(([, el]) => el.checked).map(([k]) => k);
-      try { await api('PUT', '/api/telegram/events', { events }); toast('Сохранено'); } catch (ex) { toast(ex.message, true); }
-    } }, 'Сохранить'));
-    content.append(eventsCard);
   }
   load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
 }
@@ -3423,6 +3445,38 @@ async function viewOwnerReport(main) {
   }
   sel.addEventListener('change', load); monthInput.addEventListener('change', load);
   load();
+}
+
+// Колокольчик: последние события аккаунта (новые заявки, конфликты, поломки…)
+async function bellDrawer() {
+  let r;
+  try { r = await api('GET', '/api/notifications'); } catch (ex) { toast(ex.message, true); return; }
+  openDrawer('Уведомления', r.items.length
+    ? h('div', {}, r.items.map((n) => h('a', { class: 'bell-item' + (n.unread ? ' unread' : ''), href: n.link || '#/today', onclick: () => closeDrawer() },
+      h('div', {}, n.text), h('div', { class: 'muted small' }, `${ago(n.created_at)}`))))
+    : h('div', { class: 'empty' }, h('h3', {}, 'Пока тихо'), 'Здесь появятся новые заявки с сайта, конфликты площадок, поломки в номерах и другие события.'),
+  [h('a', { class: 'btn small ghost', href: '#/notifications', onclick: () => closeDrawer() }, 'Настроить уведомления'), h('span', { class: 'spacer' }), h('button', { class: 'btn foot-close', onclick: closeDrawer }, 'Закрыть')]);
+  if (r.unread) { try { await api('POST', '/api/notifications/seen'); state.bell = 0; document.querySelectorAll('[data-bell]').forEach((el) => { el.style.display = 'none'; }); } catch { /* ничего */ } }
+}
+
+// Журнал действий (для владельца): кто, что и когда
+async function viewAudit(main) {
+  const card = h('div', { class: 'card' });
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Журнал действий')),
+    h('p', { class: 'muted', style: { marginTop: '-6px' } }, 'Кто что менял: брони, платежи, цены, доступы сотрудников, подключения площадок.'), card);
+  let before = null;
+  const rows = h('div', { class: 'day-list' });
+  const more = h('div', { style: { padding: '12px', textAlign: 'center' } });
+  card.append(rows, more);
+  async function load() {
+    const r = await api('GET', '/api/audit?' + qs({ before }));
+    if (!r.items.length && !before) { rows.append(h('div', { class: 'empty' }, h('h3', {}, 'Журнал пока пуст'), 'Записи появятся, как только вы или сотрудники начнут работать.')); return; }
+    r.items.forEach((i) => rows.append(h('div', { class: 'item audit-item' },
+      h('div', { class: 'audit-when muted small' }, fmtDateTime(i.created_at)), h('div', { style: { flex: 1, minWidth: 0 } }, h('div', {}, i.text), h('div', { class: 'muted small' }, i.who)))));
+    more.innerHTML = '';
+    if (r.more && r.items.length) { before = r.items[r.items.length - 1].created_at; more.append(h('button', { class: 'btn', onclick: load }, 'Показать ещё')); }
+  }
+  load().catch((ex) => rows.append(h('div', { class: 'empty' }, ex.message)));
 }
 
 // ---------- справка ----------

@@ -665,3 +665,14 @@ kbd { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; background: v
 .ref-line { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; font-size: 12.5px; }
 .toast { cursor: pointer; }
 .b-room:hover .b-side { background: var(--surface-2); } .b-room:hover .b-cell:not(.sel) { background-color: rgba(127,127,127,.05); }
+
+/* колокольчик и журнал */
+.bell-btn { position: relative; margin-left: auto; }
+.mobile-top .bell-btn { margin-left: auto; }
+.mobile-top .bell-btn + .btn { margin-left: 0; }
+.brand .bell-btn { margin-left: 0; }
+.bell-dot { position: absolute; top: 2px; right: 0; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px; background: var(--clay); color: #fff; font-size: 10px; line-height: 16px; font-weight: 700; text-align: center; }
+.bell-item { display: block; padding: 12px 4px; border-bottom: 1px solid var(--line); text-decoration: none; color: var(--ink); }
+.bell-item.unread { border-left: 3px solid var(--clay); padding-left: 10px; background: var(--clay-soft); }
+.audit-item { align-items: flex-start; } .audit-when { width: 96px; flex: none; }
+.brand .btn.icon { width: 30px; min-width: 30px; padding: 0; }
