@@ -59,7 +59,7 @@ const SOURCE = {
   manual: 'Вручную', direct: 'Сайт', avito: 'Авито', yandex: 'Яндекс', sutochno: 'Суточно', ostrovok: 'Островок', other: 'Другое',
 };
 const STATUS = { confirmed: 'Подтверждена', pending: 'Заявка', blocked: 'Даты закрыты', cancelled: 'Отменена' };
-const ROLE = { owner: 'Владелец', manager: 'Администратор', housekeeper: 'Горничная' };
+const ROLE = { owner: 'Владелец', manager: 'Администратор', housekeeper: 'Горничная', landlord: 'Собственник' };
 
 const pad = (n) => String(n).padStart(2, '0');
 const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
@@ -134,7 +134,7 @@ const state = {
 };
 
 const ROUTES = {
-  board: { title: 'Шахматка', icon: 'board', view: viewBoard },
+  board: { title: 'Шахматка', icon: 'board', view: viewBoard, landlord: true },
   today: { title: 'Сегодня', icon: 'today', view: viewToday },
   cleaning: { title: 'Уборка', icon: 'clean', view: viewCleaning },
   bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager' },
@@ -145,13 +145,16 @@ const ROUTES = {
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
-  profile: { title: 'Профиль', icon: 'user', view: viewProfile },
-  help: { title: 'Справка', icon: 'help', view: viewHelp },
+  profile: { title: 'Профиль', icon: 'user', view: viewProfile, landlord: true },
+  ownerreport: { title: 'Отчёт собственнику', icon: 'stats', view: viewOwnerReport, roles: ['landlord', 'manager', 'owner'] },
+  help: { title: 'Справка', icon: 'help', view: viewHelp, landlord: true },
 };
-const RANK = { housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'help', 'profile'];
+// Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
+const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
+const RANK = { landlord: -1, housekeeper: 0, manager: 1, owner: 2 };
+const MOBILE_ORDER = ['ownerreport', 'board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'help', 'profile'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
-const currentRoute = () => { const home = state.me?.role === 'housekeeper' ? 'cleaning' : 'board'; const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
+const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || 'board'; const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 
 window.addEventListener('hashchange', () => render());
 
@@ -205,7 +208,7 @@ function render() {
   document.title = `${def.title} — Флигель`;
   const main = h('main', { class: 'main' });
   $app.append(layout(route, main));
-  if (def.role && !can(def.role)) {
+  if (!routeVisible(def)) {
     main.append(h('div', { class: 'card empty' }, h('h3', {}, 'Раздел недоступен'), 'Попросите владельца расширить ваши права.'));
     return;
   }
@@ -255,7 +258,8 @@ function guestSearchDrawer() {
 }
 
 function layout(route, main) {
-  const visible = Object.entries(ROUTES).filter(([, d]) => !d.role || can(d.role));
+  const visible = Object.entries(ROUTES).filter(([, d]) => routeVisible(d));
+  if (state.me.role === 'landlord') visible.sort((a, b2) => MOBILE_ORDER.indexOf(a[0]) - MOBILE_ORDER.indexOf(b2[0]));
   const BADGE = { bookings: 'requests', channels: 'conflicts' };
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
     BADGE[key] ? h('span', { class: 'badge', 'data-badge': BADGE[key], style: { display: state[BADGE[key]] ? '' : 'none' } }, state[BADGE[key]] || 0) : null);
@@ -563,7 +567,7 @@ async function viewBoard(main) {
   const shift = (n) => { state.boardFrom = addDays(state.boardFrom, n); load(); };
   const load = async () => {
     try {
-      boardData = await api('GET', '/api/board?' + qs({ property_id: state.propertyId, from: state.boardFrom, days: state.boardDays }));
+      boardData = await api('GET', (state.me.role === 'landlord' ? '/api/landlord/board?' : '/api/board?') + qs({ property_id: state.propertyId, from: state.boardFrom, days: state.boardDays }));
       state.conflicts = boardData.open_conflicts;
       banner.innerHTML = '';
       if (boardData.open_conflicts) {
@@ -689,6 +693,7 @@ function bindBarDrag(bar, b, room, draggable, ctx) {
   bar.addEventListener('pointerup', finish);
   bar.addEventListener('pointercancel', finish);
   bar.addEventListener('click', (ev) => {
+    if (state.me.role === 'landlord') return;
     if (justDragged) { justDragged = false; ev.preventDefault(); return; }
     bookingDrawer(b, reload);
   });
@@ -3002,16 +3007,18 @@ async function viewSettings(main) {
       h('button', { class: 'btn small', onclick: () => {
         const g = {};
         const fld = (k, l, a = {}) => h('label', { class: 'field' }, h('span', {}, l), g[k] = h('input', { class: 'input', ...a }));
-        g.role = h('select', { class: 'input' }, h('option', { value: 'manager' }, 'Администратор — брони, цены, площадки'), h('option', { value: 'housekeeper' }, 'Горничная — только шахматка и заезды'));
+        g.role = h('select', { class: 'input', onchange: () => { propBox.style.display = g.role.value === 'landlord' ? '' : 'none'; } }, h('option', { value: 'manager' }, 'Администратор — брони, цены, площадки'), h('option', { value: 'housekeeper' }, 'Горничная — уборка, шахматка и заезды'), h('option', { value: 'landlord' }, 'Собственник — только чтение своих объектов и отчёт'));
+        const propChecks = state.me.properties.map((pr) => [pr.id, h('input', { type: 'checkbox' }), pr.name]);
+        const propBox = h('div', { class: 'field', style: { display: 'none' } }, h('span', {}, 'Какие объекты видит собственник'), propChecks.map(([, cb, name]) => h('label', { class: 'check' }, cb, name)));
         openDrawer('Новый сотрудник', h('div', {}, fld('name', 'Имя'), fld('email', 'Email для входа', { type: 'email' }), fld('password', 'Временный пароль', { type: 'text' }),
-          h('label', { class: 'field' }, h('span', {}, 'Доступ'), g.role)),
+          h('label', { class: 'field' }, h('span', {}, 'Доступ'), g.role), propBox),
         [h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: async () => {
-          try { await api('POST', '/api/users', { name: g.name.value, email: g.email.value, password: g.password.value, role: g.role.value }); closeDrawer(); toast('Сотрудник добавлен'); load(); }
+          try { await api('POST', '/api/users', { name: g.name.value, email: g.email.value, password: g.password.value, role: g.role.value, property_ids: propChecks.filter(([, cb]) => cb.checked).map(([id]) => id) }); closeDrawer(); toast('Сотрудник добавлен'); load(); }
           catch (ex) { toast(ex.message, true); }
         } }, 'Добавить')]);
       } }, icon('plus'), 'Сотрудник')),
     h('table', { class: 'list' }, h('tbody', {}, users.map((u) => h('tr', {},
-      h('td', {}, h('b', {}, u.name), h('div', { class: 'muted small' }, u.email)), h('td', {}, ROLE[u.role]),
+      h('td', {}, h('b', {}, u.name), h('div', { class: 'muted small' }, u.email)), h('td', {}, ROLE[u.role], u.role === 'landlord' ? h('div', { class: 'muted small' }, state.me.properties.filter((pr) => (u.property_ids || []).includes(pr.id)).map((pr) => pr.name).join(', ') || 'объекты не выбраны') : null),
       h('td', { style: { textAlign: 'right' } }, u.role !== 'owner' ? h('button', { class: 'btn small ghost danger', onclick: async () => {
         if (!confirm(`Удалить доступ для ${u.name}?`)) return;
         await api('DELETE', `/api/users/${u.id}`); load();
@@ -3133,6 +3140,74 @@ async function viewNotifications(main) {
 }
 
 // ---------- профиль ----------
+// Печать выбранного блока страницы: копия кладётся в #print-sheet, остальное приложение при печати скрыто
+function printNode(node) {
+  document.getElementById('print-sheet')?.remove();
+  const sheet = h('div', { id: 'print-sheet' }, node.cloneNode(true));
+  document.body.append(sheet);
+  window.print();
+  setTimeout(() => sheet.remove(), 500);
+}
+
+// ---------- отчёт собственнику ----------
+async function viewOwnerReport(main) {
+  const landlord = state.me.role === 'landlord';
+  const props = await api('GET', '/api/landlord/properties');
+  const now = new Date();
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const monthInput = h('input', { class: 'input', type: 'month', value: store.get('or_month') || `${prev.getFullYear()}-${pad(prev.getMonth() + 1)}`, style: { width: '170px' } });
+  const sel = h('select', { class: 'input', style: { width: '240px' } }, props.map((p) => h('option', { value: p.id, selected: p.id === state.propertyId }, p.name)));
+  const box = h('div', { class: 'stack' });
+  const csvBtn = h('button', { class: 'btn', onclick: () => downloadCsv('/api/landlord/report?' + qs({ property_id: sel.value, month: monthInput.value, format: 'csv' }), `owner_report_${monthInput.value}.csv`) }, icon('download'), 'CSV');
+  const printBtn = h('button', { class: 'btn', onclick: () => printNode(box) }, icon('print'), 'Печать');
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Отчёт собственнику'), csvBtn, printBtn),
+    h('div', { class: 'board-tools no-print', style: { marginBottom: '14px' } }, props.length > 1 ? sel : null, monthInput), box);
+  if (!props.length) { box.append(h('div', { class: 'card empty' }, h('h3', {}, 'Нет доступных объектов'), landlord ? 'Попросите владельца сервиса открыть вам доступ к объекту.' : 'Добавьте объект в «Настройках».')); return; }
+  const line = (label, value, cls, hint) => h('div', { class: 'or-line ' + (cls || '') }, h('span', {}, label, hint ? h('small', {}, hint) : null), h('b', {}, value));
+  async function load() {
+    store.set('or_month', monthInput.value);
+    box.innerHTML = '';
+    box.append(h('div', { class: 'card empty' }, h('span', { class: 'spin' }), 'Считаю…'));
+    let r;
+    try { r = await api('GET', '/api/landlord/report?' + qs({ property_id: sel.value, month: monthInput.value })); }
+    catch (ex) { box.innerHTML = ''; box.append(h('div', { class: 'card empty' }, ex.message)); return; }
+    box.innerHTML = '';
+    const mcLabel = `Комиссия управляющей компании ${Number(r.mc_percent)}%`;
+    box.append(
+      h('div', { class: 'or-head print-only' }, h('h2', {}, r.property.name), h('div', { class: 'muted' }, `${r.property.address || ''} · отчёт за ${monthInput.value}`)),
+      h('div', { class: 'kpis' }, kpiCard('К выплате собственнику', fmtMoney(r.payout)), kpiCard('Загрузка', `${r.occupancy}%`), kpiCard('Ночей продано', String(r.sold_nights)), kpiCard('Средняя цена ночи', fmtMoney(r.adr))),
+      h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '10px' } }, 'Как получилась сумма'),
+        line('Выручка от проживания', fmtMoney(r.revenue), '', 'по ночам месяца'),
+        line('− Комиссии площадок', `−${fmtMoney(r.platform_commission)}`),
+        line('= Чистая выручка', fmtMoney(r.net_revenue), 'sub'),
+        Number(r.other_incomes) ? line('+ Прочие доходы объекта', fmtMoney(r.other_incomes)) : null,
+        line('− Расходы объекта', `−${fmtMoney(r.expenses_total)}`, '', 'общие расходы компании сюда не входят'),
+        Number(r.mc_percent) ? line(`− ${mcLabel}`, `−${fmtMoney(r.mc_commission)}`, '', r.mc_base === 'gross' ? 'от выручки' : 'от чистой выручки') : null,
+        line('К выплате', fmtMoney(r.payout), 'total')),
+      r.expenses.length ? h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'Расходы объекта')),
+        h('table', { class: 'list' }, h('tbody', {}, r.expenses.map((e) => h('tr', {}, h('td', {}, h('i', { class: 'dot', style: { background: e.color, marginRight: '8px' } }), e.name), h('td', { class: 'num' }, fmtMoney(e.amount))))))) : null,
+      r.by_source.length ? h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'По источникам')),
+        h('table', { class: 'list' }, h('thead', {}, h('tr', {}, ['Источник', 'Броней', 'Ночей', 'Выручка', 'Комиссия'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, r.by_source.map((x) => h('tr', {}, h('td', {}, x.label), h('td', { class: 'num' }, x.bookings), h('td', { class: 'num' }, x.nights), h('td', { class: 'num' }, fmtMoney(x.revenue)), h('td', { class: 'num' }, fmtMoney(x.commission))))))) : null,
+      h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, 'Проживания в месяце'), h('span', { class: 'pill none num' }, r.stays.length)),
+        r.stays.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'list cards-mobile' }, h('thead', {}, h('tr', {}, ['Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Ночей', 'Выручка'].map((t) => h('th', {}, t)))),
+          h('tbody', {}, r.stays.map((x) => h('tr', {}, h('td', { 'data-l': 'Заезд' }, fmtShort(x.check_in)), h('td', { 'data-l': 'Выезд' }, fmtShort(x.check_out)), h('td', { 'data-l': 'Номер' }, x.room_name),
+            h('td', { 'data-l': 'Гость' }, x.guest), h('td', { 'data-l': 'Источник' }, SOURCE[x.source]), h('td', { class: 'num', 'data-l': 'Ночей' }, x.nights_in), h('td', { class: 'num', 'data-l': 'Выручка' }, fmtMoney(x.revenue)))))))
+          : h('div', { class: 'empty' }, 'В этом месяце проживаний не было.')));
+    if (can('owner')) {
+      const pct = h('input', { class: 'input', type: 'number', min: 0, max: 100, step: '0.5', value: Number(r.mc_percent), style: { width: '110px' } });
+      const base = h('select', { class: 'input', style: { width: '260px' } }, h('option', { value: 'net', selected: r.mc_base === 'net' }, 'от чистой выручки (после комиссий площадок)'), h('option', { value: 'gross', selected: r.mc_base === 'gross' }, 'от выручки (до комиссий площадок)'));
+      box.append(h('div', { class: 'card card-pad no-print' }, h('h2', { style: { marginBottom: '6px' } }, 'Комиссия управляющей компании'),
+        h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Если вы управляете чужими объектами: процент, который удерживает управляющая компания, и от какой суммы он считается. Собственники видят это в своём отчёте.'),
+        h('div', { class: 'money-actions' }, pct, '%', base, h('button', { class: 'btn primary', onclick: async () => {
+          try { await api('PUT', `/api/properties/${sel.value}/commission`, { percent: pct.value || 0, base: base.value }); toast('Сохранено'); load(); } catch (ex) { toast(ex.message, true); }
+        } }, 'Сохранить'))));
+    }
+  }
+  sel.addEventListener('change', load); monthInput.addEventListener('change', load);
+  load();
+}
+
 // ---------- справка ----------
 const HELP = [
   ['Шахматка: брони и перенос', null, [

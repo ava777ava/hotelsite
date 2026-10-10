@@ -609,3 +609,11 @@ table.list tbody tr { transition: background .1s; }
 .board.compact .b-day { height: 52px; }
 .board.compact .b-day .n { font-size: 11px; }
 .board.compact .bar .ttl { font-size: 10.5px; }
+
+/* отчёт собственнику */
+.or-line { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.or-line small { display: block; color: var(--muted); font-size: 12px; }
+.or-line b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.or-line.sub { font-weight: 600; } .or-line.total { border-bottom: 0; font-size: 18px; padding-top: 12px; } .or-line.total b { color: var(--pine); }
+.print-only { display: none; }
+@media print { .print-only { display: block; margin-bottom: 14px; } .no-print { display: none !important; } }

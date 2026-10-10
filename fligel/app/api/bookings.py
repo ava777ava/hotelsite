@@ -558,22 +558,27 @@ def board(c: Ctx):
     start, end = _date_range(c, 31)
     with tx() as conn:
         prop = selected_property(conn, c.account_id, c.q.get("property_id"))
-        types = all_(conn, "SELECT id, name, capacity, base_price, min_stay FROM room_types"
-                           " WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
-        rooms = all_(conn, f"SELECT r.id, r.room_type_id, r.name, {EFFECTIVE_SQL} AS hk_status, r.hk_note, r.note FROM rooms r"
-                           " WHERE r.property_id = %s ORDER BY r.sort_order, r.name", (prop["id"],))
-        rates = all_(conn, "SELECT room_type_id, date, price, min_stay, closed FROM rates"
-                           " WHERE account_id = %s AND date >= %s AND date < %s", (c.account_id, start, end))
-        bookings = all_(
-            conn,
-            f"SELECT {BOOKING_COLS} FROM bookings b WHERE b.property_id = %s AND b.status <> 'cancelled'"
-            " AND b.check_in < %s AND b.check_out > %s ORDER BY b.check_in",
-            (prop["id"], end, start),
-        )
-        conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
-                        (c.account_id,))["n"]
-        flags = flags_for(conn, c.account_id, bookings)
-        notes = all_(conn, "SELECT day, text FROM date_notes WHERE property_id = %s AND day >= %s AND day < %s", (prop["id"], start, end))
+        return board_payload(conn, c.account_id, prop, start, end)
+
+
+def board_payload(conn, account_id, prop, start, end, contacts: bool = True) -> dict:
+    """Данные шахматки объекта. contacts=False — для собственника: без телефонов, почты и заметок гостей."""
+    types = all_(conn, "SELECT id, name, capacity, base_price, min_stay FROM room_types"
+                       " WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
+    rooms = all_(conn, f"SELECT r.id, r.room_type_id, r.name, {EFFECTIVE_SQL} AS hk_status, r.hk_note, r.note FROM rooms r"
+                       " WHERE r.property_id = %s ORDER BY r.sort_order, r.name", (prop["id"],))
+    rates = all_(conn, "SELECT room_type_id, date, price, min_stay, closed FROM rates"
+                       " WHERE account_id = %s AND date >= %s AND date < %s", (account_id, start, end))
+    bookings = all_(
+        conn,
+        f"SELECT {BOOKING_COLS} FROM bookings b WHERE b.property_id = %s AND b.status <> 'cancelled'"
+        " AND b.check_in < %s AND b.check_out > %s ORDER BY b.check_in",
+        (prop["id"], end, start),
+    )
+    conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
+                    (account_id,))["n"]
+    flags = flags_for(conn, account_id, bookings)
+    notes = all_(conn, "SELECT day, text FROM date_notes WHERE property_id = %s AND day >= %s AND day < %s", (prop["id"], start, end))
     rate_map: dict = {}
     for r in rates:
         rate_map.setdefault(str(r["room_type_id"]), {})[r["date"].isoformat()] = {
@@ -582,8 +587,17 @@ def board(c: Ctx):
         t["rooms"] = [r for r in rooms if r["room_type_id"] == t["id"]]
         t["rates"] = rate_map.get(str(t["id"]), {})
     days = [(start + timedelta(days=i)).isoformat() for i in range((end - start).days)]
+    if not contacts:
+        flags = {}
+        for b in bookings:
+            parts = (b["guest_name"] or "").split()
+            b["guest_name"] = (parts[0] + (f" {parts[1][0]}." if len(parts) > 1 else "")) if parts else ""
+            for k in ("guest_phone", "guest_email", "notes", "discount_reason", "rate_plan_name"):
+                b[k] = ""
+            for k in ("paid_amount", "discount_amount", "deposit_amount"):
+                b[k] = 0
     return {"property": prop, "from": start, "to": end, "days": days, "room_types": types,
-            "bookings": bookings, "open_conflicts": conflicts, "guest_flags": flags,
+            "bookings": bookings, "open_conflicts": conflicts if contacts else 0, "guest_flags": flags,
             "date_notes": {n["day"].isoformat(): n["text"] for n in notes}}
 
 

@@ -167,7 +167,7 @@ def change_password(c: Ctx):
 TRIAL_DAYS = 14
 
 
-@api()
+@api("landlord")
 def me(c: Ctx):
     with tx() as conn:
         user = one(
@@ -179,11 +179,15 @@ def me(c: Ctx):
         )
         if not user:
             raise ApiError(401, "Нужно войти в систему")
-        props = all_(
-            conn,
-            "SELECT id, name, public_slug FROM properties WHERE account_id = %s ORDER BY created_at",
-            (c.account_id,),
-        )
+        if user["role"] == "landlord":
+            props = all_(conn, "SELECT p.id, p.name, p.public_slug FROM properties p JOIN user_properties up ON up.property_id = p.id"
+                               " WHERE up.user_id = %s AND p.account_id = %s ORDER BY p.created_at", (c.p.user_id, c.account_id))
+        else:
+            props = all_(
+                conn,
+                "SELECT id, name, public_slug FROM properties WHERE account_id = %s ORDER BY created_at",
+                (c.account_id,),
+            )
     created = user.pop("account_created_at")
     # Пробный период — информационный: показываем, сколько осталось, но доступ не ограничиваем
     # (подключение оплаты — отдельный этап).
@@ -249,7 +253,9 @@ def list_users(c: Ctx):
     with tx() as conn:
         return all_(
             conn,
-            "SELECT id, name, email, role, created_at FROM users WHERE account_id = %s ORDER BY created_at",
+            "SELECT u.id, u.name, u.email, u.role, u.created_at,"
+            " coalesce((SELECT array_agg(up.property_id) FROM user_properties up WHERE up.user_id = u.id), '{}') AS property_ids"
+            " FROM users u WHERE u.account_id = %s ORDER BY u.created_at",
             (c.account_id,),
         )
 
@@ -259,20 +265,27 @@ def create_user(c: Ctx):
     name = req_str(c.data, "name", "Имя", 200)
     email = req_str(c.data, "email", "Email", 200).lower()
     role = c.data.get("role")
-    if role not in ("manager", "housekeeper"):
-        raise ApiError(422, "Роль: администратор или горничная")
+    if role not in ("manager", "housekeeper", "landlord"):
+        raise ApiError(422, "Роль: администратор, горничная или собственник")
+    property_ids = c.data.get("property_ids") or []
+    if role == "landlord" and (not isinstance(property_ids, list) or not property_ids):
+        raise ApiError(422, "Выберите объекты, которые увидит собственник", {"field": "property_ids"})
     password = str(c.data.get("password") or "")
     if len(password) < 8:
         raise ApiError(422, "Пароль должен быть не короче 8 символов", {"field": "password"})
     with tx() as conn:
         if one(conn, "SELECT 1 FROM users WHERE lower(email) = %s", (email,)):
             raise ApiError(409, "Пользователь с таким email уже есть", {"field": "email"})
-        return one(
+        user = one(
             conn,
             "INSERT INTO users (account_id, email, password_hash, name, role)"
             " VALUES (%s, %s, %s, %s, %s) RETURNING id, name, email, role",
             (c.account_id, email, hash_password(password), name, role),
         )
+        if role == "landlord":
+            from .owners import assign_properties
+            assign_properties(conn, c.account_id, user["id"], list(dict.fromkeys(parse_uuid(i, "Объект") for i in property_ids)))
+        return user
 
 
 @api("owner")

@@ -2187,5 +2187,86 @@ class BoardFeaturesTests(Base):
         self.assertEqual(self.client.put("/api/date-notes", headers=ctx["h"], json={"day": "не дата", "text": "x"}).status_code, 422)
 
 
+class LandlordTests(Base):
+    """Роль «Собственник» и отчёт собственнику с комиссией УК."""
+
+    def setup_account(self, email):
+        ctx = self.register(email, rooms=(("Стандарт", 2, 4000),))
+        # второй объект, который собственнику не назначен
+        r2 = self.client.post("/api/setup", headers=ctx["h"], json={"name": "Чужой объект", "room_types": [{"name": "Студия", "count": 1, "base_price": 2000, "capacity": 2}]})
+        self.assertEqual(r2.status_code, 200, r2.text)
+        return ctx, r2.json()
+
+    def make_landlord(self, ctx, props, email="owner.ll@example.ru"):
+        r = self.client.post("/api/users", headers=ctx["h"], json={"email": email, "name": "Собственник Пётр", "password": "password123",
+                                                                  "role": "landlord", "property_ids": props})
+        self.assertEqual(r.status_code, 200, r.text)
+        tok = self.client.post("/api/auth/login", json={"email": email, "password": "password123"}).json()["token"]
+        return {"Authorization": f"Bearer {tok}"}, r.json()["id"]
+
+    def test_report_math(self):
+        ctx, other = self.setup_account("ll1@example.ru")
+        pid = ctx["prop"]["id"]
+        room = ctx["rooms"][0]
+        # 10 ночей в месяце: 4 000 × 10 = 40 000 (Авито, комиссия 10%); плюс бронь через край месяца
+        self.client.put("/api/channel-commissions", headers=ctx["h"], json={"items": [{"channel": "avito", "percent": 10}]})
+        self.book(ctx, room, "2037-03-01", "2037-03-11", total_price=40000, source="avito", guest="Иван Иванов")
+        self.book(ctx, ctx["rooms"][1], "2037-03-30", "2037-04-03", total_price=8000, guest="Мария Петрова")  # 2 ночи в марте = 4 000
+        cat = self.client.get("/api/expense-categories", headers=ctx["h"]).json()[0]
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat["id"], "amount": 5000, "date": "2037-03-15", "property_id": pid})
+        self.client.post("/api/expenses", headers=ctx["h"], json={"category_id": cat["id"], "amount": 99999, "date": "2037-03-15"})  # общий — не входит
+        r = self.client.put(f"/api/properties/{pid}/commission", headers=ctx["h"], json={"percent": 20, "base": "net"})
+        self.assertEqual(r.status_code, 200, r.text)
+        rep = self.client.get(f"/api/landlord/report?property_id={pid}&month=2037-03", headers=ctx["h"]).json()
+        self.assertEqual((float(rep["revenue"]), float(rep["platform_commission"]), float(rep["net_revenue"])), (44000.0, 4000.0, 40000.0))
+        self.assertEqual((float(rep["expenses_total"]), float(rep["mc_commission"])), (5000.0, 8000.0))
+        self.assertEqual(float(rep["payout"]), 27000.0)  # 40 000 − 5 000 − 20% от 40 000
+        self.assertEqual(rep["sold_nights"], 12)
+        self.assertEqual({x["guest"] for x in rep["stays"]}, {"Иван И.", "Мария П."})
+        # база «выручка до комиссий площадок»
+        self.client.put(f"/api/properties/{pid}/commission", headers=ctx["h"], json={"percent": 10, "base": "gross"})
+        rep = self.client.get(f"/api/landlord/report?property_id={pid}&month=2037-03", headers=ctx["h"]).json()
+        self.assertEqual((float(rep["mc_commission"]), float(rep["payout"])), (4400.0, 30600.0))
+        csv_text = self.client.get(f"/api/landlord/report?property_id={pid}&month=2037-03&format=csv", headers=ctx["h"]).content.decode("utf-8-sig")
+        self.assertIn("К выплате собственнику;30600,00", csv_text)
+        for bad in ({"percent": 150}, {"percent": 10, "base": "weird"}):
+            self.assertEqual(self.client.put(f"/api/properties/{pid}/commission", headers=ctx["h"], json=bad).status_code, 422)
+
+    def test_landlord_is_read_only_and_scoped(self):
+        ctx, other = self.setup_account("ll2@example.ru")
+        pid = ctx["prop"]["id"]
+        self.book(ctx, ctx["rooms"][0], "2037-05-10", "2037-05-12", total_price=8000, guest="Анна Смирнова", guest_phone="+7 900 000-11-22", notes="секрет")
+        self.assertEqual(self.client.post("/api/users", headers=ctx["h"], json={"email": "x@example.ru", "name": "X", "password": "password123", "role": "landlord"}).status_code, 422)
+        hh, uid = self.make_landlord(ctx, [pid])
+        me = self.client.get("/api/me", headers=hh).json()
+        self.assertEqual((me["role"], [p["id"] for p in me["properties"]]), ("landlord", [pid]))
+        for url in ("/api/board", "/api/bookings", "/api/today", "/api/housekeeping", "/api/guests/list", "/api/expenses", "/api/users", "/api/services"):
+            self.assertEqual(self.client.get(url, headers=hh).status_code, 403, url)
+        self.assertEqual(self.client.post("/api/bookings", headers=hh, json={"room_id": ctx["rooms"][0]["id"], "check_in": "2037-06-01", "check_out": "2037-06-02"}).status_code, 403)
+        b = self.client.get(f"/api/landlord/board?property_id={pid}&from=2037-05-01&days=30", headers=hh).json()
+        bk = b["bookings"][0]
+        self.assertEqual((bk["guest_name"], bk["guest_phone"], bk["notes"]), ("Анна С.", "", ""))
+        self.assertEqual(self.client.get(f"/api/landlord/board?property_id={other['id']}&from=2037-05-01&days=30", headers=hh).status_code, 404)
+        self.assertEqual(self.client.get(f"/api/landlord/report?property_id={other['id']}&month=2037-05", headers=hh).status_code, 404)
+        rep = self.client.get("/api/landlord/report?month=2037-05", headers=hh).json()  # без property_id — первый назначенный
+        self.assertEqual(rep["property"]["id"], pid)
+        # назначили второй объект — стал виден
+        self.assertEqual(self.client.put(f"/api/users/{uid}/properties", headers=ctx["h"], json={"property_ids": [pid, other["id"]]}).status_code, 200)
+        self.assertEqual(len(self.client.get("/api/landlord/properties", headers=hh).json()), 2)
+        # собственник не может менять комиссию и назначения
+        self.assertEqual(self.client.put(f"/api/properties/{pid}/commission", headers=hh, json={"percent": 0}).status_code, 403)
+        self.assertEqual(self.client.put(f"/api/users/{uid}/properties", headers=hh, json={"property_ids": []}).status_code, 403)
+
+    def test_isolation_and_housekeeper(self):
+        a, _ = self.setup_account("ll3a@example.ru")
+        b = self.register("ll3b@example.ru")
+        self.assertEqual(self.client.get(f"/api/landlord/report?property_id={a['prop']['id']}", headers=b["h"]).status_code, 404)
+        r = self.client.post("/api/users", headers=b["h"], json={"email": "ll3x@example.ru", "name": "Чужой", "password": "password123", "role": "landlord", "property_ids": [a["prop"]["id"]]})
+        self.assertEqual(r.status_code, 404)  # чужой объект назначить нельзя
+        self.client.post("/api/users", headers=a["h"], json={"email": "ll3hk@example.ru", "name": "Горничная", "password": "password123", "role": "housekeeper"})
+        tok = self.client.post("/api/auth/login", json={"email": "ll3hk@example.ru", "password": "password123"}).json()["token"]
+        self.assertEqual(self.client.get("/api/landlord/report", headers={"Authorization": f"Bearer {tok}"}).status_code, 403)
+
+
 if __name__ == "__main__":
     unittest.main()

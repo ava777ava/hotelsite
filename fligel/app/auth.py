@@ -13,7 +13,8 @@ from . import config
 from .db import one
 from .errors import ApiError
 
-ROLES_ORDER = {"housekeeper": 0, "manager": 1, "owner": 2}
+# «Собственник» ниже всех: обычные разделы ему закрыты, у него только свои отчёты (api/owners.py)
+ROLES_ORDER = {"landlord": -1, "housekeeper": 0, "manager": 1, "owner": 2}
 
 
 def hash_password(password: str) -> str:
