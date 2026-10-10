@@ -2046,5 +2046,76 @@ class GuestTests(Base):
             self.assertEqual(self.client.get(url, headers=hh).status_code, 403, url)
 
 
+class HousekeepingTests(Base):
+    """Статусы уборки, экран горничной, назначение, сообщение о поломке."""
+
+    def hk(self, ctx, **q):
+        return self.client.get("/api/housekeeping", headers=ctx["h"]).json()
+
+    def staff(self, ctx, email, role="housekeeper"):
+        r = self.client.post("/api/users", headers=ctx["h"], json={"email": email, "name": "Горничная Анна", "password": "password123", "role": role})
+        self.assertEqual(r.status_code, 200, r.text)
+        tok = self.client.post("/api/auth/login", json={"email": email, "password": "password123"}).json()["token"]
+        return {"Authorization": f"Bearer {tok}"}, r.json()["id"]
+
+    def test_status_flow_and_auto_dirty(self):
+        ctx = self.register("hk1@example.ru", rooms=(("Стандарт", 3, 3500),))
+        r0, r1, r2 = ctx["rooms"]
+        today = date.today()
+        # гость выехал сегодня → номер грязный, пока не отметят уборку
+        self.book(ctx, r0, (today - timedelta(days=2)).isoformat(), today.isoformat(), guest="Уехал")
+        # гость живёт: заехал вчера, выезжает завтра
+        self.book(ctx, r1, (today - timedelta(days=1)).isoformat(), (today + timedelta(days=1)).isoformat(), guest="Живёт")
+        st = {r["name"]: r["status"] for r in self.hk(ctx)["rooms"]}
+        self.assertEqual((st[r0["name"]], st[r1["name"]], st[r2["name"]]), ("dirty", "occupied", "clean"))
+        for new in ("cleaning", "inspect", "clean"):
+            r = self.client.post(f"/api/rooms/{r0['id']}/status", headers=ctx["h"], json={"status": new})
+            self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual({r["name"]: r["status"] for r in self.hk(ctx)["rooms"]}[r0["name"]], "clean")
+        self.assertEqual(self.client.post(f"/api/rooms/{r0['id']}/status", headers=ctx["h"], json={"status": "магия"}).status_code, 422)
+        # старая отметка «убрано» тоже работает
+        self.client.post(f"/api/rooms/{r2['id']}/status", headers=ctx["h"], json={"status": "dirty"})
+        self.client.post(f"/api/rooms/{r2['id']}/cleaned", headers=ctx["h"], json={"cleaned": True})
+        self.assertEqual({r["name"]: r["status"] for r in self.hk(ctx)["rooms"]}[r2["name"]], "clean")
+
+    def test_housekeeper_reports_repair_and_manager_sees_bell(self):
+        ctx = self.register("hk2@example.ru", rooms=(("Стандарт", 2, 3500),))
+        hh, hid = self.staff(ctx, "hk2maid@example.ru")
+        room = ctx["rooms"][0]
+        self.assertEqual(self.client.post(f"/api/rooms/{room['id']}/status", headers=hh, json={"status": "repair"}).status_code, 422)  # без причины
+        r = self.client.post(f"/api/rooms/{room['id']}/status", headers=hh, json={"status": "repair", "note": "Протекает кран"})
+        self.assertEqual(r.status_code, 200, r.text)
+        data = self.client.get("/api/housekeeping", headers=hh).json()
+        row = next(x for x in data["rooms"] if x["id"] == room["id"])
+        self.assertEqual((row["status"], row["hk_note"]), ("repair", "Протекает кран"))
+        # горничной недоступны чужие аккаунты и управление
+        self.assertEqual(self.client.post("/api/housekeeping/assign", headers=hh, json={"room_ids": [room["id"]], "user_id": hid}).status_code, 403)
+        self.assertEqual(self.client.put(f"/api/rooms/{room['id']}/note", headers=hh, json={"note": "x"}).status_code, 403)
+        other = self.register("hk2other@example.ru")
+        self.assertEqual(self.client.post(f"/api/rooms/{room['id']}/status", headers=other["h"], json={"status": "dirty"}).status_code, 404)
+        # починили → снова нужна уборка → убрано
+        self.client.post(f"/api/rooms/{room['id']}/status", headers=ctx["h"], json={"status": "dirty"})
+        row = next(x for x in self.hk(ctx)["rooms"] if x["id"] == room["id"])
+        self.assertEqual((row["status"], row["hk_note"]), ("dirty", ""))
+
+    def test_assignment_and_room_note(self):
+        ctx = self.register("hk3@example.ru", rooms=(("Стандарт", 3, 3500),))
+        hh, hid = self.staff(ctx, "hk3maid@example.ru")
+        ids = [r["id"] for r in ctx["rooms"][:2]]
+        r = self.client.post("/api/housekeeping/assign", headers=ctx["h"], json={"room_ids": ids, "user_id": hid})
+        self.assertEqual(r.json()["updated"], 2)
+        rooms = self.client.get("/api/housekeeping", headers=hh).json()["rooms"]
+        self.assertEqual(sorted(x["assigned_to"] for x in rooms if x["assigned_to"]), [hid, hid])
+        self.client.post("/api/rooms/%s/status" % ids[0], headers=hh, json={"status": "clean"})  # убрали — назначение снимается
+        rooms = self.client.get("/api/housekeeping", headers=hh).json()["rooms"]
+        self.assertEqual(sum(1 for x in rooms if x["assigned_to"]), 1)
+        self.assertEqual(self.client.put(f"/api/rooms/{ids[1]}/note", headers=ctx["h"], json={"note": "Ключ у соседей"}).status_code, 200)
+        self.assertEqual(next(x for x in self.client.get("/api/housekeeping", headers=hh).json()["rooms"] if x["id"] == ids[1])["note"], "Ключ у соседей")
+        self.client.post("/api/housekeeping/assign", headers=ctx["h"], json={"room_ids": ids, "user_id": None})
+        self.assertFalse(any(x["assigned_to"] for x in self.client.get("/api/housekeeping", headers=hh).json()["rooms"]))
+        other = self.register("hk3other@example.ru")
+        self.assertEqual(self.client.post("/api/housekeeping/assign", headers=other["h"], json={"room_ids": ids, "user_id": hid}).status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

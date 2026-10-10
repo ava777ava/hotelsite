@@ -16,6 +16,7 @@ from ..util import csv_safe, opt_str, parse_date, parse_int, parse_money, parse_
 from .base import Ctx, api
 from .common import selected_property
 from .tariffs import get_plan
+from .housekeeping import EFFECTIVE_SQL
 from .guests import BK_KEY, flags_for, phone_key
 from .money import DEPOSIT_STATUSES, METHODS, add_payment
 from .reports import SOURCE_LABELS
@@ -443,8 +444,8 @@ def board(c: Ctx):
         prop = selected_property(conn, c.account_id, c.q.get("property_id"))
         types = all_(conn, "SELECT id, name, capacity, base_price, min_stay FROM room_types"
                            " WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
-        rooms = all_(conn, "SELECT id, room_type_id, name FROM rooms WHERE property_id = %s"
-                           " ORDER BY sort_order, name", (prop["id"],))
+        rooms = all_(conn, f"SELECT r.id, r.room_type_id, r.name, {EFFECTIVE_SQL} AS hk_status, r.hk_note, r.note FROM rooms r"
+                           " WHERE r.property_id = %s ORDER BY r.sort_order, r.name", (prop["id"],))
         rates = all_(conn, "SELECT room_type_id, date, price, min_stay, closed FROM rates"
                            " WHERE account_id = %s AND date >= %s AND date < %s", (c.account_id, start, end))
         bookings = all_(

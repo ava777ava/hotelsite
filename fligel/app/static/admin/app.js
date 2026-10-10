@@ -46,6 +46,7 @@ const ICONS = {
   help: '<circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.6 2.2c-.7.4-1.1.9-1.1 1.8M12 17h.01" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   users: '<circle cx="9" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.9-3.2 3-4.8 5.5-4.8s4.6 1.6 5.5 4.8M16 5.5a3 3 0 0 1 0 5.4M17.5 14.5c1.7.6 2.9 2.1 3.5 4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
   phone: '<path d="M6.5 3.5h3l1.5 4-2 1.3a11 11 0 0 0 5.2 5.2l1.3-2 4 1.5v3a2 2 0 0 1-2.2 2A15.5 15.5 0 0 1 4.5 5.7 2 2 0 0 1 6.5 3.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+  clean: '<path d="M12 3v3M12 18v3M5 12H2M22 12h-3M6.3 6.3 4.2 4.2M19.8 19.8l-2.1-2.1M17.7 6.3l2.1-2.1M4.2 19.8l2.1-2.1" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M12 8.5l1.2 2.3 2.3 1.2-2.3 1.2L12 15.5l-1.2-2.3L8.5 12l2.3-1.2z" fill="currentColor"/>',
   user: '<circle cx="12" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M4.5 20c1.2-4 4-6 7.5-6s6.3 2 7.5 6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
 };
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
@@ -128,6 +129,7 @@ const state = {
 const ROUTES = {
   board: { title: 'Шахматка', icon: 'board', view: viewBoard },
   today: { title: 'Сегодня', icon: 'today', view: viewToday },
+  cleaning: { title: 'Уборка', icon: 'clean', view: viewCleaning },
   bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager' },
   guests: { title: 'Гости', icon: 'users', view: viewGuests, role: 'manager' },
   rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager' },
@@ -140,9 +142,9 @@ const ROUTES = {
   help: { title: 'Справка', icon: 'help', view: viewHelp },
 };
 const RANK = { housekeeper: 0, manager: 1, owner: 2 };
-const MOBILE_ORDER = ['board', 'today', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'help', 'profile'];
+const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'help', 'profile'];
 const can = (role) => state.me && RANK[state.me.role] >= RANK[role];
-const currentRoute = () => { const r = location.hash.replace(/^#\/?/, '').split('?')[0] || 'board'; return ROUTES[r] ? r : 'board'; };
+const currentRoute = () => { const home = state.me?.role === 'housekeeper' ? 'cleaning' : 'board'; const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 
 window.addEventListener('hashchange', () => render());
 
@@ -888,7 +890,7 @@ function drawBoard(data, reload) {
         track.append(bar);
       });
       board.append(h('div', { class: 'b-row b-room' },
-        h('div', { class: 'b-side' }, h('span', {}, room.name), h('span', { class: 'rt' }, t.name)), track));
+        h('div', { class: 'b-side' }, h('span', {}, room.name, ['dirty', 'cleaning', 'inspect', 'repair'].includes(room.hk_status) ? h('i', { class: `hk-dot hk-${room.hk_status}`, title: `${HK[room.hk_status]}${room.hk_note ? ': ' + room.hk_note : ''}` }) : null), h('span', { class: 'rt' }, t.name)), track));
     });
   });
 
@@ -1466,6 +1468,85 @@ function rateDrawer(t, day, reload) {
     h('p', { class: 'muted small' }, 'Закрытые даты уходят на площадки как занятые. Цены на площадки через iCal не передаются — их нужно менять в личных кабинетах площадок.')),
   [h('button', { class: 'btn ghost', onclick: () => send({ reset: true }) }, 'Сбросить к базовой'), h('span', { class: 'spacer' }),
     h('button', { class: 'btn primary', onclick: () => send({ price: f.price.value, min_stay: f.min.value, closed: f.closed.checked }) }, 'Сохранить')]);
+}
+
+// ---------- уборка ----------
+const HK = { clean: 'Чистый', dirty: 'Нужна уборка', cleaning: 'Убирают', inspect: 'Ждёт проверки', repair: 'Ремонт', occupied: 'Заселён' };
+const HK_ORDER = ['dirty', 'cleaning', 'inspect', 'repair', 'clean', 'occupied'];
+
+async function viewCleaning(main) {
+  const manager = can('manager');
+  const mineOnly = { value: store.get('hk_mine') === '1' };
+  const box = h('div', { class: 'stack' });
+  const sum = h('div', { class: 'hk-sum' });
+  const mineBtn = h('button', { class: 'btn', type: 'button', onclick: () => { mineOnly.value = !mineOnly.value; store.set('hk_mine', mineOnly.value ? '1' : '0'); draw(); } });
+  main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Уборка'), mineBtn), sum, box);
+  let data = null;
+  const setStatus = async (room, status, note) => {
+    try { await api('POST', `/api/rooms/${room.id}/status`, { status, note }); await load(); }
+    catch (ex) { toast(ex.message, true); }
+  };
+  const repairDialog = (room) => {
+    const note = h('textarea', { class: 'input', placeholder: 'Что случилось: течёт кран, не работает розетка, разбито окно…' });
+    const err = h('div', { class: 'note bad', style: { display: 'none' } });
+    openModal(`Поломка в номере ${room.name}`, h('div', {}, err, h('label', { class: 'field' }, h('span', {}, 'Что сломалось'), note),
+      h('p', { class: 'muted small', style: { marginBottom: 0 } }, 'Администратор сразу увидит сообщение в колокольчике и (если подключён) в Telegram.')),
+    [h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Отмена'), h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: async () => {
+      try { await api('POST', `/api/rooms/${room.id}/status`, { status: 'repair', note: note.value }); closeModal(); toast('Сообщение отправлено'); load(); }
+      catch (ex) { err.textContent = ex.message; err.style.display = ''; }
+    } }, 'Сообщить')]);
+  };
+  const noteDialog = (room) => {
+    const note = h('textarea', { class: 'input', placeholder: 'Ключ у соседей, диван раскладывается, не включать кондиционер…' }, room.note || '');
+    openModal(`Заметка к номеру ${room.name}`, h('div', {}, h('label', { class: 'field' }, h('span', {}, 'Видят все сотрудники'), note)),
+      [h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Отмена'), h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: async () => {
+        try { await api('PUT', `/api/rooms/${room.id}/note`, { note: note.value }); closeModal(); load(); } catch (ex) { toast(ex.message, true); }
+      } }, 'Сохранить')]);
+  };
+  const actions = (room) => {
+    const b = (label, cls, fn) => h('button', { class: `btn small ${cls || ''}`, type: 'button', onclick: fn }, label);
+    const out = [];
+    if (room.status === 'dirty') out.push(b('Начать уборку', '', () => setStatus(room, 'cleaning')), b('Убрано', 'primary', () => setStatus(room, 'clean')));
+    if (room.status === 'cleaning') out.push(b('Убрано', 'primary', () => setStatus(room, 'clean')), b('На проверку', '', () => setStatus(room, 'inspect')));
+    if (room.status === 'inspect') out.push(manager ? b('Проверено', 'primary', () => setStatus(room, 'clean')) : h('span', { class: 'muted small' }, 'Ждёт проверки администратором'), b('Переделать', '', () => setStatus(room, 'dirty')));
+    if (room.status === 'repair') out.push(manager ? b('Исправлено', 'primary', () => setStatus(room, 'dirty')) : null);
+    if (room.status === 'clean' || room.status === 'occupied') out.push(b('Нужна уборка', 'ghost', () => setStatus(room, 'dirty')));
+    if (room.status !== 'repair') out.push(b('Поломка', 'ghost', () => repairDialog(room)));
+    if (manager) out.push(b(room.note ? 'Заметка' : '+ Заметка', 'ghost', () => noteDialog(room)));
+    return out;
+  };
+  const roomCard = (room) => h('div', { class: `hk-card hk-${room.status}` },
+    h('div', { class: 'hk-head' }, h('b', { class: 'hk-name' }, room.name), h('span', { class: 'muted small' }, room.type), h('span', { class: `hk-pill hk-${room.status}` }, HK[room.status])),
+    h('div', { class: 'hk-tags' },
+      room.arrives_today ? h('span', { class: 'tag warn' }, 'заезд сегодня') : (room.next_arrival ? h('span', { class: 'tag' }, `заезд ${fmtDate(room.next_arrival)}`) : null),
+      room.departs_today ? h('span', { class: 'tag' }, `выезд${room.departing ? ': ' + room.departing : ''}`) : null,
+      room.assigned_name ? h('span', { class: 'tag' }, `убирает: ${room.assigned_name}`) : null),
+    room.hk_note ? h('div', { class: 'note bad', style: { margin: '8px 0 0' } }, room.hk_note) : null,
+    room.note ? h('div', { class: 'hk-note' }, room.note) : null,
+    h('div', { class: 'hk-actions' }, ...actions(room).filter(Boolean)),
+    manager && data.housekeepers.length && room.status !== 'occupied' ? h('select', { class: 'input hk-assign', 'aria-label': 'Назначить горничной', onchange: async (e) => {
+      try { await api('POST', '/api/housekeeping/assign', { room_ids: [room.id], user_id: e.target.value || null }); load(); } catch (ex) { toast(ex.message, true); }
+    } }, h('option', { value: '' }, 'Не назначено'), data.housekeepers.map((u) => h('option', { value: u.id, selected: u.id === room.assigned_to }, u.name))) : null);
+  function draw() {
+    if (!data) return;
+    mineBtn.textContent = mineOnly.value ? 'Показать все номера' : 'Только мои номера';
+    mineBtn.style.display = data.rooms.some((r) => r.assigned_to === data.me) ? '' : 'none';
+    sum.innerHTML = '';
+    HK_ORDER.forEach((k) => { if (data.counts[k]) sum.append(h('span', { class: `hk-pill hk-${k}` }, `${HK[k]}: ${data.counts[k]}`)); });
+    box.innerHTML = '';
+    let rooms = data.rooms;
+    if (mineOnly.value) rooms = rooms.filter((r) => r.assigned_to === data.me);
+    const urgency = (r) => (r.arrives_today ? 0 : 1);
+    HK_ORDER.forEach((k) => {
+      const list = rooms.filter((r) => r.status === k).sort((a, b2) => urgency(a) - urgency(b2));
+      if (!list.length) return;
+      box.append(h('div', {}, h('h2', { class: 'hk-title' }, `${HK[k]} · ${list.length}`), h('div', { class: 'hk-grid' }, list.map(roomCard))));
+    });
+    if (!rooms.length) box.append(h('div', { class: 'card empty' }, h('h3', {}, 'Номеров нет'), 'Номера добавляются в «Настройках».'));
+  }
+  async function load() { data = await api('GET', '/api/housekeeping?' + qs({ property_id: state.propertyId })); draw(); }
+  load().catch((ex) => box.append(h('div', { class: 'card empty' }, ex.message)));
+  autoRefresh(load);
 }
 
 // ---------- сегодня ----------

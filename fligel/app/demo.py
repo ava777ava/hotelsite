@@ -25,11 +25,14 @@ def main() -> None:
     }
     with tx() as conn:
         if one(conn, "SELECT 1 FROM users WHERE email = 'demo@fligel.ru'"):
-            print("Демо-аккаунт уже есть: demo@fligel.ru / demo12345")
+            print("Демо-аккаунт уже есть: demo@fligel.ru / demo12345 (администратор: manager@fligel.ru, горничная: anna@fligel.ru, пароль тот же)")
             return
         acc = one(conn, "INSERT INTO accounts (name) VALUES ('Гостиница «Флигель»') RETURNING id")["id"]
         run(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, %s, %s, %s, 'owner')",
             (acc, "demo@fligel.ru", hash_password("demo12345"), "Андрей"))
+        for email, uname, role in (("manager@fligel.ru", "Марина (администратор)", "manager"), ("anna@fligel.ru", "Анна (горничная)", "housekeeper")):
+            run(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, %s, %s, %s, %s)",
+                (acc, email, hash_password("demo12345"), uname, role))
         prop = one(conn, "INSERT INTO properties (account_id, name, address, phone, public_slug) VALUES"
                          " (%s, 'Гостиница «Флигель»', 'Казань, ул. Пушкина, 12', '+7 900 000-00-00', 'demo') RETURNING id",
                    (acc,))["id"]

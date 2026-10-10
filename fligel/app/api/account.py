@@ -503,8 +503,9 @@ def mark_cleaned(c: Ctx):
     room_id = parse_uuid(c.path["id"])
     cleaned = c.data.get("cleaned", True)
     with tx() as conn:
-        row = one(conn, "UPDATE rooms SET cleaned_on = CASE WHEN %s THEN current_date ELSE NULL END"
-                        " WHERE id = %s AND account_id = %s RETURNING id, cleaned_on", (bool(cleaned), room_id, c.account_id))
+        row = one(conn, "UPDATE rooms SET cleaned_on = CASE WHEN %s THEN current_date ELSE NULL END,"
+                        " hk_status = CASE WHEN %s THEN 'clean' ELSE hk_status END, hk_updated_at = now()"
+                        " WHERE id = %s AND account_id = %s RETURNING id, cleaned_on", (bool(cleaned), bool(cleaned), room_id, c.account_id))
     if not row:
         raise ApiError(404, "Номер не найден")
     return row
