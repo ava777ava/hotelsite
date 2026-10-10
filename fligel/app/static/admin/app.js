@@ -1,12 +1,16 @@
 // Флигель — интерфейс администратора. Без сборки и зависимостей.
 
+import { plural, count, humanDay, dateRange, moneyize, holidayName, skeleton, SOURCE_ABBR } from './ui.js';
+
 // ---------- утилиты ----------
 const $app = document.getElementById('app');
 
 function h(tag, attrs = {}, ...children) {
   const el = document.createElement(tag);
+  let money = false;
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v === null || v === undefined || v === false) continue;
+    if (k === 'money') { money = true; continue; }
     if (k === 'class') el.className = v;
     else if (k === 'style' && typeof v === 'object') Object.assign(el.style, v);
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2).toLowerCase(), v);
@@ -14,6 +18,7 @@ function h(tag, attrs = {}, ...children) {
     else if (k in el && typeof v !== 'string') el[k] = v;
     else el.setAttribute(k, v === true ? '' : v);
   }
+  if (money) moneyize(el);
   for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined || c === false) continue;
     el.append(c instanceof Node ? c : document.createTextNode(String(c)));
@@ -71,7 +76,6 @@ const fmtDate = (s) => { const d = parseISO(s); return `${d.getDate()} ${MONTHS[
 const fmtShort = (s) => { const d = parseISO(s); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}`; };
 const fmtMoney = (v) => `${Math.round(Number(v || 0)).toLocaleString('ru-RU')} ₽`;
 const fmtPriceCell = (v) => { const n = Math.round(Number(v || 0)); return n >= 10000 ? `${(n / 1000).toFixed(n % 1000 ? 1 : 0).replace('.', ',')}к` : n.toLocaleString('ru-RU'); };
-const plural = (n, [one, few, many]) => { const a = Math.abs(n) % 10, b = Math.abs(n) % 100; return a === 1 && b !== 11 ? one : (a >= 2 && a <= 4 && (b < 10 || b >= 20) ? few : many); };
 const nightsWord = (n) => { const m10 = n % 10, m100 = n % 100; if (m10 === 1 && m100 !== 11) return 'ночь'; if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'ночи'; return 'ночей'; };
 const fmtDateTime = (s) => { if (!s) return '—'; const d = new Date(s); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const ago = (s) => {
@@ -743,7 +747,7 @@ async function moveDialog(b, change, reload) {
     requote();
   } });
   f.check_out = h('input', { class: 'input', type: 'date', value: change.check_out || b.check_out, onchange: () => requote() });
-  f.price = h('input', { class: 'input', type: 'number', inputmode: 'decimal', min: 0, value: oldTotal, oninput: () => { priceMode = 'custom'; drawPriceMode(); drawSummary(); } });
+  f.price = h('input', { class: 'input', money: true, type: 'number', inputmode: 'decimal', min: 0, value: oldTotal, oninput: () => { priceMode = 'custom'; drawPriceMode(); drawSummary(); } });
   let priceMode = 'keep';
   let tariff = null; // стоимость по тарифам на выбранные даты и номер
   let tariffOld = null; // по тарифам на прежние даты — чтобы понять, была ли цена «автоматической»
@@ -1132,7 +1136,7 @@ function relocateDialog(b, rooms, onSaved) {
   const f = {
     room: h('select', { class: 'input' }, rooms.filter((r) => r.id !== b.room_id).map((r) => h('option', { value: r.id }, `${r.name} · ${r.type}`))),
     from: h('input', { class: 'input', type: 'date', min: first, max: addDays(b.check_out, -1), value: today > b.check_in && today < b.check_out ? today : first }),
-    total: h('input', { class: 'input', type: 'number', min: 0, placeholder: 'По умолчанию — остаток суммы пропорционально ночам' }),
+    total: h('input', { class: 'input', money: true, type: 'number', min: 0, placeholder: 'По умолчанию — остаток суммы пропорционально ночам' }),
   };
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
   openModal('Переселить гостя', h('div', {}, err,
@@ -1198,7 +1202,7 @@ function moneyBlock(b, onChange) {
         h('div', {}, h('span', { class: 'muted small' }, 'Оплачено'), h('b', {}, fmtMoney(m.paid))),
         h('div', { class: due > 0 ? 'due' : 'ok' }, h('span', { class: 'muted small' }, due > 0 ? 'К оплате' : 'Оплачено полностью'), h('b', {}, fmtMoney(due)))));
     // платежи
-    const amount = h('input', { class: 'input', type: 'number', min: 1, placeholder: 'Сумма, ₽', value: due > 0 ? Math.round(due) : '' });
+    const amount = h('input', { class: 'input', money: true, type: 'number', min: 1, placeholder: 'Сумма, ₽', value: due > 0 ? Math.round(due) : '' });
     const method = h('select', { class: 'input' }, Object.entries(PAY_METHOD).map(([k, l]) => h('option', { value: k }, l)));
     const day = h('input', { class: 'input', type: 'date', value: todayISO() });
     const note = h('input', { class: 'input', placeholder: 'Комментарий (необязательно)' });
@@ -1222,7 +1226,7 @@ function moneyBlock(b, onChange) {
     const svcSel = h('select', { class: 'input' }, h('option', { value: '' }, 'Выбрать из справочника…'));
     api('GET', '/api/services').then((list) => list.filter((x) => x.active).forEach((x) => svcSel.append(h('option', { value: x.id }, `${x.name} — ${fmtMoney(x.price)}`)))).catch(() => {});
     const svcName = h('input', { class: 'input', placeholder: 'или своя услуга' });
-    const svcPrice = h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Цена, ₽' });
+    const svcPrice = h('input', { class: 'input', money: true, type: 'number', min: 0, placeholder: 'Цена, ₽' });
     const svcQty = h('input', { class: 'input', type: 'number', min: 1, value: 1, style: { maxWidth: '80px' } });
     box.append(h('h3', {}, 'Дополнительные услуги'),
       m.services.length ? h('div', { class: 'pay-list' }, m.services.map((x) => h('div', { class: 'pay-row' },
@@ -1236,9 +1240,9 @@ function moneyBlock(b, onChange) {
           act(() => api('POST', `/api/bookings/${b.id}/services`, svcSel.value ? { service_id: svcSel.value, qty: svcQty.value } : { name: svcName.value, price: svcPrice.value, qty: svcQty.value }));
         } }, icon('plus'), 'Добавить')));
     // скидка и залог
-    const disc = h('input', { class: 'input', type: 'number', min: 0, value: Math.round(Number(m.discount_amount)) || '', placeholder: '0' });
+    const disc = h('input', { class: 'input', money: true, type: 'number', min: 0, value: Math.round(Number(m.discount_amount)) || '', placeholder: '0' });
     const discWhy = h('input', { class: 'input', value: m.discount_reason, placeholder: 'Причина: постоянный гость, акция…' });
-    const dep = h('input', { class: 'input', type: 'number', min: 0, value: Math.round(Number(m.deposit_amount)) || '', placeholder: '0' });
+    const dep = h('input', { class: 'input', money: true, type: 'number', min: 0, value: Math.round(Number(m.deposit_amount)) || '', placeholder: '0' });
     const depSt = h('select', { class: 'input' }, Object.entries(DEPOSIT).map(([k, l]) => h('option', { value: k, selected: k === m.deposit_status }, l)));
     const patch = (payload) => act(async () => { await api('PATCH', `/api/bookings/${b.id}`, payload); return api('GET', `/api/bookings/${b.id}/money`); });
     box.append(h('h3', {}, 'Скидка и залог'),
@@ -1516,8 +1520,8 @@ async function bookingDrawer(b, onSaved) {
     guestHistoryBox,
     h('div', { class: 'row3' },
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1, oninput: () => requote() }),
-      inp('total_price', 'Стоимость, ₽', { type: 'number', min: 0, value: b.total_price != null ? Math.round(b.total_price) : '', oninput: () => { priceTouched = true; updateTotal(); } }),
-      isNew ? inp('paid_amount', 'Предоплата, ₽', { type: 'number', min: 0, value: 0, oninput: updateTotal }) : h('div')),
+      inp('total_price', 'Стоимость, ₽', { money: true, type: 'number', min: 0, value: b.total_price != null ? Math.round(b.total_price) : '', oninput: () => { priceTouched = true; updateTotal(); } }),
+      isNew ? inp('paid_amount', 'Предоплата, ₽', { money: true, type: 'number', min: 0, value: 0, oninput: updateTotal }) : h('div')),
     isNew ? h('label', { class: 'field', style: { display: 'none' }, 'data-prepay': '1' }, h('span', {}, 'Как оплачена предоплата'), f.pay_method = h('select', { class: 'input' }, Object.entries(PAY_METHOD).map(([k, l]) => h('option', { value: k }, l)))) : null,
     h('label', { class: 'field' }, h('span', {}, 'Источник'), f.source),
     planField,
@@ -1597,7 +1601,7 @@ function rateDrawer(t, day, reload) {
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
   f.from = h('input', { class: 'input', type: 'date', value: day });
   f.to = h('input', { class: 'input', type: 'date', value: day });
-  f.price = h('input', { class: 'input', type: 'number', min: 0, value: rate.price != null ? Math.round(rate.price) : '', placeholder: `Базовая: ${Math.round(t.base_price)}` });
+  f.price = h('input', { class: 'input', money: true, type: 'number', min: 0, value: rate.price != null ? Math.round(rate.price) : '', placeholder: `Базовая: ${Math.round(t.base_price)}` });
   f.min = h('input', { class: 'input', type: 'number', min: 1, value: rate.min_stay || '', placeholder: `Базовый: ${t.min_stay}` });
   f.closed = h('input', { type: 'checkbox', checked: !!rate.closed });
   const send = async (payload) => {
@@ -1890,7 +1894,7 @@ async function priceCalendar(card, prop) {
   const selected = new Set();
   let lastClicked = null;
   const f = {
-    price: h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Не менять' }),
+    price: h('input', { class: 'input', money: true, type: 'number', min: 0, placeholder: 'Не менять' }),
     min: h('input', { class: 'input', type: 'number', min: 1, placeholder: 'Не менять' }),
     closed: h('select', { class: 'input' }, h('option', { value: '' }, 'Не менять'), h('option', { value: 'true' }, 'Закрыть продажи'), h('option', { value: 'false' }, 'Открыть продажи')),
     all: h('input', { type: 'checkbox' }),
@@ -1979,7 +1983,7 @@ async function viewRates(main) {
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
   f.from = h('input', { class: 'input', type: 'date', value: todayISO() });
   f.to = h('input', { class: 'input', type: 'date', value: addDays(todayISO(), 30) });
-  f.price = h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Не менять' });
+  f.price = h('input', { class: 'input', money: true, type: 'number', min: 0, placeholder: 'Не менять' });
   f.min = h('input', { class: 'input', type: 'number', min: 1, placeholder: 'Не менять' });
   f.closed = h('select', { class: 'input' }, h('option', { value: '' }, 'Не менять'), h('option', { value: 'true' }, 'Закрыть продажи'), h('option', { value: 'false' }, 'Открыть продажи'));
   const dayOrder = [1, 2, 3, 4, 5, 6, 0];
@@ -2538,7 +2542,7 @@ function recurringDrawer(cats, rule, propertyOptions, onSaved) {
   const g = {};
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
   g.category_id = h('select', { class: 'input' }, cats.map((c) => h('option', { value: c.id, selected: c.id === rule.category_id }, c.name)));
-  g.amount = h('input', { class: 'input', type: 'number', min: 0, value: rule.amount ? Math.round(rule.amount) : '' });
+  g.amount = h('input', { class: 'input', money: true, type: 'number', min: 0, value: rule.amount ? Math.round(rule.amount) : '' });
   g.day_of_month = h('input', { class: 'input', type: 'number', min: 1, max: 28, value: rule.day_of_month || 1 });
   g.property_id = h('select', { class: 'input' }, h('option', { value: '' }, 'Общий — по всем объектам'),
     propertyOptions.map((p) => h('option', { value: p.id, selected: p.id === rule.property_id }, p.name)));
@@ -2626,7 +2630,7 @@ function flowDrawer(cfg, cats, scopes, rec, onSaved) {
   const g = {};
   const err = h('div', { class: 'note bad', style: { display: 'none' } });
   g.date = h('input', { class: 'input', type: 'date', value: rec.date || todayISO(), disabled: readOnly });
-  g.amount = h('input', { class: 'input', type: 'number', inputmode: 'decimal', min: 0, step: '0.01', value: rec.amount != null ? Number(rec.amount) : '', disabled: readOnly });
+  g.amount = h('input', { class: 'input', money: true, type: 'number', inputmode: 'decimal', min: 0, step: '0.01', value: rec.amount != null ? Number(rec.amount) : '', disabled: readOnly });
   g.category_id = h('select', { class: 'input', disabled: readOnly }, cats.map((c) => h('option', { value: c.id, selected: c.id === rec.category_id }, c.name)));
   g.scope = scopeSelect(scopes, scopeOf(rec), { attrs: { disabled: readOnly } });
   g.comment = h('textarea', { class: 'input', disabled: readOnly }, rec.comment || '');
@@ -2686,7 +2690,7 @@ async function viewExpenses(main) {
     content.innerHTML = '';
 
     // быстрое добавление: сумма → категория → сохранить
-    const amountInp = h('input', { class: 'input', type: 'number', inputmode: 'decimal', min: 0, step: '0.01', placeholder: 'Сумма, ₽', style: { width: '150px' } });
+    const amountInp = h('input', { class: 'input', money: true, type: 'number', inputmode: 'decimal', min: 0, step: '0.01', placeholder: 'Сумма, ₽', style: { width: '150px' } });
     const dateInp = h('input', { class: 'input', type: 'date', value: todayISO(), style: { width: '150px' } });
     const quickScope = scopeSelect(scopes, filters.scope.startsWith('p:') || filters.scope.startsWith('r:') ? filters.scope : '', { attrs: { style: 'width:220px', 'aria-label': 'Относится к' } });
     const chips = h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } });
@@ -2916,7 +2920,7 @@ function servicesCard() {
     const list = await api('GET', '/api/services');
     card.innerHTML = '';
     const name = h('input', { class: 'input', placeholder: 'Например: Завтрак' });
-    const price = h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Цена, ₽', style: { maxWidth: '140px' } });
+    const price = h('input', { class: 'input', money: true, type: 'number', min: 0, placeholder: 'Цена, ₽', style: { maxWidth: '140px' } });
     card.append(h('h2', { style: { marginBottom: '6px' } }, 'Дополнительные услуги'),
       h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Завтрак, трансфер, поздний выезд, доп. место — добавляются в бронь одним выбором и входят в счёт.'),
       list.length ? h('div', { class: 'pay-list' }, list.map((x) => h('div', { class: 'pay-row' },
@@ -3032,9 +3036,9 @@ async function viewSettings(main) {
       const fld = (k, l, a = {}) => h('label', { class: 'field' }, h('span', {}, l), g[k] = h('input', { class: 'input', value: t[k] ?? '', ...a }));
       openDrawer(t.id ? t.name : 'Новая категория', h('div', {},
         fld('name', 'Название'), fld('description', 'Описание для гостей'),
-        h('div', { class: 'row3' }, fld('capacity', 'Гостей', { type: 'number', min: 1, value: t.capacity ?? 2 }), fld('base_price', 'Цена, ₽', { type: 'number', min: 0, value: t.base_price != null ? Math.round(t.base_price) : '' }), fld('min_stay', 'Мин. ночей', { type: 'number', min: 1, value: t.min_stay ?? 1 })),
+        h('div', { class: 'row3' }, fld('capacity', 'Гостей', { money: true, type: 'number', min: 1, value: t.capacity ?? 2 }), fld('base_price', 'Цена, ₽', { type: 'number', min: 0, value: t.base_price != null ? Math.round(t.base_price) : '' }), fld('min_stay', 'Мин. ночей', { type: 'number', min: 1, value: t.min_stay ?? 1 })),
         h('h3', { style: { margin: '14px 0 6px' } }, 'Доплаты и скидки'),
-        h('div', { class: 'row2' }, fld('included_guests', 'Гостей в цене', { type: 'number', min: 0, value: t.included_guests || '', placeholder: 'все' }), fld('extra_guest_price', 'Доплата за гостя, ₽/ночь', { type: 'number', min: 0, value: t.extra_guest_price ? Math.round(t.extra_guest_price) : '', placeholder: '0' })),
+        h('div', { class: 'row2' }, fld('included_guests', 'Гостей в цене', { money: true, type: 'number', min: 0, value: t.included_guests || '', placeholder: 'все' }), fld('extra_guest_price', 'Доплата за гостя, ₽/ночь', { type: 'number', min: 0, value: t.extra_guest_price ? Math.round(t.extra_guest_price) : '', placeholder: '0' })),
         h('div', { class: 'row2' }, fld('week_discount_percent', 'Скидка от 7 ночей, %', { type: 'number', min: 0, max: 90, value: Number(t.week_discount_percent) || '', placeholder: '0' }), fld('month_discount_percent', 'Скидка от 28 ночей, %', { type: 'number', min: 0, max: 90, value: Number(t.month_discount_percent) || '', placeholder: '0' })),
         t.id ? plansManager(t.id) : null,
         t.id ? photoManager(t.id) : h('p', { class: 'muted small' }, 'Фото и тарифы можно добавить после сохранения категории.')),

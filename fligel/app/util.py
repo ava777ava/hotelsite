@@ -73,7 +73,7 @@ def parse_money(value: Any, label: str = "Сумма") -> Decimal:
     if value in (None, ""):
         return Decimal("0")
     try:
-        d = Decimal(str(value).replace(",", ".").replace(" ", ""))
+        d = Decimal(re.sub(r"\s", "", str(value)).replace(",", "."))
     except InvalidOperation:
         raise ApiError(422, f"{label}: нужно число")
     if d < 0:
