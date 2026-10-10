@@ -23,7 +23,7 @@ os.environ["RESET_REQUESTS_PER_HOUR"] = "100000"
 import psycopg  # noqa: E402
 from starlette.testclient import TestClient  # noqa: E402
 
-from app import admin, config, db, expenses, ical, mail, ratelimit, sync, telegram  # noqa: E402
+from app import admin, config, db, expenses, ical, mail, maxbot, notify, ratelimit, sync, telegram  # noqa: E402
 from app.api.reports import _shift_years  # noqa: E402
 from app.main import app  # noqa: E402
 
@@ -2324,6 +2324,164 @@ class FreeRoomsTests(Base):
         other = self.register("free1b@example.ru")
         r = self.client.get("/api/bookings/free-rooms?check_in=2038-01-11&check_out=2038-01-12", headers=other["h"]).json()
         self.assertEqual(sum(len(t["rooms"]) for t in r["types"]), 12)  # у другого аккаунта своя картина
+
+
+class MaxChannelTests(Base):
+    """Второй канал уведомлений — MAX. Выключен без MAX_BOT_TOKEN; здесь токен включаем,
+    а реальную отправку (maxbot.send_message) подменяем моком: ни одного запроса к MAX."""
+
+    def setUp(self):
+        self.ctx = self.register(f"max{id(self)}@example.ru")
+        self.acc = self.ctx["prop"]["account_id"]
+        self._orig = (config.MAX_BOT_TOKEN, config.MAX_WEBHOOK_SECRET, config.MAX_BOT_USERNAME, config.TELEGRAM_BOT_TOKEN, maxbot.send_message, telegram.send_message)
+        config.MAX_BOT_TOKEN = "max-test-token"
+        config.MAX_WEBHOOK_SECRET = ""
+        config.MAX_BOT_USERNAME = "fligel_bot"
+        config.TELEGRAM_BOT_TOKEN = "tg-test-token"
+        self.sent, self.tg_sent = [], []
+        maxbot.send_message = lambda chat_id, text: self.sent.append((chat_id, text))
+        telegram.send_message = lambda chat_id, text: self.tg_sent.append((chat_id, text))
+
+    def tearDown(self):
+        (config.MAX_BOT_TOKEN, config.MAX_WEBHOOK_SECRET, config.MAX_BOT_USERNAME, config.TELEGRAM_BOT_TOKEN,
+         maxbot.send_message, telegram.send_message) = self._orig
+
+    def chat(self):
+        return id(self) % 800000000 + 100000000
+
+    def link_max(self, via="bot_started"):
+        st = self.client.post("/api/notify/max/link", headers=self.ctx["h"]).json()
+        ch = next(c for c in st["channels"] if c["name"] == "max")
+        code = ch["pending_code"]
+        self.assertEqual(ch["deep_link"], f"https://max.ru/fligel_bot?start={code}")
+        upd = ({"update_type": "bot_started", "chat_id": self.chat(), "payload": code} if via == "bot_started"
+               else {"update_type": "message_created", "message": {"recipient": {"chat_id": self.chat()}, "body": {"text": f"/start {code}"}}})
+        r = self.client.post("/api/max/webhook", json=upd)
+        self.assertTrue(r.json()["linked"], r.text)
+
+    def test_disabled_by_default(self):
+        config.MAX_BOT_TOKEN = ""
+        st = self.client.get("/api/notify/status", headers=self.ctx["h"]).json()
+        self.assertFalse(next(c for c in st["channels"] if c["name"] == "max")["server_enabled"])
+        self.assertEqual(self.client.post("/api/notify/max/link", headers=self.ctx["h"]).status_code, 422)
+        with db.tx() as conn:
+            self.assertEqual(maxbot.notify(conn, self.acc, "new_booking", "x"), 0)
+        self.assertEqual(maxbot.process_outbox(), {"sent": 0, "failed": 0})
+        self.assertEqual(self.client.post("/api/max/webhook", json={"update_type": "bot_started", "chat_id": 1, "payload": "AAAA"}).json(), {"ok": True})
+
+    def test_link_flow_both_variants_and_delivery(self):
+        for via in ("bot_started", "message_created"):
+            self.link_max(via)
+            with db.tx() as conn:
+                self.assertEqual(notify.send(conn, self.acc, "new_booking", f"Заявка {via}"), 2 if False else notify.send(conn, self.acc, "new_booking", f"Заявка {via}"))
+            maxbot.process_outbox()
+            self.client.post("/api/notify/max/unlink", headers=self.ctx["h"])
+        texts = [t for _, t in self.sent]
+        self.assertTrue(any("подключены" in t for t in texts))
+        self.assertTrue(any("bot_started" in t for t in texts) and any("message_created" in t for t in texts))
+        # неверный и просроченный код не привязывают
+        self.assertFalse(self.client.post("/api/max/webhook", json={"update_type": "bot_started", "chat_id": 5, "payload": "ZZZZZZZZ"}).json()["linked"])
+
+    def test_both_channels_and_user_choice(self):
+        self.link_max()
+        resp = self.client.post("/api/notify/telegram/link", headers=self.ctx["h"])
+        self.assertEqual(resp.status_code, 200, resp.text)
+        code = next(c for c in resp.json()["channels"] if c["name"] == "telegram")["pending_code"]
+        self.client.post("/api/telegram/webhook", json={"message": {"text": f"/start {code}", "chat": {"id": self.chat() + 1}}})
+        with db.tx() as conn:
+            notify.send(conn, self.acc, "conflict", "Двойная бронь!")
+        maxbot.process_outbox(); telegram.process_outbox()
+        self.assertIn((self.chat(), "Двойная бронь!"), self.sent)
+        self.assertIn((self.chat() + 1, "Двойная бронь!"), self.tg_sent)
+        # сотрудник отключил Telegram, оставил MAX
+        r = self.client.put("/api/notify/settings", headers=self.ctx["h"], json={"events": ["conflict", "digest"], "channels": {"telegram": False, "max": True}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.sent.clear(); self.tg_sent.clear()
+        with db.tx() as conn:
+            notify.send(conn, self.acc, "conflict", "Второй")
+            notify.send(conn, self.acc, "new_booking", "Не подписан")
+        maxbot.process_outbox(); telegram.process_outbox()
+        self.assertEqual(([t for _, t in self.sent], self.tg_sent), (["Второй"], []))
+
+    def test_retries_and_secret(self):
+        self.link_max()
+        calls = []
+        def flaky(chat_id, text):
+            if text == "Повтор":
+                calls.append(text)
+            raise RuntimeError("MAX недоступен")
+        maxbot.send_message = flaky
+        with db.tx() as conn:
+            maxbot.notify(conn, self.acc, "new_booking", "Повтор")
+        self.assertEqual(maxbot.process_outbox()["sent"], 0)
+        with db.tx() as conn:
+            row = db.one(conn, "SELECT status, attempts FROM max_outbox WHERE text = 'Повтор'")
+        self.assertEqual((row["status"], row["attempts"]), ("pending", 1))
+        self.assertEqual(maxbot.process_outbox()["sent"], 0)  # пауза перед повтором — второй попытки пока нет
+        self.assertEqual(len(calls), 1)
+        config.MAX_WEBHOOK_SECRET = "s3cret"
+        self.assertEqual(self.client.post("/api/max/webhook", json={"update_type": "bot_started", "chat_id": 1, "payload": "A"}).status_code, 403)
+        ok = self.client.post("/api/max/webhook", headers={"X-Max-Bot-Api-Secret": "s3cret"}, json={"update_type": "bot_started", "chat_id": 1, "payload": "A"})
+        self.assertEqual(ok.status_code, 200)
+
+    def test_parse_update_shapes(self):
+        self.assertEqual(maxbot.parse_update({"update_type": "bot_started", "chat_id": 7, "payload": " ab12 "}), (7, "ab12"))
+        self.assertEqual(maxbot.parse_update({"update_type": "message_created", "message": {"recipient": {"chat_id": 9}, "body": {"text": "/start CODE1234"}}}), (9, "CODE1234"))
+        self.assertEqual(maxbot.parse_update({"update_type": "message_created", "message": {"recipient": {"chat_id": 9}, "body": {"text": "очень длинный произвольный текст сообщения"}}}), (9, ""))
+        self.assertEqual(maxbot.parse_update({"update_type": "bot_added"}), (None, ""))
+
+    def test_digest_goes_to_max_once(self):
+        self.link_max()
+        now = datetime.now().replace(hour=23, minute=0)
+        def mine():
+            with db.tx() as conn:
+                return db.one(conn, "SELECT count(*) AS n FROM max_outbox WHERE account_id = %s AND text LIKE 'Доброе утро%%'", (self.acc,))["n"]
+        maxbot.maybe_send_digests(now)
+        self.assertEqual(mine(), 1)
+        maxbot.maybe_send_digests(now)
+        self.assertEqual(mine(), 1)  # второй раз за день не шлём
+        maxbot.process_outbox()
+        self.assertTrue(any("Доброе утро" in t for _, t in self.sent))
+
+
+class BellAndAuditTests(Base):
+    def test_site_request_rings_bell_and_seen_resets(self):
+        ctx = self.register("bell1@example.ru")
+        slug = ctx["prop"]["public_slug"]
+        self.client.patch(f"/api/properties/{ctx['prop']['id']}", headers=ctx["h"], json={"booking_enabled": True})
+        self.assertEqual(self.client.get("/api/notifications", headers=ctx["h"]).json()["unread"], 0)
+        r = self.client.post(f"/api/public/{slug}/book", json={"check_in": "2040-03-01", "check_out": "2040-03-03", "guests": 1,
+            "guest_name": "Пётр", "guest_phone": "+7 900 123-45-67", "consent": True, "room_type_id": ctx["prop"]["room_types"][0]["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        bell = self.client.get("/api/notifications", headers=ctx["h"]).json()
+        self.assertEqual(bell["unread"], 1)
+        self.assertIn("Новая заявка с сайта", bell["items"][0]["text"])
+        self.assertEqual(bell["items"][0]["link"], "#/bookings")
+        self.client.post("/api/notifications/seen", headers=ctx["h"])
+        self.assertEqual(self.client.get("/api/notifications", headers=ctx["h"]).json()["unread"], 0)
+        other = self.register("bell1b@example.ru")
+        self.assertEqual(self.client.get("/api/notifications", headers=other["h"]).json()["items"], [])
+        self.client.post("/api/users", headers=ctx["h"], json={"email": "bellmaid@example.ru", "name": "Г", "password": "password123", "role": "housekeeper"})
+        tok = self.client.post("/api/auth/login", json={"email": "bellmaid@example.ru", "password": "password123"}).json()["token"]
+        self.assertEqual(self.client.get("/api/notifications", headers={"Authorization": f"Bearer {tok}"}).status_code, 403)
+
+    def test_audit_feed(self):
+        ctx = self.register("audit1@example.ru")
+        self.client.post("/api/users", headers=ctx["h"], json={"email": "audit1m@example.ru", "name": "Мария", "password": "password123", "role": "manager"})
+        self.book(ctx, ctx["rooms"][0], "2040-04-10", "2040-04-12", guest="Гость Журнала", total_price=5000, paid_amount=1000)
+        self.client.put("/api/rates", headers=ctx["h"], json={"room_type_ids": [ctx["prop"]["room_types"][0]["id"]], "date_from": "2040-04-01", "date_to": "2040-04-03", "price": 4000})
+        feed = self.client.get("/api/audit", headers=ctx["h"]).json()["items"]
+        texts = " | ".join(i["text"] for i in feed)
+        self.assertIn("Добавлен сотрудник Мария (manager)", texts)
+        self.assertIn("Создана бронь «Гость Журнала»", texts)
+        self.assertIn("Изменены цены", texts)
+        self.assertTrue(all(i["who"] for i in feed))
+        # не-владелец и чужой аккаунт журнал не видят
+        tok = self.client.post("/api/auth/login", json={"email": "audit1m@example.ru", "password": "password123"}).json()["token"]
+        self.assertEqual(self.client.get("/api/audit", headers={"Authorization": f"Bearer {tok}"}).status_code, 403)
+        other = self.register("audit1b@example.ru")
+        self.assertEqual(self.client.get("/api/audit", headers=other["h"]).json()["items"], [])
+        self.assertEqual(self.client.get("/api/audit?before=не-дата", headers=ctx["h"]).status_code, 422)
 
 
 if __name__ == "__main__":

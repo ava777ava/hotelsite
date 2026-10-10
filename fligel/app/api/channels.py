@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from .. import config, ical
+from .. import audit, config, ical
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..sync import CHANNEL_LABELS, export_events, export_type_events, sync_feed
@@ -146,6 +146,7 @@ def save_feed(c: Ctx):
             feed_id = one(conn, "INSERT INTO ical_feeds (account_id, room_id, room_type_id, channel, url)"
                                 " VALUES (%s, %s, %s, %s, %s) RETURNING id",
                           (c.account_id, room_id, type_id, channel, url))["id"]
+        audit.record(conn, c.account_id, c.p.user_id, "feed_saved", f"{'Обновлена ссылка' if existing else 'Подключён календарь'} площадки {CHANNEL_LABELS.get(channel, channel)}")
     # Сразу проверяем ссылку, чтобы пользователь увидел результат
     res = sync_feed(feed_id)
     return {"id": feed_id, "status": res.status, "message": res.message, "added": res.added,
@@ -178,6 +179,7 @@ def delete_feed(c: Ctx):
             run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now()"
                       " WHERE feed_id = %s AND check_out >= current_date", (fid,))
         run(conn, "DELETE FROM ical_feeds WHERE id = %s", (fid,))
+        audit.record(conn, c.account_id, c.p.user_id, "feed_deleted", "Отключён календарь площадки" + (" (брони с площадки отменены)" if remove_bookings else ""))
 
 
 @api("manager")

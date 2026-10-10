@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import httpx
 import psycopg
 
-from . import booklog, config, ical, telegram
+from . import booklog, config, ical, notify
 from .db import all_, one, run, tx
 from .expenses import generate_due_expenses
 
@@ -112,10 +112,11 @@ def _place(conn, feed: dict, rooms: list[dict], ev: ical.Event, uid: str, existi
                     booklog.log(conn, feed["account_id"], created["id"], None, "created", {
                         "summary": f"{ev.start.strftime('%d.%m')}–{ev.end.strftime('%d.%m')}, синхронизация с площадки",
                         "source": feed["channel"]})
-                    telegram.notify(
+                    notify.send(
                         conn, feed["account_id"], "new_booking",
                         f"Новая бронь с площадки {CHANNEL_LABELS[feed['channel']]}: "
                         f"{ev.start.strftime('%d.%m')}–{ev.end.strftime('%d.%m')}.",
+                        link="#/bookings", bell=True,
                     )
             return True
         except psycopg.errors.ExclusionViolation:
@@ -198,11 +199,12 @@ def apply_events(conn, feed: dict, events: list[ical.Event], today: date | None 
         res.conflicts += 1
         if inserted:
             res.conflict_details.append({"check_in": ev.start, "check_out": ev.end})
-            telegram.notify(
+            notify.send(
                 conn, feed["account_id"], "conflict",
                 f"Двойное бронирование! Площадка {CHANNEL_LABELS[feed['channel']]} прислала бронь на "
                 f"{ev.start.strftime('%d.%m')}–{ev.end.strftime('%d.%m')}, но эти даты уже заняты. "
                 "Проверьте раздел «Конфликты».",
+                link="#/channels", bell=True,
             )
     # Исчезнувшие из календаря будущие брони — отменены на площадке
     for uid, b in existing.items():
@@ -211,10 +213,11 @@ def apply_events(conn, feed: dict, events: list[ical.Event], today: date | None 
             booklog.log(conn, feed["account_id"], b["id"], None, "cancelled",
                         {"reason": "Бронь исчезла из календаря площадки"})
             res.removed += 1
-            telegram.notify(
+            notify.send(
                 conn, feed["account_id"], "cancellation",
                 f"Бронь с площадки {CHANNEL_LABELS[feed['channel']]} отменена: "
                 f"{b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}.",
+                link="#/bookings", bell=True,
             )
     if res.conflicts:
         res.message = f"Даты заняты другой бронью: {res.conflicts}. Проверьте конфликты."
@@ -251,9 +254,10 @@ def sync_feed(feed_id, fetcher=None) -> SyncResult:
             # Уведомляем только при переходе в «сломан» — иначе каждый тик планировщика слал бы
             # то же самое сообщение повторно, пока площадка не ответит снова.
             if feed.get("last_status") != "error":
-                telegram.notify(
+                notify.send(
                     conn, feed["account_id"], "sync_error",
                     f"Не удалось обновить календарь с площадки {CHANNEL_LABELS[feed['channel']]}: {res.message}",
+                    link="#/channels", bell=True,
                 )
         log.warning("Синхронизация %s (%s) не удалась: %s", feed_id, feed["channel"], res.message)
         return res
@@ -300,16 +304,16 @@ def expire_holds() -> int:
             ([r["id"] for r in rows],))
         for r in rows:
             booklog.log(conn, r["account_id"], r["id"], None, "cancelled", {"reason": "Заявка не подтверждена вовремя"})
-            telegram.notify(conn, r["account_id"], "cancellation",
-                            f"Бронь «{r['guest_name'] or 'без имени'}» снята: не подтверждена вовремя.")
+            notify.send(conn, r["account_id"], "cancellation",
+                        f"Бронь «{r['guest_name'] or 'без имени'}» снята: не подтверждена вовремя.", link="#/bookings", bell=True)
     return len(rows)
 
 
 def run_once() -> int:
     expire_holds()
     generate_due_expenses()
-    telegram.process_outbox()
-    telegram.maybe_send_digests()
+    notify.process_outboxes()
+    notify.send_digests()
     ids = claim_due_feeds()
     for fid in ids:
         try:

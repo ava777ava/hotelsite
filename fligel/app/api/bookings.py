@@ -9,7 +9,7 @@ import psycopg
 from starlette.responses import Response
 from starlette.routing import Route
 
-from .. import booklog, config, importer, telegram
+from .. import audit, booklog, config, importer, notify
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -206,6 +206,8 @@ def import_bookings(c: Ctx):
                 created += 1
             if dry_run:
                 raise psycopg.Rollback()
+        if not dry_run and created:
+            audit.record(conn, c.account_id, c.p.user_id, "bookings_imported", f"Импорт броней из файла: загружено {created}, пропущено {len(errors)}")
     return {"dry_run": dry_run, "created": created, "total": len(items), "skipped": len(errors),
             "errors": errors[:200], "columns": fields}
 
@@ -299,7 +301,7 @@ def create_booking(c: Ctx):
                 "source": source})
         if status != "blocked":
             names = ", ".join(rm["name"] for rm in [room, *extras])
-            telegram.notify(
+            notify.send(
                 conn, c.account_id, "new_booking",
                 f"Новая бронь ({SOURCE_LABELS.get(source, source)}): {'номера' if extras else 'номер'} {names}, "
                 f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}"
@@ -407,7 +409,7 @@ def update_booking(c: Ctx):
             booklog.log(conn, c.account_id, bid, c.p.user_id, "cancelled" if cancelled_now else "updated",
                         {"changes": changes})
         if new["status"] == "cancelled" and b["status"] != "cancelled":
-            telegram.notify(conn, c.account_id, "cancellation",
+            notify.send(conn, c.account_id, "cancellation",
                             f"Бронь «{updated['guest_name'] or 'без имени'}» отменена "
                             f"({updated['check_in'].strftime('%d.%m')}–{updated['check_out'].strftime('%d.%m')}).")
         return updated
@@ -432,7 +434,7 @@ def delete_booking(c: Ctx):
                     run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (g["id"],))
                     booklog.log(conn, c.account_id, g["id"], c.p.user_id, "cancelled", {"summary": "отмена всей группы"})
             if b["status"] != "blocked":
-                telegram.notify(conn, c.account_id, "cancellation",
+                notify.send(conn, c.account_id, "cancellation",
                                 f"Группа броней «{b['guest_name'] or 'без имени'}» отменена "
                                 f"({b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}).")
             return
@@ -442,7 +444,7 @@ def delete_booking(c: Ctx):
             run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (bid,))
             if b["status"] != "cancelled":
                 booklog.log(conn, c.account_id, bid, c.p.user_id, "cancelled", {})
-                telegram.notify(conn, c.account_id, "cancellation",
+                notify.send(conn, c.account_id, "cancellation",
                                 f"Бронь «{b['guest_name'] or 'без имени'}» отменена "
                                 f"({b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}).")
 
@@ -711,6 +713,8 @@ def set_rates(c: Ctx):
                         (c.account_id, rt, day, price, min_stay, closed, min_stay, closed),
                     )
                     count += 1
+    with tx() as conn:
+        audit.record(conn, c.account_id, c.p.user_id, "rates_changed", f"Изменены цены или ограничения: {count} {'запись' if count % 10 == 1 and count % 100 != 11 else 'записей'} ({start.strftime('%d.%m')}–{end.strftime('%d.%m.%Y')})")
     return {"updated": count}
 
 

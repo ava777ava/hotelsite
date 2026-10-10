@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
-from .. import config, mail, ratelimit
+from .. import audit, config, mail, ratelimit
 from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
@@ -285,6 +285,7 @@ def create_user(c: Ctx):
         if role == "landlord":
             from .owners import assign_properties
             assign_properties(conn, c.account_id, user["id"], list(dict.fromkeys(parse_uuid(i, "Объект") for i in property_ids)))
+        audit.record(conn, c.account_id, c.p.user_id, "user_created", f"Добавлен сотрудник {name} ({role})", "user", user["id"])
         return user
 
 
@@ -294,8 +295,11 @@ def delete_user(c: Ctx):
     if uid == c.p.user_id:
         raise ApiError(422, "Нельзя удалить самого себя")
     with tx() as conn:
+        who = one(conn, "SELECT name, role FROM users WHERE id = %s AND account_id = %s", (uid, c.account_id))
         n = run(conn, "DELETE FROM users WHERE id = %s AND account_id = %s AND role <> 'owner'",
                 (uid, c.account_id))
+        if n and who:
+            audit.record(conn, c.account_id, c.p.user_id, "user_deleted", f"Удалён доступ сотрудника {who['name']} ({who['role']})", "user", uid)
     if not n:
         raise ApiError(404, "Сотрудник не найден")
 
@@ -402,8 +406,10 @@ def update_property(c: Ctx):
         raise ApiError(422, "Нечего сохранять")
     with tx() as conn:
         prop = _get_property(conn, c.account_id, c.path["id"])
-        return one(conn, f"UPDATE properties SET {', '.join(sets)} WHERE id = %s RETURNING *",
-                   (*params, prop["id"]))
+        row = one(conn, f"UPDATE properties SET {', '.join(sets)} WHERE id = %s RETURNING *",
+                  (*params, prop["id"]))
+        audit.record(conn, c.account_id, c.p.user_id, "property_updated", f"Изменены настройки объекта «{prop['name']}»", "property", prop["id"])
+        return row
 
 
 @api("owner")
@@ -459,8 +465,10 @@ def delete_room_type(c: Ctx):
     with tx() as conn:
         if one(conn, "SELECT 1 FROM rooms WHERE room_type_id = %s", (rt_id,)):
             raise ApiError(409, "Сначала удалите или перенесите номера этой категории")
+        rt = one(conn, "SELECT name FROM room_types WHERE id = %s AND account_id = %s", (rt_id, c.account_id))
         if not run(conn, "DELETE FROM room_types WHERE id = %s AND account_id = %s", (rt_id, c.account_id)):
             raise ApiError(404, "Категория не найдена")
+        audit.record(conn, c.account_id, c.p.user_id, "room_type_deleted", f"Удалена категория номеров «{rt['name']}»")
 
 
 @api("owner")

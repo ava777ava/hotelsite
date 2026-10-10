@@ -61,7 +61,7 @@ def start_link(conn, account_id: str, user_id: str) -> dict:
 def get_link(conn, user_id: str) -> dict | None:
     return one(
         conn,
-        "SELECT chat_id, linked_at, link_code, link_code_expires_at, events"
+        "SELECT chat_id, linked_at, link_code, link_code_expires_at, events, enabled"
         " FROM telegram_links WHERE user_id = %s",
         (user_id,),
     )
@@ -121,7 +121,7 @@ def notify(conn, account_id: str, event: str, text: str) -> int:
         return 0
     rows = all_(
         conn,
-        "SELECT chat_id FROM telegram_links WHERE account_id = %s AND chat_id IS NOT NULL"
+        "SELECT chat_id FROM telegram_links WHERE account_id = %s AND chat_id IS NOT NULL AND enabled"
         " AND %s = ANY(events)",
         (account_id, event),
     )
@@ -215,7 +215,7 @@ def maybe_send_digests(now: datetime | None = None) -> int:
     with tx() as conn:
         accounts = all_(
             conn,
-            "SELECT DISTINCT account_id FROM telegram_links WHERE chat_id IS NOT NULL AND 'digest' = ANY(events)",
+            "SELECT DISTINCT account_id FROM telegram_links WHERE chat_id IS NOT NULL AND enabled AND 'digest' = ANY(events)",
         )
         for a in accounts:
             account_id = a["account_id"]

@@ -54,6 +54,14 @@ TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
 # Час (0-23) по времени сервера, после которого можно отправить утренний дайджест
 TELEGRAM_DIGEST_HOUR = int(os.environ.get("TELEGRAM_DIGEST_HOUR", "8"))
 
+# Уведомления в MAX: выключены, пока не задан токен бота. Бота можно создать только от верифицированного
+# юридического лица или ИП в РФ (правила платформы MAX); токен выдаёт платформа после создания бота.
+MAX_BOT_TOKEN = os.environ.get("MAX_BOT_TOKEN", "").strip()
+# Имя бота (для ссылки привязки https://max.ru/<имя>?start=<код>) и секрет вебхука (заголовок X-Max-Bot-Api-Secret)
+MAX_BOT_USERNAME = os.environ.get("MAX_BOT_USERNAME", "").strip().lstrip("@")
+MAX_WEBHOOK_SECRET = os.environ.get("MAX_WEBHOOK_SECRET", "").strip()
+MAX_API_BASE = os.environ.get("MAX_API_BASE", "https://platform-api.max.ru").rstrip("/")
+
 # Восстановление пароля по email через SMTP. Без SMTP_HOST письма не отправляются —
 # ссылка на восстановление просто пишется в лог сервера (см. app/mail.py).
 SMTP_HOST = os.environ.get("SMTP_HOST", "").strip()

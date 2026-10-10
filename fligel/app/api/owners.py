@@ -8,6 +8,7 @@ from decimal import Decimal
 from starlette.responses import Response
 from starlette.routing import Route
 
+from .. import audit
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..util import csv_safe, parse_date, parse_money, parse_uuid
@@ -167,6 +168,7 @@ def set_commission(c: Ctx):
         if not run(conn, "UPDATE properties SET mc_commission_percent = %s, mc_commission_base = %s WHERE id = %s AND account_id = %s",
                    (pct, base, parse_uuid(c.path["id"], "Объект"), c.account_id)):
             raise ApiError(404, "Объект не найден")
+        audit.record(conn, c.account_id, c.p.user_id, "commission_changed", f"Комиссия УК по объекту: {pct}% ({'от выручки' if base == 'gross' else 'от чистой выручки'})")
     return {"percent": pct, "base": base}
 
 

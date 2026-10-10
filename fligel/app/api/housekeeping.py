@@ -1,7 +1,7 @@
 """Уборка: статусы номеров, экран горничной, назначение, заметки к номерам."""
 from starlette.routing import Route
 
-from .. import audit, telegram
+from .. import audit, notify
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..util import opt_str, parse_uuid
@@ -74,9 +74,8 @@ def set_status(c: Ctx):
             (c.account_id, rid, c.p.user_id, status, note))
         if status == "repair" and room["hk_status"] != "repair":
             text = f"Номер {room['name']}: поломка — {note}"
-            audit.notify(conn, c.account_id, "room_issue", text, "#/cleaning")
             audit.record(conn, c.account_id, c.p.user_id, "room_repair", text, "room", rid)
-            telegram.notify(conn, c.account_id, "room_issue", text)
+            notify.send(conn, c.account_id, "room_issue", text, link="#/cleaning", bell=True)
         return {"id": rid, "status": status, "note": note if status == "repair" else ""}
 
 

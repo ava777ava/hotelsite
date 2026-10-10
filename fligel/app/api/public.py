@@ -6,7 +6,7 @@ from starlette.routing import Route
 
 import logging
 
-from .. import booklog, config, mail, ratelimit, telegram
+from .. import booklog, config, mail, notify, ratelimit
 from ..db import all_, one, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -197,9 +197,10 @@ def create_request(c: Ctx):
         booklog.log(conn, prop["account_id"], b["id"], None, "created",
                     {"summary": f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}, заявка с сайта",
                      "source": "direct"})
-        telegram.notify(conn, prop["account_id"], "new_booking",
-                        f"Новая заявка с сайта: {t['name']}, {check_in.strftime('%d.%m')}–"
-                        f"{check_out.strftime('%d.%m')}, {name}, {phone}." + (" ⚠ Гость в чёрном списке!" if black else ""))
+        notify.send(conn, prop["account_id"], "new_booking",
+                    f"Новая заявка с сайта: {t['name']}, {check_in.strftime('%d.%m')}–"
+                    f"{check_out.strftime('%d.%m')}, {name}, {phone}." + (" ⚠ Гость в чёрном списке!" if black else ""),
+                    link="#/bookings", bell=True)
     _email_staff(prop, t, name, phone, check_in, check_out, q.total)
     guest_email = opt_str(d, "guest_email", max_len=200)
     if guest_email and "@" in guest_email:
