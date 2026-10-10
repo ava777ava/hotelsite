@@ -1,6 +1,7 @@
 """Брони, шахматка, цены по датам, статистика."""
 import csv
 import io
+import uuid
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -27,7 +28,7 @@ BOOKING_COLS = (
     "b.id, b.property_id, b.room_id, b.check_in, b.check_out, b.status, b.source, b.guest_name,"
     " b.guest_phone, b.guest_email, b.guests_count, b.total_price, b.paid_amount, b.notes,"
     " b.discount_amount, b.discount_reason, b.deposit_amount, b.deposit_status, b.rate_plan_id, b.rate_plan_name,"
-    " b.feed_id, b.external_uid, b.hold_expires_at, b.created_at, b.updated_at"
+    " b.group_id, b.feed_id, b.external_uid, b.hold_expires_at, b.created_at, b.updated_at"
 )
 
 
@@ -236,46 +237,72 @@ def create_booking(c: Ctx):
     if deposit_status not in DEPOSIT_STATUSES:
         raise ApiError(422, "Неверный статус залога")
     paid_in = parse_money(d.get("paid_amount"), "Оплачено")
+    extra_ids = d.get("extra_room_ids") or []
+    if not isinstance(extra_ids, list) or len(extra_ids) > 30:
+        raise ApiError(422, "Слишком много номеров в одной брони (максимум 30)")
+    guests_n = parse_int(d.get("guests_count"), "Гостей", 1, default=1)
     with tx() as conn:
         room = _load_room(conn, c.account_id, d.get("room_id"))
         plan = get_plan(conn, c.account_id, d.get("rate_plan_id"), room["room_type_id"]) if status != "blocked" else None
         if d.get("total_price") in (None, "") and status != "blocked":
-            guests_n = parse_int(d.get("guests_count"), "Гостей", 1, default=1)
             total = max(quote(conn, _room_type(conn, room), check_in, check_out, guests_n, plan).total - discount, Decimal("0"))
         else:
             total = parse_money(d.get("total_price"), "Стоимость")
-        try:
-            with conn.transaction():
-                booking = one(
-                    conn,
-                    "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
-                    " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes,"
-                    " discount_amount, discount_reason, deposit_amount, deposit_status, rate_plan_id, rate_plan_name)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
-                    (c.account_id, room["property_id"], room["id"], check_in, check_out, status, source,
-                     opt_str(d, "guest_name", max_len=200), opt_str(d, "guest_phone", max_len=50),
-                     opt_str(d, "guest_email", max_len=200),
-                     parse_int(d.get("guests_count"), "Гостей", 1, default=1), total,
-                     opt_str(d, "notes"), discount, opt_str(d, "discount_reason", max_len=200), deposit, deposit_status,
-                     plan["id"] if plan else None, plan["name"] if plan else ""),
-                )
-        except psycopg.errors.ExclusionViolation:
-            raise ApiError(409, _overlap_info(conn, room["id"], check_in, check_out, None), {"code": "overlap"})
+        extras = []
+        for rid in dict.fromkeys(parse_uuid(x, "Номер") for x in extra_ids):
+            if rid == str(room["id"]):
+                continue
+            r2 = _load_room(conn, c.account_id, rid)
+            if r2["property_id"] != room["property_id"]:
+                raise ApiError(422, "Все номера группы должны быть в одном объекте")
+            extras.append(r2)
+        group_id = str(uuid.uuid4()) if extras else None
+
+        def insert(rm, price, plan_row, guests, disc, dep, dep_status):
+            try:
+                with conn.transaction():
+                    return one(
+                        conn,
+                        "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
+                        " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes,"
+                        " discount_amount, discount_reason, deposit_amount, deposit_status, rate_plan_id, rate_plan_name,"
+                        " group_id)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                        (c.account_id, rm["property_id"], rm["id"], check_in, check_out, status, source,
+                         opt_str(d, "guest_name", max_len=200), opt_str(d, "guest_phone", max_len=50),
+                         opt_str(d, "guest_email", max_len=200), guests, price,
+                         opt_str(d, "notes"), disc, opt_str(d, "discount_reason", max_len=200) if disc else "", dep, dep_status,
+                         plan_row["id"] if plan_row else None, plan_row["name"] if plan_row else "", group_id),
+                    )
+            except psycopg.errors.ExclusionViolation:
+                raise ApiError(409, _overlap_info(conn, rm["id"], check_in, check_out, None) + (f" (номер {rm['name']})" if extras else ""),
+                               {"code": "overlap"})
+
+        booking = insert(room, total, plan, guests_n, discount, deposit, deposit_status)
+        group_rows = [booking]
+        for r2 in extras:
+            g2 = min(guests_n, r2["capacity"]) if status != "blocked" else 1
+            price2 = Decimal("0") if status == "blocked" else quote(conn, _room_type(conn, r2), check_in, check_out, g2, None).total
+            group_rows.append(insert(r2, price2, None, g2, Decimal("0"), Decimal("0"), "none"))
         if paid_in > 0:
             add_payment(conn, c.account_id, booking["id"], c.p.user_id, paid_in, "payment",
                         d.get("payment_method") if d.get("payment_method") in METHODS else "cash", None,
                         "Предоплата при создании брони", log=False)
             booking["paid_amount"] = paid_in
-        booklog.log(conn, c.account_id, booking["id"], c.p.user_id, "created", {
-            "summary": f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}, номер {room['name']}",
-            "source": source})
+        for row, rm in zip(group_rows, [room, *extras]):
+            booklog.log(conn, c.account_id, row["id"], c.p.user_id, "created", {
+                "summary": f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}, номер {rm['name']}"
+                           + (f", группа из {len(group_rows)} номеров" if extras else ""),
+                "source": source})
         if status != "blocked":
+            names = ", ".join(rm["name"] for rm in [room, *extras])
             telegram.notify(
                 conn, c.account_id, "new_booking",
-                f"Новая бронь ({SOURCE_LABELS.get(source, source)}): номер {room['name']}, "
+                f"Новая бронь ({SOURCE_LABELS.get(source, source)}): {'номера' if extras else 'номер'} {names}, "
                 f"{check_in.strftime('%d.%m')}–{check_out.strftime('%d.%m')}"
                 + (f", {booking['guest_name']}" if booking["guest_name"] else "") + ".",
             )
+        booking["group_ids"] = [r["id"] for r in group_rows] if extras else []
         return booking
 
 
@@ -385,10 +412,24 @@ def delete_booking(c: Ctx):
     """Физически удаляем только ручные закрытия дат; брони гостей отменяются (остаются в истории)."""
     bid = parse_uuid(c.path["id"])
     with tx() as conn:
-        b = one(conn, "SELECT status, feed_id, guest_name, check_in, check_out FROM bookings"
+        b = one(conn, "SELECT status, feed_id, guest_name, check_in, check_out, group_id FROM bookings"
                      " WHERE id = %s AND account_id = %s", (bid, c.account_id))
         if not b:
             raise ApiError(404, "Бронь не найдена")
+        if c.q.get("group") and b["group_id"]:
+            # отмена всей группы (несколько номеров одного гостя)
+            for g in all_(conn, "SELECT id, status, feed_id FROM bookings WHERE group_id = %s AND account_id = %s AND status <> 'cancelled'",
+                          (b["group_id"], c.account_id)):
+                if g["status"] == "blocked" and not g["feed_id"]:
+                    run(conn, "DELETE FROM bookings WHERE id = %s", (g["id"],))
+                else:
+                    run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (g["id"],))
+                    booklog.log(conn, c.account_id, g["id"], c.p.user_id, "cancelled", {"summary": "отмена всей группы"})
+            if b["status"] != "blocked":
+                telegram.notify(conn, c.account_id, "cancellation",
+                                f"Группа броней «{b['guest_name'] or 'без имени'}» отменена "
+                                f"({b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}).")
+            return
         if b["status"] == "blocked" and not b["feed_id"]:
             run(conn, "DELETE FROM bookings WHERE id = %s", (bid,))
         else:
@@ -398,6 +439,81 @@ def delete_booking(c: Ctx):
                 telegram.notify(conn, c.account_id, "cancellation",
                                 f"Бронь «{b['guest_name'] or 'без имени'}» отменена "
                                 f"({b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}).")
+
+
+@api("manager")
+def relocate_booking(c: Ctx):
+    """Переселение посреди проживания: бронь делится на две части — до выбранной даты остаётся
+    в прежнем номере, с этой даты — в новом. Части связаны в группу, итог делится пропорционально ночам."""
+    bid = parse_uuid(c.path["id"])
+    d = c.data
+    from_date = parse_date(d.get("from_date"), "Дата переселения", "from_date")
+    with tx() as conn:
+        b = one(conn, "SELECT * FROM bookings WHERE id = %s AND account_id = %s FOR UPDATE", (bid, c.account_id))
+        if not b:
+            raise ApiError(404, "Бронь не найдена")
+        if b["status"] in ("blocked", "cancelled") or b["feed_id"]:
+            raise ApiError(422, "Эту бронь переселить нельзя: " + ("она пришла с площадки — переселение делается там" if b["feed_id"] else "она закрыта или отменена"))
+        if not b["check_in"] < from_date < b["check_out"]:
+            raise ApiError(422, f"Дата переселения должна быть между {b['check_in'].strftime('%d.%m')} и {b['check_out'].strftime('%d.%m')} — не в день заезда и не в день выезда", {"field": "from_date"})
+        room = _load_room(conn, c.account_id, d.get("room_id"))
+        if room["property_id"] != b["property_id"]:
+            raise ApiError(422, "Номер из другого объекта")
+        if str(room["id"]) == str(b["room_id"]):
+            raise ApiError(422, "Выберите другой номер", {"field": "room_id"})
+        n_all, n_first = (b["check_out"] - b["check_in"]).days, (from_date - b["check_in"]).days
+        first_total = (Decimal(b["total_price"]) * n_first / n_all).quantize(Decimal("1"))
+        second_total = parse_money(d["total_price"], "Стоимость") if d.get("total_price") not in (None, "") else Decimal(b["total_price"]) - first_total
+        group_id = b["group_id"] or str(uuid.uuid4())
+        # сначала укорачиваем исходную бронь — так освобождается место под вторую часть
+        run(conn, "UPDATE bookings SET check_out = %s, total_price = %s, group_id = %s, updated_at = now() WHERE id = %s",
+            (from_date, first_total, group_id, bid))
+        try:
+            with conn.transaction():
+                second = one(
+                    conn,
+                    "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status, source, guest_name,"
+                    " guest_phone, guest_email, guests_count, total_price, paid_amount, notes, group_id, rate_plan_id, rate_plan_name)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s) RETURNING *",
+                    (c.account_id, b["property_id"], room["id"], from_date, b["check_out"], b["status"], b["source"], b["guest_name"],
+                     b["guest_phone"], b["guest_email"], b["guests_count"], second_total, b["notes"], group_id, b["rate_plan_id"], b["rate_plan_name"]))
+        except psycopg.errors.ExclusionViolation:
+            raise ApiError(409, _overlap_info(conn, room["id"], from_date, b["check_out"], None), {"code": "overlap"})
+        old_room = one(conn, "SELECT name FROM rooms WHERE id = %s", (b["room_id"],))
+        booklog.log(conn, c.account_id, bid, c.p.user_id, "updated", {"summary": f"Переселение с {from_date.strftime('%d.%m')} в номер {room['name']}"})
+        booklog.log(conn, c.account_id, second["id"], c.p.user_id, "created", {
+            "summary": f"{from_date.strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}, номер {room['name']}, переселение из {old_room['name']}", "source": b["source"]})
+        return {"first": bid, "second": second["id"], "first_total": first_total, "second_total": second_total}
+
+
+@api("manager")
+def group_members(c: Ctx):
+    """Остальные брони той же группы (несколько номеров / части переселения)."""
+    bid = parse_uuid(c.path["id"])
+    with tx() as conn:
+        b = one(conn, "SELECT group_id FROM bookings WHERE id = %s AND account_id = %s", (bid, c.account_id))
+        if not b:
+            raise ApiError(404, "Бронь не найдена")
+        if not b["group_id"]:
+            return []
+        return all_(conn, "SELECT b.id, b.check_in, b.check_out, b.status, b.total_price, b.paid_amount, r.name AS room_name"
+                          " FROM bookings b JOIN rooms r ON r.id = b.room_id WHERE b.group_id = %s AND b.account_id = %s"
+                          " ORDER BY b.check_in, r.name", (b["group_id"], c.account_id))
+
+
+@api("manager")
+def save_date_note(c: Ctx):
+    day = parse_date(c.data.get("day"), "Дата", "day")
+    text = opt_str(c.data, "text", max_len=300)
+    with tx() as conn:
+        prop = selected_property(conn, c.account_id, c.data.get("property_id"))
+        if not text:
+            run(conn, "DELETE FROM date_notes WHERE property_id = %s AND day = %s", (prop["id"], day))
+            return {"day": day, "text": ""}
+        run(conn, "INSERT INTO date_notes (account_id, property_id, day, text, user_id) VALUES (%s, %s, %s, %s, %s)"
+                  " ON CONFLICT (property_id, day) DO UPDATE SET text = EXCLUDED.text, user_id = EXCLUDED.user_id, updated_at = now()",
+            (c.account_id, prop["id"], day, text, c.p.user_id))
+    return {"day": day, "text": text}
 
 
 @api("manager")
@@ -457,6 +573,7 @@ def board(c: Ctx):
         conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
                         (c.account_id,))["n"]
         flags = flags_for(conn, c.account_id, bookings)
+        notes = all_(conn, "SELECT day, text FROM date_notes WHERE property_id = %s AND day >= %s AND day < %s", (prop["id"], start, end))
     rate_map: dict = {}
     for r in rates:
         rate_map.setdefault(str(r["room_type_id"]), {})[r["date"].isoformat()] = {
@@ -466,7 +583,8 @@ def board(c: Ctx):
         t["rates"] = rate_map.get(str(t["id"]), {})
     days = [(start + timedelta(days=i)).isoformat() for i in range((end - start).days)]
     return {"property": prop, "from": start, "to": end, "days": days, "room_types": types,
-            "bookings": bookings, "open_conflicts": conflicts, "guest_flags": flags}
+            "bookings": bookings, "open_conflicts": conflicts, "guest_flags": flags,
+            "date_notes": {n["day"].isoformat(): n["text"] for n in notes}}
 
 
 # ---------- цены ----------
@@ -601,6 +719,9 @@ routes = [
     Route("/api/bookings/import", import_bookings, methods=["POST"]),
     Route("/api/bookings/quote", quote_booking),
     Route("/api/bookings/{id}/log", booking_history),
+    Route("/api/bookings/{id}/relocate", relocate_booking, methods=["POST"]),
+    Route("/api/bookings/{id}/group", group_members),
+    Route("/api/date-notes", save_date_note, methods=["PUT"]),
     Route("/api/bookings/{id}", get_booking),
     Route("/api/bookings/{id}", update_booking, methods=["PATCH"]),
     Route("/api/bookings/{id}", delete_booking, methods=["DELETE"]),

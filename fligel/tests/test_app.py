@@ -2117,5 +2117,75 @@ class HousekeepingTests(Base):
         self.assertEqual(self.client.post("/api/housekeeping/assign", headers=other["h"], json={"room_ids": ids, "user_id": hid}).status_code, 404)
 
 
+class BoardFeaturesTests(Base):
+    """Групповая бронь, переселение посреди проживания, заметки на даты."""
+
+    def test_group_booking_and_cancel_group(self):
+        ctx = self.register("grp1@example.ru", rooms=(("Стандарт", 4, 3500),))
+        a, b, c3, d4 = ctx["rooms"]
+        r = self.client.post("/api/bookings", headers=ctx["h"], json={
+            "room_id": a["id"], "extra_room_ids": [b["id"], c3["id"], a["id"]], "check_in": "2036-01-10", "check_out": "2036-01-12",
+            "guest_name": "Семья Ивановых", "guests_count": 2})
+        self.assertEqual(r.status_code, 200, r.text)
+        main = r.json()
+        self.assertEqual(len(main["group_ids"]), 3)
+        board = self.client.get("/api/board?from=2036-01-01&days=20", headers=ctx["h"]).json()
+        grp = [x for x in board["bookings"] if x["group_id"] == main["group_id"]]
+        self.assertEqual((len(grp), {float(x["total_price"]) for x in grp}), (3, {7000.0}))
+        members = self.client.get(f"/api/bookings/{main['id']}/group", headers=ctx["h"]).json()
+        self.assertEqual(len(members), 3)
+        # один занятый номер — вся группа не создаётся
+        self.book(ctx, d4, "2036-02-10", "2036-02-12", guest="Занято")
+        bad = self.client.post("/api/bookings", headers=ctx["h"], json={
+            "room_id": a["id"], "extra_room_ids": [d4["id"]], "check_in": "2036-02-10", "check_out": "2036-02-11", "guest_name": "Группа"})
+        self.assertEqual(bad.status_code, 409)
+        self.assertIn(d4["name"], bad.json()["error"])
+        left = self.client.get("/api/board?from=2036-02-01&days=20", headers=ctx["h"]).json()["bookings"]
+        self.assertEqual(len(left), 1)  # у номера a нет «осиротевшей» брони
+        # отмена всей группы
+        self.assertEqual(self.client.delete(f"/api/bookings/{main['id']}?group=1", headers=ctx["h"]).status_code, 200)
+        board = self.client.get("/api/board?from=2036-01-01&days=20", headers=ctx["h"]).json()
+        self.assertEqual(len(board["bookings"]), 0)
+        # чужой номер в группе нельзя
+        other = self.register("grp1b@example.ru")
+        r = self.client.post("/api/bookings", headers=ctx["h"], json={
+            "room_id": a["id"], "extra_room_ids": [other["rooms"][0]["id"]], "check_in": "2036-03-10", "check_out": "2036-03-11"})
+        self.assertEqual(r.status_code, 404)
+
+    def test_relocate_mid_stay(self):
+        ctx = self.register("rel1@example.ru", rooms=(("Стандарт", 3, 3500),))
+        a, b, c3 = ctx["rooms"]
+        bk = self.book(ctx, a, "2036-05-10", "2036-05-14", total_price=8000, paid_amount=3000, guest="Пётр", guest_phone="+7 900 111-22-33").json()
+        self.book(ctx, c3, "2036-05-12", "2036-05-13", guest="Мешает")
+        self.assertEqual(self.client.post(f"/api/bookings/{bk['id']}/relocate", headers=ctx["h"], json={"room_id": c3["id"], "from_date": "2036-05-12"}).status_code, 409)
+        for bad in ("2036-05-10", "2036-05-14", "2036-05-20"):
+            self.assertEqual(self.client.post(f"/api/bookings/{bk['id']}/relocate", headers=ctx["h"], json={"room_id": b["id"], "from_date": bad}).status_code, 422, bad)
+        self.assertEqual(self.client.post(f"/api/bookings/{bk['id']}/relocate", headers=ctx["h"], json={"room_id": a["id"], "from_date": "2036-05-12"}).status_code, 422)
+        r = self.client.post(f"/api/bookings/{bk['id']}/relocate", headers=ctx["h"], json={"room_id": b["id"], "from_date": "2036-05-12"})
+        self.assertEqual(r.status_code, 200, r.text)
+        out = r.json()
+        self.assertEqual((float(out["first_total"]), float(out["second_total"])), (4000.0, 4000.0))
+        first = self.client.get(f"/api/bookings/{bk['id']}", headers=ctx["h"]).json()
+        second = self.client.get(f"/api/bookings/{out['second']}", headers=ctx["h"]).json()
+        self.assertEqual((first["check_out"], second["check_in"], second["check_out"]), ("2036-05-12", "2036-05-12", "2036-05-14"))
+        self.assertEqual((second["guest_name"], second["room_id"], first["group_id"] == second["group_id"] and bool(first["group_id"])), ("Пётр", b["id"], True))
+        self.assertEqual(float(first["paid_amount"]), 3000.0)  # оплата остаётся в первой части
+        self.assertEqual(len(self.client.get(f"/api/bookings/{second['id']}/group", headers=ctx["h"]).json()), 2)
+
+    def test_date_notes(self):
+        ctx = self.register("note1@example.ru")
+        r = self.client.put("/api/date-notes", headers=ctx["h"], json={"day": "2036-06-12", "text": "День города, дороже"})
+        self.assertEqual(r.status_code, 200, r.text)
+        board = self.client.get("/api/board?from=2036-06-01&days=30", headers=ctx["h"]).json()
+        self.assertEqual(board["date_notes"], {"2036-06-12": "День города, дороже"})
+        self.client.put("/api/date-notes", headers=ctx["h"], json={"day": "2036-06-12", "text": "Новый текст"})
+        self.assertEqual(self.client.get("/api/board?from=2036-06-01&days=30", headers=ctx["h"]).json()["date_notes"]["2036-06-12"], "Новый текст")
+        other = self.register("note1b@example.ru")
+        self.assertEqual(self.client.get("/api/board?from=2036-06-01&days=30", headers=other["h"]).json()["date_notes"], {})
+        self.client.put("/api/date-notes", headers=ctx["h"], json={"day": "2036-06-12", "text": ""})
+        self.assertEqual(self.client.get("/api/board?from=2036-06-01&days=30", headers=ctx["h"]).json()["date_notes"], {})
+        self.assertEqual(self.client.put("/api/date-notes", headers=ctx["h"], json={"day": "не дата", "text": "x"}).status_code, 422)
+
+
 if __name__ == "__main__":
     unittest.main()

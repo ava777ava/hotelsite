@@ -90,6 +90,13 @@ function toast(msg, bad = false) {
   setTimeout(() => t.remove(), bad ? 5000 : 2800);
 }
 
+// Тема оформления: «как в системе» / светлая / тёмная (хранится в браузере)
+function applyTheme() {
+  const t = (() => { try { return localStorage.getItem('theme') || 'auto'; } catch { return 'auto'; } })();
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme'); else document.documentElement.setAttribute('data-theme', t);
+}
+applyTheme();
+
 const store = {
   get(k, def = null) { try { return localStorage.getItem(k) ?? def; } catch { return def; } },
   set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* приватный режим */ } },
@@ -120,7 +127,7 @@ const state = {
   me: null,
   propertyId: store.get('propertyId'),
   boardFrom: null,
-  boardDays: window.innerWidth < 860 ? 14 : 31,
+  boardDays: parseInt(store.get('board_days', ''), 10) || (window.innerWidth < 860 ? 14 : 31),
   conflicts: 0,
   requests: 0,
   financeKind: 'expense',
@@ -269,7 +276,7 @@ function layout(route, main) {
         sideSearchBtn),
       h('nav', { class: 'nav' }, visible.map(link)),
       h('div', { class: 'side-foot' }, h('b', {}, state.me.name), ROLE[state.me.role],
-        h('br'), h('button', { onclick: logout }, 'Выйти'))),
+        h('br'), h('button', { onclick: logout }, 'Выйти'), ' · ', h('button', { title: 'Светлая / тёмная тема', onclick: () => { const dark = getComputedStyle(document.documentElement).colorScheme === 'dark'; store.set('theme', dark ? 'light' : 'dark'); applyTheme(); } }, 'Тема'))),
     h('div', {},
       h('div', { class: 'mobile-top' }, h('div', { class: 'brand-mark' }),
         propertySwitcher('prop-switch') || h('div', { class: 'brand-name' }, prop ? prop.name : 'Флигель'),
@@ -522,20 +529,35 @@ async function drawOnboarding(box) {
     bookingUrl ? h('div', { class: 'muted small', style: { marginTop: '10px' } }, 'Ваша страница бронирования для гостей: ', h('a', { href: bookingUrl, target: '_blank', rel: 'noopener' }, bookingUrl)) : null));
 }
 
+// Ширина клетки шахматки зависит от масштаба: 2 недели — крупно, 3 месяца — мелко
+function applyZoom() {
+  const narrow = window.innerWidth < 860;
+  const w = { 14: narrow ? 46 : 60, 31: narrow ? 38 : 44, 92: narrow ? 20 : 26 }[state.boardDays] || 44;
+  document.documentElement.style.setProperty('--cell', `${w}px`);
+}
+const hiddenTypes = () => { try { return new Set(JSON.parse(store.get('board_hidden', '[]'))); } catch { return new Set(); } };
+
 async function viewBoard(main) {
   if (!state.boardFrom) state.boardFrom = addDays(todayISO(), -2);
+  applyZoom();
   const head = h('div', { class: 'page-head' }, h('h1', {}, 'Шахматка'));
   const tools = h('div', { class: 'board-tools' },
     h('button', { class: 'btn icon', title: 'Раньше', onclick: () => shift(-7) }, icon('left')),
     h('button', { class: 'btn', onclick: () => { state.boardFrom = addDays(todayISO(), -2); load(); } }, 'Сегодня'),
     h('button', { class: 'btn icon', title: 'Позже', onclick: () => shift(7) }, icon('right')),
     h('input', { class: 'input', type: 'date', style: { width: '150px' }, value: state.boardFrom, onchange: (e) => { if (e.target.value) { state.boardFrom = e.target.value; load(); } } }),
+    h('div', { class: 'seg zoom-seg', role: 'group', 'aria-label': 'Масштаб' }, [[14, '2 нед', 'Две недели'], [31, 'Месяц', 'Месяц'], [92, '3 мес', 'Три месяца']].map(([n, l, t]) =>
+      h('button', { type: 'button', class: state.boardDays === n ? 'on' : '', title: t, onclick: (e) => {
+        state.boardDays = n; store.set('board_days', String(n)); applyZoom();
+        e.currentTarget.parentNode.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === e.currentTarget)); load();
+      } }, l))),
     can('manager') ? h('button', { class: 'btn primary', onclick: () => bookingDrawer({}) }, icon('plus'), 'Бронь') : null);
   head.append(tools);
   const banner = h('div');
+  const typeFilter = h('div', { class: 'type-filter' });
   const onboard = h('div');
   const card = h('div', { class: 'card board-card' }, h('div', { class: 'empty' }, h('span', { class: 'spin' }), 'Загружаю…'));
-  main.append(head, onboard, banner, card);
+  main.append(head, onboard, banner, typeFilter, card);
   if (can('manager') && !store.get('onboardHidden')) drawOnboarding(onboard);
 
   const shift = (n) => { state.boardFrom = addDays(state.boardFrom, n); load(); };
@@ -553,7 +575,16 @@ async function viewBoard(main) {
       const old = card.querySelector('.board-scroll');
       const pos = old ? [old.scrollLeft, old.scrollTop] : null;
       card.innerHTML = '';
-      card.append(drawBoard(boardData, load));
+      const hidden = hiddenTypes();
+      typeFilter.innerHTML = '';
+      if (boardData.room_types.length > 1) {
+        typeFilter.append(h('span', { class: 'muted small' }, 'Категории:'), ...boardData.room_types.map((t) => h('button', { type: 'button', class: 'chip' + (hidden.has(t.id) ? '' : ' on'), onclick: () => {
+          const hs = hiddenTypes(); if (hs.has(t.id)) hs.delete(t.id); else hs.add(t.id);
+          if (hs.size >= boardData.room_types.length) hs.clear();
+          store.set('board_hidden', JSON.stringify([...hs])); load();
+        } }, t.name)));
+      }
+      card.append(drawBoard({ ...boardData, room_types: boardData.room_types.filter((t) => !hidden.has(t.id)) }, load));
       const fresh = card.querySelector('.board-scroll');
       if (pos && fresh) { fresh.scrollLeft = pos[0]; fresh.scrollTop = pos[1]; }
     } catch (ex) { if (!card.querySelector('.board')) { card.innerHTML = ''; card.append(h('div', { class: 'empty' }, ex.message)); } }
@@ -796,12 +827,14 @@ function drawBoard(data, reload) {
     if (dt.getDate() === 1 && i > 0) c.push('month-start');
     return c.join(' ');
   };
-  const board = h('div', { class: 'board' });
+  const board = h('div', { class: 'board' + (cellW < 30 ? ' compact' : '') });
   // заголовок с датами
   const headRow = h('div', { class: 'b-row b-head' }, h('div', { class: 'b-side' }, 'Номер'));
   days.forEach((d, i) => {
     const dt = parseISO(d);
-    headRow.append(h('div', { class: 'b-day ' + dayClass(d, i) },
+    const dnote = (data.date_notes || {})[d];
+    headRow.append(h('div', { class: 'b-day ' + dayClass(d, i) + (dnote ? ' has-note' : ''), title: dnote ? `Заметка: ${dnote}` : (can('manager') ? 'Нажмите, чтобы добавить заметку на эту дату' : ''),
+      onclick: () => can('manager') && dateNoteDialog(d, dnote, reload) },
       dt.getDate() === 1 || i === 0 ? h('span', { class: 'b-month' }, MONTHS_SHORT[dt.getMonth()]) : null,
       h('span', { class: 'n' }, dt.getDate()), h('span', { class: 'w' }, WD[dt.getDay()])));
   });
@@ -878,7 +911,7 @@ function drawBoard(data, reload) {
         const label = b.status === 'blocked' ? 'Закрыто' : (b.guest_name || SOURCE[b.source]);
         const draggable = can('manager') && !b.feed_id;
         const bar = h('div', {
-          class: `bar ${b.status}${cutL ? ' cut-left' : ''}${cutR ? ' cut-right' : ''}${draggable ? ' draggable' : ''}`,
+          class: `bar ${b.status}${b.group_id ? ' grouped' : ''}${cutL ? ' cut-left' : ''}${cutR ? ' cut-right' : ''}${draggable ? ' draggable' : ''}`,
           style: { left: `${left + 2}px`, width: `${Math.max(right - left - 4, 12)}px`, background: `var(--src-${b.source})` },
           title: `${label} · ${SOURCE[b.source]} · ${STATUS[b.status]}\n${fmtDate(b.check_in)} — ${fmtDate(b.check_out)}, ${nights} ${nightsWord(nights)}`
             + (draggable ? '\nПеретащите, чтобы перенести, или потяните за край, чтобы изменить длину' : ''),
@@ -896,6 +929,8 @@ function drawBoard(data, reload) {
 
   if (!data.room_types.length) board.append(h('div', { class: 'empty' }, 'Номеров пока нет. Добавьте их в настройках.'));
 
+  const noteEntries = Object.entries(data.date_notes || {}).sort();
+  const notesBox = noteEntries.length ? h('div', { class: 'date-notes' }, noteEntries.map(([d, t]) => h('span', { class: 'date-note', onclick: () => can('manager') && dateNoteDialog(d, t, reload) }, h('b', {}, fmtDate(d)), ` — ${t}`))) : null;
   const legend = h('div', { class: 'legend' },
     ['direct', 'manual', 'avito', 'yandex', 'sutochno', 'ostrovok'].map((s) => h('span', {}, h('i', { class: 'dot', style: { background: `var(--src-${s})` } }), SOURCE[s])),
     h('span', {}, h('i', { class: 'dot', style: { background: 'repeating-linear-gradient(135deg,#9AA296 0 3px,#C9CEC5 3px 6px)' } }), 'Даты закрыты'),
@@ -907,7 +942,15 @@ function drawBoard(data, reload) {
     const idx = days.indexOf(today);
     if (idx > 2 && scroll.scrollLeft === 0) scroll.scrollLeft = (idx - 1) * cellW;
   });
-  return h('div', {}, scroll, legend);
+  return h('div', {}, scroll, notesBox, legend);
+}
+
+function dateNoteDialog(day, text, reload) {
+  const input = h('textarea', { class: 'input', placeholder: 'Например: День города — цены выше, ждём много заездов' }, text || '');
+  openModal(`Заметка на ${fmtDate(day)}`, h('div', {}, h('label', { class: 'field' }, h('span', {}, 'Видят все сотрудники'), input)),
+    [text ? h('button', { class: 'btn ghost danger', onclick: async () => { await api('PUT', '/api/date-notes', { day, text: '', property_id: state.propertyId }); closeModal(); reload(); } }, 'Удалить') : null, h('span', { class: 'spacer' }),
+      h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Отмена'),
+      h('button', { class: 'btn primary', onclick: async () => { try { await api('PUT', '/api/date-notes', { day, text: input.value, property_id: state.propertyId }); closeModal(); reload(); } catch (ex) { toast(ex.message, true); } } }, 'Сохранить')]);
 }
 
 // ---------- карточка брони ----------
@@ -1065,6 +1108,28 @@ async function messageDialog(b) {
     h('button', { class: 'btn', type: 'button', onclick: () => copyText(text.value, 'Текст скопирован') }, 'Скопировать'),
     h('button', { class: 'btn', type: 'button', title: 'Скопировать и вставить в чат MAX', onclick: () => copyText(text.value, 'Текст скопирован — вставьте его в чат MAX') }, 'Для MAX'),
     h('a', { class: 'btn', target: '_blank', rel: 'noopener', href: `https://t.me/share/url?${qs({ url: ctx.share_url || location.origin, text: text.value })}` }, 'В Telegram'), mail]);
+}
+
+// Переселение посреди проживания: до выбранной даты гость остаётся в прежнем номере, дальше — в новом
+function relocateDialog(b, rooms, onSaved) {
+  const today = todayISO();
+  const first = addDays(b.check_in, 1);
+  const f = {
+    room: h('select', { class: 'input' }, rooms.filter((r) => r.id !== b.room_id).map((r) => h('option', { value: r.id }, `${r.name} · ${r.type}`))),
+    from: h('input', { class: 'input', type: 'date', min: first, max: addDays(b.check_out, -1), value: today > b.check_in && today < b.check_out ? today : first }),
+    total: h('input', { class: 'input', type: 'number', min: 0, placeholder: 'По умолчанию — остаток суммы пропорционально ночам' }),
+  };
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  openModal('Переселить гостя', h('div', {}, err,
+    h('p', { class: 'muted small', style: { marginTop: 0 } }, `Бронь ${fmtDate(b.check_in)} — ${fmtDate(b.check_out)} разделится на две части: до выбранной даты гость остаётся в прежнем номере, с этой даты (день выезда из прежнего) — в новом.`),
+    h('label', { class: 'field' }, h('span', {}, 'Новый номер'), f.room), h('label', { class: 'field' }, h('span', {}, 'Переселить с даты'), f.from),
+    h('label', { class: 'field' }, h('span', {}, 'Стоимость второй части, ₽ (необязательно)'), f.total)),
+  [h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Отмена'), h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: async () => {
+    try {
+      await api('POST', `/api/bookings/${b.id}/relocate`, { room_id: f.room.value, from_date: f.from.value, total_price: f.total.value });
+      closeModal(); closeDrawer(); toast('Гость переселён'); onSaved ? onSaved() : render();
+    } catch (ex) { err.textContent = ex.message; err.style.display = ''; }
+  } }, 'Переселить')]);
 }
 
 // Шаблоны сообщений гостю — правка в настройках
@@ -1298,11 +1363,45 @@ async function bookingDrawer(b, onSaved) {
     note.style.display = '';
   }
 
+  // несколько номеров одному гостю (групповая бронь)
+  const extra = new Set();
+  const extraBox = h('div', { class: 'type-filter', style: { display: 'none', marginTop: '-4px' } });
+  const extraHint = h('div', { class: 'muted small', style: { marginBottom: '10px', display: 'none' } });
+  const drawExtra = () => {
+    extra.delete(f.room_id.value);
+    extraBox.innerHTML = '';
+    rooms.filter((r) => r.id !== f.room_id.value).forEach((r) => extraBox.append(h('button', { type: 'button', class: 'chip' + (extra.has(r.id) ? ' on' : ''), title: r.type,
+      onclick: () => { if (extra.has(r.id)) extra.delete(r.id); else extra.add(r.id); drawExtra(); } }, r.name)));
+    extraHint.style.display = extra.size ? '' : 'none';
+    extraHint.textContent = `Будет создано броней: ${extra.size + 1}. Цена каждого номера считается по его тарифу, оплату можно вносить в любую.`;
+  };
+  f.room_id.addEventListener('change', () => { if (extraBox.style.display !== 'none') drawExtra(); });
+  const extraToggle = isNew && !readOnly ? h('button', { type: 'button', class: 'btn small ghost', style: { marginBottom: '10px' }, onclick: () => {
+    extraBox.style.display = extraBox.style.display === 'none' ? '' : 'none'; if (extraBox.style.display === '') drawExtra(); else { extra.clear(); extraHint.style.display = 'none'; }
+  } }, '+ Ещё номера для этого гостя') : null;
+  // связанные брони (группа / части переселения)
+  const groupBox = h('div', { style: { display: 'none', marginBottom: '14px' } });
+  if (!isNew && b.group_id) api('GET', `/api/bookings/${b.id}/group`).then((list) => {
+    if (list.length < 2) return;
+    groupBox.style.display = '';
+    groupBox.append(h('h3', { style: { margin: '4px 0 8px', fontSize: '14px' } }, 'Связанные брони'),
+      list.map((x) => h('div', { class: 'pay-row' + (x.id === b.id ? '' : ' click'), onclick: async () => {
+        if (x.id === b.id) return;
+        try { const full = await api('GET', `/api/bookings/${x.id}`); closeDrawer(); bookingDrawer(full, onSaved); } catch (ex) { toast(ex.message, true); }
+      } }, h('span', { class: 'pay-sum', style: { minWidth: '70px' } }, `№${x.room_name}`), h('span', { class: 'muted small' }, `${fmtShort(x.check_in)} — ${fmtShort(x.check_out)}${x.status === 'cancelled' ? ' · отменена' : ''}${x.id === b.id ? ' · эта' : ''}`),
+        h('span', { class: 'small' }, fmtMoney(x.total_price)))),
+      can('manager') && !readOnly ? h('button', { type: 'button', class: 'btn small ghost danger', style: { marginTop: '6px' }, onclick: async () => {
+        if (!confirm('Отменить все брони этой группы?')) return;
+        try { await api('DELETE', `/api/bookings/${b.id}?group=1`); toast('Группа отменена'); closeDrawer(); onSaved ? onSaved() : render(); } catch (ex) { toast(ex.message, true); }
+      } }, 'Отменить всю группу') : null);
+  }).catch(() => {});
   const body = h('div', {},
     note,
     statusSeg,
     h('label', { class: 'field' }, h('span', {}, 'Номер'), f.room_id),
+    extraToggle, extraBox, extraHint,
     h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Заезд'), f.check_in), h('label', { class: 'field' }, h('span', {}, 'Выезд'), f.check_out)),
+    groupBox,
     guestBox,
     h('label', { class: 'field' }, h('span', {}, 'Комментарий'), f.notes));
   const changeLogBox = h('div', { style: { display: 'none', marginBottom: '14px' } });
@@ -1373,7 +1472,8 @@ async function bookingDrawer(b, onSaved) {
       isNew || readOnly ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => messageDialog(b) }, 'Написать гостю'),
       readOnly || !isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => { f.paid_amount.value = f.total_price.value || 0; updateTotal(); } }, 'Оплачено полностью'),
       isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: printVoucher }, 'Печать подтверждения'),
-      isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => printInvoice(b) }, 'Счёт')),
+      isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => printInvoice(b) }, 'Счёт'),
+      !isNew && !readOnly && !imported && ['confirmed', 'pending'].includes(b.status) && diffDays(b.check_in, b.check_out) > 1 ? h('button', { type: 'button', class: 'btn small ghost', onclick: () => relocateDialog(b, rooms, onSaved) }, 'Переселить') : null),
     guestHistoryBox,
     h('div', { class: 'row3' },
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1, oninput: () => requote() }),
@@ -1420,11 +1520,12 @@ async function bookingDrawer(b, onSaved) {
     });
     if (isNew && f.paid_amount) payload.paid_amount = f.paid_amount.value || 0;
     if (isNew && f.rate_plan_id.value && status.value !== 'blocked') payload.rate_plan_id = f.rate_plan_id.value;
+    if (isNew && extra.size) payload.extra_room_ids = [...extra];
     if (imported) { delete payload.room_id; delete payload.check_in; delete payload.check_out; delete payload.source; }
     try {
       if (isNew) await api('POST', '/api/bookings', payload);
       else await api('PATCH', `/api/bookings/${b.id}`, payload);
-      toast(isNew ? (status.value === 'blocked' ? 'Даты закрыты' : 'Бронь создана') : 'Изменения сохранены');
+      toast(isNew ? (status.value === 'blocked' ? (extra.size ? 'Даты закрыты в нескольких номерах' : 'Даты закрыты') : (extra.size ? `Создано броней: ${extra.size + 1}` : 'Бронь создана')) : 'Изменения сохранены');
       closeDrawer(); onSaved ? onSaved() : render();
     } catch (ex) {
       note.className = 'note bad'; note.textContent = ex.message; note.style.display = '';
@@ -3103,6 +3204,10 @@ async function viewProfile(main) {
         h('b', {}, state.me.plan_label || state.me.plan),
         state.me.trial_ends ? ` · пробный период до ${fmtDate(state.me.trial_ends)}` : (state.me.paid_until ? ` · оплачен до ${fmtDate(state.me.paid_until)}` : ''),
         ` · объектов ${state.me.properties.length} из ${state.me.properties_limit}`) : null),
+    h('div', { class: 'card card-pad', style: { marginBottom: '16px' } }, h('h2', { style: { marginBottom: '8px' } }, 'Оформление'),
+      h('div', { class: 'seg' }, [['auto', 'Как в системе'], ['light', 'Светлая'], ['dark', 'Тёмная']].map(([k, l]) => h('button', { type: 'button', class: (store.get('theme', 'auto') === k) ? 'on' : '', onclick: (e) => {
+        store.set('theme', k); applyTheme(); e.currentTarget.parentNode.querySelectorAll('button').forEach((x) => x.classList.toggle('on', x === e.currentTarget));
+      } }, l)))),
     can('manager') ? h('div', { class: 'card card-pad', style: { marginBottom: '16px' } },
       h('h2', { style: { marginBottom: '8px' } }, 'Письма о новых заявках'),
       h('label', { class: 'check' }, emailBox, ' Присылать на почту письмо, когда гость оставил заявку на сайте'),
