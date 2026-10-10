@@ -505,3 +505,25 @@ table.list tbody tr { transition: background .1s; }
 .pay-row.refund .pay-sum { color: var(--clay); }
 @media (max-width: 640px) { .money-sum { grid-template-columns: 1fr 1fr 1fr; } .money-sum b { font-size: 15px; } }
 .money-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; } .money-actions .input { flex: 1; min-width: 120px; width: auto; }
+
+.breakdown { margin: 4px 0 0; display: flex; flex-direction: column; gap: 2px; }
+
+/* календарь цен */
+.cal-months { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; margin: 14px 0; }
+.cal-title { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 6px; }
+.cal-links { display: flex; gap: 10px; }
+.link { background: none; border: 0; padding: 0; color: var(--pine); cursor: pointer; font-size: 12.5px; text-decoration: underline; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal-wd { text-align: center; font-size: 11px; color: var(--muted); padding: 2px 0; }
+.cal-wd.we { color: var(--clay); }
+.cal-day { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px; min-height: 46px; padding: 3px 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); cursor: pointer; font: inherit; color: var(--ink); }
+.cal-day .n { font-size: 12.5px; font-weight: 600; }
+.cal-day .p { font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.cal-day.we .n { color: var(--clay); }
+.cal-day.custom { background: var(--pine-soft); } .cal-day.custom .p { color: var(--pine); font-weight: 650; }
+.cal-day.closed { background: repeating-linear-gradient(45deg, var(--surface-2), var(--surface-2) 4px, var(--line) 4px, var(--line) 8px); }
+.cal-day.today { outline: 2px solid var(--ochre); outline-offset: -2px; }
+.cal-day.past { opacity: .4; cursor: default; }
+.cal-day.sel { background: var(--pine); border-color: var(--pine); } .cal-day.sel .n, .cal-day.sel .p { color: #fff; }
+.cal-bar { position: sticky; bottom: 0; background: var(--surface); border-top: 1px solid var(--line); padding: 12px 0 2px; margin-top: 8px; }
+@media (max-width: 900px) { .cal-months { grid-template-columns: 1fr; } .cal-day { min-height: 42px; } }

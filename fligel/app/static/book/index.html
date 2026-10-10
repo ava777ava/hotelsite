@@ -46,6 +46,10 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
 .opt.off { opacity: .62; }
 .opt .reason { color: var(--clay); font-size: 13.5px; }
 .left { color: var(--ochre); font-weight: 600; }
+.tariffs { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; grid-column: 1 / -1; }
+.tariff { display: flex; align-items: center; gap: 10px; border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; cursor: pointer; font-weight: 400; font-size: 14px; flex-direction: row; }
+.tariff:has(input:checked) { border-color: var(--pine); background: var(--pine-soft); }
+.tariff span { flex: 1; } .tariff small { display: block; color: var(--muted); font-size: 12.5px; } .tariff em { font-style: normal; font-weight: 650; font-variant-numeric: tabular-nums; }
 .opt.with-photo { grid-template-columns: 220px 1fr auto; }
 .thumb { position: relative; width: 220px; height: 150px; border-radius: 10px; overflow: hidden; border: 0; padding: 0; cursor: zoom-in; background: var(--pine-soft); }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -151,11 +155,18 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
         el.className = 'opt' + (o.available ? '' : ' off') + (photos.length ? ' with-photo' : '');
         el.innerHTML = `${photos.length ? `<button class="thumb" type="button" aria-label="Смотреть фото"><img src="${esc(photos[0])}" alt="${esc(o.name)}" loading="lazy">${photos.length > 1 ? `<span class="cnt">${photos.length} фото</span>` : ''}</button>` : ''}<div><h2>${esc(o.name)}</h2>${o.description ? `<div class="desc">${esc(o.description)}</div>` : ''}
           <div class="meta">до ${o.capacity} гостей${o.available && o.free_rooms <= 2 ? ` · <span class="left">осталось ${o.free_rooms}</span>` : ''}</div>
-          ${o.available ? '' : `<div class="reason">${esc(o.reason)}</div>`}</div>
+          ${o.available && o.price_note ? `<div class="meta">${esc(o.price_note)}</div>` : ''}
+          ${o.available ? '' : `<div class="reason">${esc(o.reason)}</div>`}
+          ${o.available && o.tariffs.length ? `<div class="tariffs">${[{ id: '', name: 'Стандартный', total: o.total, refundable: true }, ...o.tariffs].map((t, i) => `<label class="tariff"><input type="radio" name="t-${esc(o.room_type_id)}" value="${esc(t.id)}"${i === 0 ? ' checked' : ''}><span><b>${esc(t.name)}</b>${t.breakfast ? ' · завтрак' : ''}${t.refundable === false ? ' · без возврата' : ''}${t.description ? `<small>${esc(t.description)}</small>` : ''}</span><em>${money(t.total)}</em></label>`).join('')}</div>` : ''}</div>
           <div class="price"><b>${money(o.total)}</b><span>за ${o.nights} ${nightsWord(o.nights)}</span>
           ${o.available ? '<div style="margin-top:8px"><button class="btn" type="button">Забронировать</button></div>' : ''}</div>`;
         if (photos.length) el.querySelector('.thumb').addEventListener('click', () => lightbox(photos));
-        if (o.available) el.querySelector('.price button').addEventListener('click', () => form(o, d));
+        let chosen = { id: '', name: '', total: o.total };
+        el.querySelectorAll('.tariff input').forEach((r, i) => r.addEventListener('change', () => {
+          chosen = i === 0 ? { id: '', name: '', total: o.total } : { id: o.tariffs[i - 1].id, name: o.tariffs[i - 1].name, total: o.tariffs[i - 1].total };
+          el.querySelector('.price b').textContent = money(chosen.total);
+        }));
+        if (o.available) el.querySelector('.price button').addEventListener('click', () => form({ ...o, total: chosen.total, tariff: chosen }, d));
         list.append(el);
       });
       out.innerHTML = ''; out.append(list);
@@ -181,7 +192,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
   }
 
   function form(o, d) {
-    out.innerHTML = `<div class="panel"><h2>${esc(o.name)}</h2>
+    out.innerHTML = `<div class="panel"><h2>${esc(o.name)}${o.tariff && o.tariff.name ? ` · ${esc(o.tariff.name)}` : ''}</h2>
       <div style="color:var(--muted)">${fmtDate(d.check_in)} — ${fmtDate(d.check_out)}, ${o.nights} ${nightsWord(o.nights)}, гостей: ${d.guests}</div>
       <form id="bf"><div class="grid2">
         <label>Имя и фамилия<input class="input" name="guest_name" autocomplete="name" required></label>
@@ -204,7 +215,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
       f.querySelectorAll('.invalid').forEach((x) => x.classList.remove('invalid'));
       try {
         const r = await call('POST', `/api/public/${encodeURIComponent(slug)}/book`, {
-          room_type_id: o.room_type_id, check_in: d.check_in, check_out: d.check_out, guests: d.guests,
+          room_type_id: o.room_type_id, rate_plan_id: (o.tariff && o.tariff.id) || undefined, check_in: d.check_in, check_out: d.check_out, guests: d.guests,
           guest_name: f.guest_name.value, guest_phone: f.guest_phone.value, guest_email: f.guest_email.value,
           comment: f.comment.value, consent: f.consent.checked, website: f.website.value,
         });

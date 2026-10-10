@@ -341,12 +341,26 @@ def quick_setup(c: Ctx):
     return prop
 
 
+RT_COLS = ("id, property_id, name, description, capacity, base_price, min_stay, sort_order, included_guests,"
+           " extra_guest_price, week_discount_percent, month_discount_percent")
+
+
+def _percent(v, label: str):
+    from decimal import Decimal, InvalidOperation
+    try:
+        d = Decimal(str(v or 0).replace(",", "."))
+    except InvalidOperation:
+        raise ApiError(422, f"{label}: нужно число")
+    if d < 0 or d > 90:
+        raise ApiError(422, f"{label}: от 0 до 90 процентов")
+    return d
+
+
 @api()
 def get_property(c: Ctx):
     with tx() as conn:
         prop = _get_property(conn, c.account_id, c.path["id"])
-        types = all_(conn, "SELECT id, property_id, name, description, capacity, base_price, min_stay, sort_order"
-                           " FROM room_types WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
+        types = all_(conn, f"SELECT {RT_COLS} FROM room_types WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
         rooms = all_(conn, "SELECT id, room_type_id, name, sort_order FROM rooms"
                            " WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
     for t in types:
@@ -388,7 +402,7 @@ def create_room_type(c: Ctx):
             "INSERT INTO room_types (account_id, property_id, name, description, capacity, base_price,"
             " min_stay, sort_order, ical_token) VALUES (%s, %s, %s, %s, %s, %s, %s,"
             " (SELECT coalesce(max(sort_order), 0) + 1 FROM room_types WHERE property_id = %s), %s)"
-            " RETURNING id, property_id, name, description, capacity, base_price, min_stay, sort_order",
+            f" RETURNING {RT_COLS}",
             (c.account_id, prop["id"], req_str(c.data, "name", "Название категории", 100),
              opt_str(c.data, "description"), parse_int(c.data.get("capacity"), "Вместимость", 1, default=2),
              parse_money(c.data.get("base_price"), "Цена"),
@@ -405,6 +419,10 @@ def update_room_type(c: Ctx):
         "capacity": lambda v: parse_int(v, "Вместимость", 1),
         "base_price": lambda v: parse_money(v, "Цена"),
         "min_stay": lambda v: parse_int(v, "Минимальный срок", 1),
+        "included_guests": lambda v: parse_int(v, "Гостей в стоимости", 0, default=0),
+        "extra_guest_price": lambda v: parse_money(v, "Доплата за гостя"),
+        "week_discount_percent": lambda v: _percent(v, "Скидка за неделю"),
+        "month_discount_percent": lambda v: _percent(v, "Скидка за месяц"),
     }
     sets, params = [], []
     for key, f in conv.items():
@@ -415,7 +433,7 @@ def update_room_type(c: Ctx):
         raise ApiError(422, "Нечего сохранять")
     with tx() as conn:
         row = one(conn, f"UPDATE room_types SET {', '.join(sets)} WHERE id = %s AND account_id = %s"
-                        " RETURNING id, property_id, name, description, capacity, base_price, min_stay, sort_order",
+                        f" RETURNING {RT_COLS}",
                   (*params, rt_id, c.account_id))
     if not row:
         raise ApiError(404, "Категория не найдена")

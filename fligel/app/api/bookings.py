@@ -15,6 +15,7 @@ from ..pricing import quote
 from ..util import csv_safe, opt_str, parse_date, parse_int, parse_money, parse_uuid
 from .base import Ctx, api
 from .common import selected_property
+from .tariffs import get_plan
 from .money import DEPOSIT_STATUSES, METHODS, add_payment
 from .reports import SOURCE_LABELS
 
@@ -23,7 +24,7 @@ SOURCES = ("manual", "direct", "avito", "yandex", "sutochno", "ostrovok", "other
 BOOKING_COLS = (
     "b.id, b.property_id, b.room_id, b.check_in, b.check_out, b.status, b.source, b.guest_name,"
     " b.guest_phone, b.guest_email, b.guests_count, b.total_price, b.paid_amount, b.notes,"
-    " b.discount_amount, b.discount_reason, b.deposit_amount, b.deposit_status,"
+    " b.discount_amount, b.discount_reason, b.deposit_amount, b.deposit_status, b.rate_plan_id, b.rate_plan_name,"
     " b.feed_id, b.external_uid, b.hold_expires_at, b.created_at, b.updated_at"
 )
 
@@ -235,8 +236,10 @@ def create_booking(c: Ctx):
     paid_in = parse_money(d.get("paid_amount"), "Оплачено")
     with tx() as conn:
         room = _load_room(conn, c.account_id, d.get("room_id"))
+        plan = get_plan(conn, c.account_id, d.get("rate_plan_id"), room["room_type_id"]) if status != "blocked" else None
         if d.get("total_price") in (None, "") and status != "blocked":
-            total = max(quote(conn, _room_type(conn, room), check_in, check_out).total - discount, Decimal("0"))
+            guests_n = parse_int(d.get("guests_count"), "Гостей", 1, default=1)
+            total = max(quote(conn, _room_type(conn, room), check_in, check_out, guests_n, plan).total - discount, Decimal("0"))
         else:
             total = parse_money(d.get("total_price"), "Стоимость")
         try:
@@ -245,13 +248,14 @@ def create_booking(c: Ctx):
                     conn,
                     "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
                     " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes,"
-                    " discount_amount, discount_reason, deposit_amount, deposit_status)"
-                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s) RETURNING *",
+                    " discount_amount, discount_reason, deposit_amount, deposit_status, rate_plan_id, rate_plan_name)"
+                    " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                     (c.account_id, room["property_id"], room["id"], check_in, check_out, status, source,
                      opt_str(d, "guest_name", max_len=200), opt_str(d, "guest_phone", max_len=50),
                      opt_str(d, "guest_email", max_len=200),
                      parse_int(d.get("guests_count"), "Гостей", 1, default=1), total,
-                     opt_str(d, "notes"), discount, opt_str(d, "discount_reason", max_len=200), deposit, deposit_status),
+                     opt_str(d, "notes"), discount, opt_str(d, "discount_reason", max_len=200), deposit, deposit_status,
+                     plan["id"] if plan else None, plan["name"] if plan else ""),
                 )
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, room["id"], check_in, check_out, None), {"code": "overlap"})
@@ -418,13 +422,15 @@ def quote_booking(c: Ctx):
     exclude = parse_uuid(c.q["exclude"]) if c.q.get("exclude") else None
     with tx() as conn:
         room = _load_room(conn, c.account_id, c.q.get("room_id"))
-        q = quote(conn, _room_type(conn, room), check_in, check_out)
+        plan = get_plan(conn, c.account_id, c.q.get("rate_plan_id"), room["room_type_id"])
+        q = quote(conn, _room_type(conn, room), check_in, check_out,
+                  parse_int(c.q.get("guests"), "Гостей", 1, default=1), plan)
         taken = one(conn, "SELECT 1 FROM bookings WHERE room_id = %s AND status <> 'cancelled'"
                           " AND check_in < %s AND check_out > %s AND (%s::uuid IS NULL OR id <> %s::uuid)",
                     (room["id"], check_out, check_in, exclude, exclude))
         busy = _overlap_info(conn, room["id"], check_in, check_out, exclude) if taken else None
     return {"total": q.total, "nights": q.nights, "min_stay": q.min_stay,
-            "closed_dates": q.closed_dates, "busy": busy}
+            "closed_dates": q.closed_dates, "busy": busy, "breakdown": q.breakdown}
 
 
 # ---------- шахматка ----------
@@ -480,6 +486,11 @@ def set_rates(c: Ctx):
     weekdays = set(int(w) for w in weekdays) if weekdays else set(range(7))
     dates = [start + timedelta(days=i) for i in range((end - start).days + 1)]
     dates = [x for x in dates if x.weekday() in weekdays]
+    if d.get("dates"):
+        # произвольный набор дат (выбор в календаре цен)
+        if not isinstance(d["dates"], list) or len(d["dates"]) > 400:
+            raise ApiError(422, "Слишком много дат (максимум 400)")
+        dates = sorted({parse_date(x, "Дата") for x in d["dates"]})
     reset = bool(d.get("reset"))
     price = parse_money(d["price"], "Цена") if d.get("price") not in (None, "") else None
     min_stay = parse_int(d["min_stay"], "Минимальный срок", 1) if d.get("min_stay") not in (None, "") else None

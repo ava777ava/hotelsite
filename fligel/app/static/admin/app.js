@@ -49,6 +49,7 @@ const ICONS = {
 const icon = (name) => { const s = h('span'); s.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[name]}</svg>`; return s.firstChild; };
 
 const WD = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
+const MONTHS_NOM = ['Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь', 'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь'];
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 const MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 const SOURCE = {
@@ -67,6 +68,7 @@ const fmtDate = (s) => { const d = parseISO(s); return `${d.getDate()} ${MONTHS[
 const fmtShort = (s) => { const d = parseISO(s); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)}`; };
 const fmtMoney = (v) => `${Math.round(Number(v || 0)).toLocaleString('ru-RU')} ₽`;
 const fmtPriceCell = (v) => { const n = Math.round(Number(v || 0)); return n >= 10000 ? `${(n / 1000).toFixed(n % 1000 ? 1 : 0).replace('.', ',')}к` : n.toLocaleString('ru-RU'); };
+const plural = (n, [one, few, many]) => { const a = Math.abs(n) % 10, b = Math.abs(n) % 100; return a === 1 && b !== 11 ? one : (a >= 2 && a <= 4 && (b < 10 || b >= 20) ? few : many); };
 const nightsWord = (n) => { const m10 = n % 10, m100 = n % 100; if (m10 === 1 && m100 !== 11) return 'ночь'; if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'ночи'; return 'ночей'; };
 const fmtDateTime = (s) => { if (!s) return '—'; const d = new Date(s); return `${pad(d.getDate())}.${pad(d.getMonth() + 1)} ${pad(d.getHours())}:${pad(d.getMinutes())}`; };
 const ago = (s) => {
@@ -1032,6 +1034,7 @@ async function bookingDrawer(b, onSaved) {
   const note = h('div', { class: 'note', style: { display: 'none' } });
   const totalEl = h('b');
   const nightsEl = h('span', { class: 'muted' });
+  const breakdownEl = h('div', { class: 'muted small breakdown' });
 
   const inp = (key, label, attrs = {}) => h('label', { class: 'field' }, h('span', {}, label),
     f[key] = h('input', { class: 'input', value: b[key] ?? '', disabled: readOnly, ...attrs }));
@@ -1056,6 +1059,21 @@ async function bookingDrawer(b, onSaved) {
   f.check_out = h('input', { class: 'input', type: 'date', value: b.check_out || addDays(b.check_in || todayISO(), 1), disabled: readOnly || imported, onchange: requote });
   f.source = h('select', { class: 'input', disabled: readOnly || imported },
     Object.entries(SOURCE).map(([k, l]) => h('option', { value: k, selected: (b.source || 'manual') === k }, l)));
+  f.rate_plan_id = h('select', { class: 'input', disabled: readOnly || imported || !isNew, onchange: () => { priceTouched = false; requote(); } });
+  const planField = h('label', { class: 'field', style: { display: 'none' } }, h('span', {}, 'Тариф'), f.rate_plan_id);
+  let planTypeId = null;
+  async function loadPlans() {
+    const room = rooms.find((r) => r.id === f.room_id.value);
+    if (!room || room.room_type_id === planTypeId) return;
+    planTypeId = room.room_type_id;
+    let plans = [];
+    try { plans = (await api('GET', `/api/room-types/${planTypeId}/plans`)).filter((x) => x.active || x.id === b.rate_plan_id); } catch { /* нет прав — без тарифов */ }
+    const keep = f.rate_plan_id.value || b.rate_plan_id || '';
+    f.rate_plan_id.innerHTML = '';
+    f.rate_plan_id.append(h('option', { value: '' }, 'Базовый'), plans.map((x) => h('option', { value: x.id, selected: x.id === keep }, x.name + (Number(x.percent_delta) || Number(x.fixed_delta) ? '' : ''))));
+    planField.style.display = plans.length || (!isNew && b.rate_plan_name) ? '' : 'none';
+    if (!isNew && b.rate_plan_name && !plans.length) f.rate_plan_id.append(h('option', { value: b.rate_plan_id || '', selected: true }, b.rate_plan_name));
+  }
   f.notes = h('textarea', { class: 'input', disabled: readOnly }, b.notes || '');
 
   let quoteTimer;
@@ -1064,8 +1082,13 @@ async function bookingDrawer(b, onSaved) {
     quoteTimer = setTimeout(async () => {
       if (!f.check_in.value || !f.check_out.value || f.check_out.value <= f.check_in.value) return;
       try {
-        const q = await api('GET', '/api/bookings/quote?' + qs({ room_id: f.room_id.value, check_in: f.check_in.value, check_out: f.check_out.value, exclude: b.id }));
+        await loadPlans();
+        const q = await api('GET', '/api/bookings/quote?' + qs({ room_id: f.room_id.value, check_in: f.check_in.value, check_out: f.check_out.value, exclude: b.id,
+          guests: f.guests_count?.value || 1, rate_plan_id: f.rate_plan_id.value }));
         nightsEl.textContent = `${q.nights} ${nightsWord(q.nights)}, ${fmtDate(f.check_in.value)} — ${fmtDate(f.check_out.value)}`;
+        nightsEl.title = (q.breakdown || []).map((x) => `${x.label}: ${fmtMoney(x.amount)}`).join('\n');
+        breakdownEl.innerHTML = '';
+        if ((q.breakdown || []).length > 1) breakdownEl.append(...q.breakdown.map((x) => h('div', {}, `${x.label}: `, h('b', {}, fmtMoney(x.amount)))));
         if (!priceTouched && status.value !== 'blocked') f.total_price.value = Math.round(q.total);
         updateTotal();
         const warn = [];
@@ -1169,11 +1192,12 @@ async function bookingDrawer(b, onSaved) {
       isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => printInvoice(b) }, 'Счёт')),
     guestHistoryBox,
     h('div', { class: 'row3' },
-      inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1 }),
+      inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1, oninput: () => requote() }),
       inp('total_price', 'Стоимость, ₽', { type: 'number', min: 0, value: b.total_price != null ? Math.round(b.total_price) : '', oninput: () => { priceTouched = true; updateTotal(); } }),
       isNew ? inp('paid_amount', 'Предоплата, ₽', { type: 'number', min: 0, value: 0, oninput: updateTotal }) : h('div')),
     h('label', { class: 'field' }, h('span', {}, 'Источник'), f.source),
-    h('div', { class: 'summary' }, nightsEl, totalEl),
+    planField,
+    h('div', { class: 'summary' }, nightsEl, totalEl), breakdownEl,
     isNew || status.value === 'blocked' ? null : moneyBlock(b, (m) => { b.total_price = m.total; b.paid_amount = m.paid; f.total_price.value = Math.round(Number(m.total)); priceTouched = true; updateTotal(); }));
   guestBox.style.display = status.value === 'blocked' ? 'none' : '';
   if (!isNew && can('manager')) {
@@ -1191,6 +1215,7 @@ async function bookingDrawer(b, onSaved) {
       guests_count: f.guests_count.value || 1, total_price: f.total_price.value, source: f.source.value,
     });
     if (isNew && f.paid_amount) payload.paid_amount = f.paid_amount.value || 0;
+    if (isNew && f.rate_plan_id.value && status.value !== 'blocked') payload.rate_plan_id = f.rate_plan_id.value;
     if (imported) { delete payload.room_id; delete payload.check_in; delete payload.check_out; delete payload.source; }
     try {
       if (isNew) await api('POST', '/api/bookings', payload);
@@ -1402,6 +1427,98 @@ async function viewBookings(main) {
 }
 
 // ---------- цены ----------
+// Календарь цен на 3 месяца: выделите даты (клик, Shift — диапазон) и измените цену / минимум ночей / закрытие сразу
+async function priceCalendar(card, prop) {
+  const first = new Date(); first.setDate(1);
+  const start = iso(first);
+  const endD = new Date(first.getFullYear(), first.getMonth() + 3, 1);
+  const days = Math.round((endD - first) / 86400000);
+  const data = await api('GET', '/api/board?' + qs({ property_id: prop.id, from: start, days }));
+  const typeId = { value: store.get('cal_type') && data.room_types.some((t) => t.id === store.get('cal_type')) ? store.get('cal_type') : data.room_types[0]?.id };
+  const selected = new Set();
+  let lastClicked = null;
+  const f = {
+    price: h('input', { class: 'input', type: 'number', min: 0, placeholder: 'Не менять' }),
+    min: h('input', { class: 'input', type: 'number', min: 1, placeholder: 'Не менять' }),
+    closed: h('select', { class: 'input' }, h('option', { value: '' }, 'Не менять'), h('option', { value: 'true' }, 'Закрыть продажи'), h('option', { value: 'false' }, 'Открыть продажи')),
+    all: h('input', { type: 'checkbox' }),
+  };
+  const info = h('b', {});
+  const bar = h('div', { class: 'cal-bar' });
+  const grid = h('div', { class: 'cal-months' });
+  const tabs = h('div', { class: 'seg', style: { flexWrap: 'wrap' } });
+  const type = () => data.room_types.find((t) => t.id === typeId.value);
+  const updateBar = () => {
+    info.textContent = selected.size ? `Выбрано: ${selected.size} ${plural(selected.size, ['дата', 'даты', 'дат'])}` : 'Выберите даты в календаре';
+    bar.style.display = selected.size ? '' : 'none';
+    grid.querySelectorAll('.cal-day').forEach((el) => el.classList.toggle('sel', selected.has(el.dataset.d)));
+  };
+  const apply = async (reset) => {
+    const ids = f.all.checked ? data.room_types.map((t) => t.id) : [typeId.value];
+    const dates = [...selected].sort();
+    const payload = { room_type_ids: ids, date_from: dates[0], date_to: dates[dates.length - 1], dates };
+    if (reset) payload.reset = true;
+    else Object.assign(payload, { price: f.price.value, min_stay: f.min.value, closed: f.closed.value === '' ? null : f.closed.value === 'true' });
+    try {
+      await api('PUT', '/api/rates', payload);
+      toast(reset ? 'Возвращены базовые цены' : 'Цены обновлены');
+      selected.clear(); f.price.value = ''; f.min.value = ''; f.closed.value = '';
+      const fresh = await api('GET', '/api/board?' + qs({ property_id: prop.id, from: start, days }));
+      data.room_types = fresh.room_types; drawGrid();
+    } catch (ex) { toast(ex.message, true); }
+  };
+  bar.append(info, h('div', { class: 'row3' },
+    h('label', { class: 'field' }, h('span', {}, 'Цена за ночь, ₽'), f.price), h('label', { class: 'field' }, h('span', {}, 'Минимум ночей'), f.min), h('label', { class: 'field' }, h('span', {}, 'Продажи'), f.closed)),
+    h('label', { class: 'check', style: { marginBottom: '10px' } }, f.all, 'Применить ко всем категориям'),
+    h('div', { class: 'money-actions' },
+      h('button', { class: 'btn primary', type: 'button', onclick: () => apply(false) }, 'Применить'),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => confirm('Вернуть базовые цены на выбранные даты?') && apply(true) }, 'Сбросить к базовой'),
+      h('button', { class: 'btn ghost', type: 'button', onclick: () => { selected.clear(); updateBar(); } }, 'Снять выделение')));
+  function pick(d, shift) {
+    if (shift && lastClicked) {
+      const [a, b] = [lastClicked, d].sort();
+      for (let x = a; x <= b; x = addDays(x, 1)) selected.add(x);
+    } else if (selected.has(d)) selected.delete(d); else selected.add(d);
+    lastClicked = d; updateBar();
+  }
+  function drawGrid() {
+    tabs.innerHTML = '';
+    data.room_types.forEach((t) => tabs.append(h('button', { type: 'button', class: t.id === typeId.value ? 'on' : '', onclick: () => { typeId.value = t.id; store.set('cal_type', t.id); selected.clear(); drawGrid(); } }, t.name)));
+    grid.innerHTML = '';
+    const t = type(); if (!t) return;
+    const today = todayISO();
+    for (let m = 0; m < 3; m++) {
+      const md = new Date(first.getFullYear(), first.getMonth() + m, 1);
+      const dim = new Date(md.getFullYear(), md.getMonth() + 1, 0).getDate();
+      const lead = (md.getDay() + 6) % 7;
+      const monthDates = Array.from({ length: dim }, (_, i) => iso(new Date(md.getFullYear(), md.getMonth(), i + 1)));
+      grid.append(h('div', { class: 'cal-month' },
+        h('div', { class: 'cal-title' }, h('b', {}, `${MONTHS_NOM[md.getMonth()]} ${md.getFullYear()}`),
+          h('span', { class: 'cal-links' },
+            h('button', { type: 'button', class: 'link', onclick: () => { monthDates.filter((d) => d >= today).forEach((d) => selected.add(d)); updateBar(); } }, 'весь месяц'),
+            h('button', { type: 'button', class: 'link', onclick: () => { monthDates.filter((d) => d >= today && [5, 6].includes((parseISO(d).getDay() + 6) % 7)).forEach((d) => selected.add(d)); updateBar(); } }, 'выходные'))),
+        h('div', { class: 'cal-grid' },
+          ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((w, i) => h('div', { class: 'cal-wd' + (i > 4 ? ' we' : '') }, w)),
+          Array.from({ length: lead }, () => h('div')),
+          monthDates.map((d) => {
+            const r = t.rates[d]; const dt = parseISO(d); const past = d < today;
+            const price = r?.price ?? t.base_price;
+            return h('button', { type: 'button', 'data-d': d, disabled: past,
+              class: 'cal-day' + (r?.price != null ? ' custom' : '') + (r?.closed ? ' closed' : '') + (past ? ' past' : '') + (d === today ? ' today' : '') + ([0, 6].includes(dt.getDay()) ? ' we' : ''),
+              title: `${fmtDate(d)}: ${fmtMoney(price)}${r?.min_stay ? `, от ${r.min_stay} ноч.` : ''}${r?.closed ? ', продажи закрыты' : ''}`,
+              onclick: (e) => pick(d, e.shiftKey) }, h('span', { class: 'n' }, dt.getDate()), h('span', { class: 'p' }, r?.closed ? '×' : fmtPriceCell(price)));
+          }))));
+    }
+    updateBar();
+  }
+  card.innerHTML = '';
+  card.className = 'card card-pad';
+  card.append(h('div', { class: 'card-head', style: { padding: 0, marginBottom: '10px' } }, h('h2', {}, 'Календарь цен'), h('span', { class: 'muted small' }, 'цена, минимум ночей и закрытие продаж на 3 месяца вперёд')),
+    tabs, grid, bar);
+  drawGrid();
+}
+
+// ---------- цены и ограничения ----------
 async function viewRates(main) {
   const content = h('div', { class: 'stack' });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Цены и ограничения')), content);
@@ -1429,7 +1546,7 @@ async function viewRates(main) {
     } catch (ex) { err.textContent = ex.message; err.style.display = ''; }
   };
   const daySeg = h('div', { class: 'seg' }, dayOrder.map((d) => f.days[d] = h('button', { type: 'button', class: 'on', onclick: (e) => e.currentTarget.classList.toggle('on') }, WD[d])));
-  content.append(h('div', { class: 'card card-pad' },
+  content.append(preview, h('div', { class: 'card card-pad' },
     h('h2', { style: { marginBottom: '14px' } }, 'Изменить сразу на период'), err,
     h('div', { class: 'field' }, h('span', {}, 'Категории'), h('div', { style: { display: 'flex', gap: '16px', flexWrap: 'wrap' } },
       prop.room_types.map((t) => h('label', { class: 'check' }, f.types[t.id] = h('input', { type: 'checkbox', checked: true }), `${t.name} (${t.rooms.length})`)))),
@@ -1439,18 +1556,8 @@ async function viewRates(main) {
     h('div', { style: { display: 'flex', gap: '10px', flexWrap: 'wrap' } },
       h('button', { class: 'btn primary', onclick: () => send(false) }, 'Применить'),
       h('button', { class: 'btn ghost', onclick: () => confirm('Вернуть базовые цены и снять ограничения на выбранный период?') && send(true) }, 'Сбросить к базовым')),
-    h('p', { class: 'muted small', style: { marginBottom: 0 } }, 'Пример: выходные подороже — оставьте только Пт и Сб и укажите цену. Базовые цены категорий — в настройках.')),
-  preview);
-  async function drawPreview() {
-    const data = await api('GET', '/api/board?' + qs({ property_id: state.propertyId, from: todayISO(), days: 21 }));
-    preview.innerHTML = '';
-    preview.append(h('div', { class: 'card-head' }, h('h2', {}, 'Ближайшие 3 недели'), h('span', { class: 'muted small' }, 'нажмите на цену, чтобы поменять одну дату')),
-      h('div', { class: 'table-wrap' }, h('div', { class: 'board', style: { minWidth: 'max-content' } },
-        h('div', { class: 'b-row b-head', style: { position: 'static' } }, h('div', { class: 'b-side' }, 'Категория'),
-          data.days.map((d) => { const dt = parseISO(d); return h('div', { class: 'b-day' + ((dt.getDay() % 6 === 0) ? ' we' : '') }, h('span', { class: 'n' }, dt.getDate()), h('span', { class: 'w' }, WD[dt.getDay()])); })),
-        data.room_types.map((t) => h('div', { class: 'b-row b-type' }, h('div', { class: 'b-side' }, t.name),
-          data.days.map((d) => { const r = t.rates[d]; return h('div', { class: 'b-price' + (r?.price != null ? ' custom' : '') + (r?.closed ? ' closed' : ''), title: r?.min_stay ? `от ${r.min_stay} ноч.` : '', onclick: () => rateDrawer(t, d, drawPreview) }, fmtPriceCell(r?.price ?? t.base_price)); }))))));
-  }
+    h('p', { class: 'muted small', style: { marginBottom: 0 } }, 'Пример: выходные подороже — оставьте только Пт и Сб и укажите цену. Базовые цены категорий — в настройках.')));
+  const drawPreview = () => priceCalendar(preview, prop);
   drawPreview();
 }
 
@@ -2377,6 +2484,53 @@ function servicesCard() {
   return card;
 }
 
+// Тарифы категории: невозвратный, с завтраком… (± % и ± ₽ к цене ночи)
+function plansManager(typeId) {
+  const box = h('div', { class: 'field' });
+  async function draw() {
+    const plans = await api('GET', `/api/room-types/${typeId}/plans`);
+    box.innerHTML = '';
+    box.append(h('span', {}, 'Тарифы'),
+      plans.length ? h('div', { class: 'pay-list' }, plans.map((p) => h('div', { class: 'pay-row' },
+        h('span', { class: 'pay-sum', style: { flex: 1, minWidth: 0 } }, p.name + (p.active ? '' : ' (скрыт)')),
+        h('span', { class: 'muted small' }, [Number(p.percent_delta) ? `${Number(p.percent_delta) > 0 ? '+' : ''}${Number(p.percent_delta)}%` : '', Number(p.fixed_delta) ? `${Number(p.fixed_delta) > 0 ? '+' : ''}${Math.round(p.fixed_delta)} ₽/ночь` : '', p.refundable ? '' : 'невозвратный', p.breakfast ? 'завтрак' : ''].filter(Boolean).join(' · ') || 'как базовая'),
+        h('button', { class: 'btn small ghost', type: 'button', onclick: () => planDialog(typeId, p, draw) }, 'Изменить'))))
+        : h('div', { class: 'muted small', style: { marginBottom: '8px' } }, 'Тарифов нет — гости видят одну цену. Добавьте, например, «Невозвратный −10%» или «С завтраком +500 ₽».'),
+      h('div', {}, h('button', { class: 'btn small', type: 'button', onclick: () => planDialog(typeId, null, draw) }, icon('plus'), 'Тариф')));
+  }
+  draw().catch((ex) => { box.textContent = ex.message; });
+  return box;
+}
+
+function planDialog(typeId, plan, onDone) {
+  const p = plan || { name: '', description: '', percent_delta: 0, fixed_delta: 0, refundable: true, breakfast: false, active: true };
+  const f = {
+    name: h('input', { class: 'input', value: p.name, placeholder: 'Например: Невозвратный' }),
+    description: h('input', { class: 'input', value: p.description, placeholder: 'Что видит гость (необязательно)' }),
+    percent: h('input', { class: 'input', type: 'number', step: '1', value: Number(p.percent_delta) || '', placeholder: '0' }),
+    fixed: h('input', { class: 'input', type: 'number', step: '50', value: Number(p.fixed_delta) || '', placeholder: '0' }),
+    refundable: h('input', { type: 'checkbox', checked: p.refundable }), breakfast: h('input', { type: 'checkbox', checked: p.breakfast }),
+    active: h('input', { type: 'checkbox', checked: p.active }),
+  };
+  const err = h('div', { class: 'note bad', style: { display: 'none' } });
+  const save = h('button', { class: 'btn primary', onclick: async () => {
+    const payload = { name: f.name.value, description: f.description.value, percent_delta: f.percent.value || 0, fixed_delta: f.fixed.value || 0,
+      refundable: f.refundable.checked, breakfast: f.breakfast.checked, active: f.active.checked };
+    try {
+      if (plan) await api('PATCH', `/api/plans/${plan.id}`, payload); else await api('POST', `/api/room-types/${typeId}/plans`, payload);
+      closeModal(); toast('Тариф сохранён'); onDone?.();
+    } catch (ex) { err.textContent = ex.message; err.style.display = ''; }
+  } }, 'Сохранить');
+  openModal(plan ? 'Тариф' : 'Новый тариф', h('div', {}, err,
+    h('label', { class: 'field' }, h('span', {}, 'Название'), f.name), h('label', { class: 'field' }, h('span', {}, 'Описание'), f.description),
+    h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Изменение цены, %'), f.percent), h('label', { class: 'field' }, h('span', {}, 'Изменение, ₽ за ночь'), f.fixed)),
+    h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Отрицательное число — скидка: −10 даёт цену на 10% ниже. Применяется к цене каждой ночи.'),
+    h('label', { class: 'check' }, f.refundable, 'Бесплатная отмена'), h('label', { class: 'check' }, f.breakfast, 'Завтрак включён'),
+    h('label', { class: 'check' }, f.active, 'Показывать гостям на сайте')),
+  [plan ? h('button', { class: 'btn ghost danger', onclick: async () => { if (confirm('Удалить тариф? В созданных бронях он останется.')) { await api('DELETE', `/api/plans/${plan.id}`); closeModal(); onDone?.(); } } }, 'Удалить') : null,
+    h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: () => closeModal(true) }, 'Отмена'), save]);
+}
+
 // ---------- настройки ----------
 async function viewSettings(main) {
   const content = h('div', { class: 'stack' });
@@ -2427,7 +2581,11 @@ async function viewSettings(main) {
       openDrawer(t.id ? t.name : 'Новая категория', h('div', {},
         fld('name', 'Название'), fld('description', 'Описание для гостей'),
         h('div', { class: 'row3' }, fld('capacity', 'Гостей', { type: 'number', min: 1, value: t.capacity ?? 2 }), fld('base_price', 'Цена, ₽', { type: 'number', min: 0, value: t.base_price != null ? Math.round(t.base_price) : '' }), fld('min_stay', 'Мин. ночей', { type: 'number', min: 1, value: t.min_stay ?? 1 })),
-        t.id ? photoManager(t.id) : h('p', { class: 'muted small' }, 'Фото можно добавить после сохранения категории.')),
+        h('h3', { style: { margin: '14px 0 6px' } }, 'Доплаты и скидки'),
+        h('div', { class: 'row2' }, fld('included_guests', 'Гостей в цене', { type: 'number', min: 0, value: t.included_guests || '', placeholder: 'все' }), fld('extra_guest_price', 'Доплата за гостя, ₽/ночь', { type: 'number', min: 0, value: t.extra_guest_price ? Math.round(t.extra_guest_price) : '', placeholder: '0' })),
+        h('div', { class: 'row2' }, fld('week_discount_percent', 'Скидка от 7 ночей, %', { type: 'number', min: 0, max: 90, value: Number(t.week_discount_percent) || '', placeholder: '0' }), fld('month_discount_percent', 'Скидка от 28 ночей, %', { type: 'number', min: 0, max: 90, value: Number(t.month_discount_percent) || '', placeholder: '0' })),
+        t.id ? plansManager(t.id) : null,
+        t.id ? photoManager(t.id) : h('p', { class: 'muted small' }, 'Фото и тарифы можно добавить после сохранения категории.')),
       [t.id ? h('button', { class: 'btn ghost danger', onclick: async () => { try { await api('DELETE', `/api/room-types/${t.id}`); closeDrawer(); load(); } catch (ex) { toast(ex.message, true); } } }, 'Удалить') : null,
         h('span', { class: 'spacer' }),
         h('button', { class: 'btn primary', onclick: async () => {

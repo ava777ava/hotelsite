@@ -12,6 +12,7 @@ from ..errors import ApiError
 from ..pricing import quote
 from ..util import opt_str, parse_date, parse_int, parse_uuid, req_str
 from .base import Ctx, api
+from .tariffs import COLS as PLAN_COLS
 
 MAX_NIGHTS = 60
 log = logging.getLogger("fligel.public")
@@ -71,8 +72,10 @@ def availability(c: Ctx):
         prop = _property(conn, c.path["slug"])
         types = all_(conn, "SELECT * FROM room_types WHERE property_id = %s ORDER BY sort_order, name",
                      (prop["id"],))
+        plans = all_(conn, f"SELECT {PLAN_COLS} FROM rate_plans WHERE active AND room_type_id = ANY(%s::uuid[])"
+                           " ORDER BY sort_order, created_at", ([t["id"] for t in types],))
         for t in types:
-            q = quote(conn, t, check_in, check_out)
+            q = quote(conn, t, check_in, check_out, guests)
             free = len(_free_rooms(conn, t["id"], check_in, check_out))
             reason = None
             if t["capacity"] < guests:
@@ -87,6 +90,11 @@ def availability(c: Ctx):
                 "room_type_id": t["id"], "name": t["name"], "description": t["description"],
                 "capacity": t["capacity"], "nights": q.nights, "total": q.total,
                 "available": reason is None, "free_rooms": free, "reason": reason,
+                "tariffs": [{"id": p["id"], "name": p["name"], "description": p["description"],
+                             "refundable": p["refundable"], "breakfast": p["breakfast"],
+                             "total": quote(conn, t, check_in, check_out, guests, p).total}
+                            for p in plans if p["room_type_id"] == t["id"]] if reason is None else [],
+                "price_note": "; ".join(x["label"] for x in q.breakdown[1:]),
             })
     return {"check_in": check_in, "check_out": check_out, "guests": guests, "options": result}
 
@@ -148,7 +156,13 @@ def create_request(c: Ctx):
             raise ApiError(404, "Категория номера не найдена")
         if t["capacity"] < guests:
             raise ApiError(422, f"Номер вмещает до {t['capacity']} гостей")
-        q = quote(conn, t, check_in, check_out)
+        plan = None
+        if d.get("rate_plan_id"):
+            plan = one(conn, f"SELECT {PLAN_COLS} FROM rate_plans WHERE id = %s AND room_type_id = %s AND active",
+                       (parse_uuid(d["rate_plan_id"], "Тариф"), t["id"]))
+            if not plan:
+                raise ApiError(404, "Тариф не найден или отключён")
+        q = quote(conn, t, check_in, check_out, guests, plan)
         if not q.ok:
             raise ApiError(422, "На эти даты номер недоступен для онлайн-бронирования")
         # Пробуем номера по очереди: ограничение в БД не даст занять номер дважды,
@@ -160,12 +174,13 @@ def create_request(c: Ctx):
                         conn,
                         "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
                         " source, guest_name, guest_phone, guest_email, guests_count, total_price, notes,"
-                        " hold_expires_at) VALUES (%s, %s, %s, %s, %s, 'pending', 'direct', %s, %s, %s, %s, %s, %s,"
-                        " CASE WHEN %s > 0 THEN now() + make_interval(hours => %s) END)"
+                        " hold_expires_at, rate_plan_id, rate_plan_name) VALUES (%s, %s, %s, %s, %s, 'pending', 'direct', %s, %s, %s, %s, %s, %s,"
+                        " CASE WHEN %s > 0 THEN now() + make_interval(hours => %s) END, %s, %s)"
                         " RETURNING id, check_in, check_out, total_price",
                         (prop["account_id"], prop["id"], room["id"], check_in, check_out, name, phone,
                          opt_str(d, "guest_email", max_len=200), guests, q.total,
-                         opt_str(d, "comment", max_len=1000), config.REQUEST_TTL_HOURS, config.REQUEST_TTL_HOURS),
+                         opt_str(d, "comment", max_len=1000), config.REQUEST_TTL_HOURS, config.REQUEST_TTL_HOURS,
+                         plan["id"] if plan else None, plan["name"] if plan else ""),
                     )
                 break
             except psycopg.errors.ExclusionViolation:

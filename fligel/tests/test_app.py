@@ -1867,5 +1867,94 @@ class MoneyTests(Base):
         self.assertEqual(self.client.get(f"/api/payments/summary?from={today}&to={today}", headers=other["h"]).json()["received"], 0)
 
 
+class TariffTests(Base):
+    """Тарифы, доплата за гостей, скидка за длительность, выбор дат в календаре цен."""
+
+    def setUp(self):
+        self.ctx = self.register(f"tariff{id(self)}@example.ru", rooms=(("Стандарт", 3, 3500),))
+        self.rt = self.ctx["prop"]["room_types"][0]
+        self.room = self.ctx["rooms"][0]
+
+    def quote(self, ci, co, **kw):
+        q = "&".join(f"{k}={v}" for k, v in kw.items())
+        return self.client.get(f"/api/bookings/quote?room_id={self.room['id']}&check_in={ci}&check_out={co}&{q}", headers=self.ctx["h"]).json()
+
+    def plan(self, **kw):
+        r = self.client.post(f"/api/room-types/{self.rt['id']}/plans", headers=self.ctx["h"], json=kw)
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()
+
+    def test_plans_change_price(self):
+        nr = self.plan(name="Невозвратный", percent_delta=-10, refundable=False)
+        bf = self.plan(name="С завтраком", fixed_delta=500, breakfast=True)
+        self.assertEqual(float(self.quote("2034-03-01", "2034-03-04")["total"]), 10500.0)
+        self.assertEqual(float(self.quote("2034-03-01", "2034-03-04", rate_plan_id=nr["id"])["total"]), 9450.0)
+        self.assertEqual(float(self.quote("2034-03-01", "2034-03-04", rate_plan_id=bf["id"])["total"]), 12000.0)
+        # бронь без явной цены считается по тарифу и запоминает его
+        r = self.book(self.ctx, self.room, "2034-03-01", "2034-03-04", rate_plan_id=nr["id"])
+        self.assertEqual((float(r.json()["total_price"]), r.json()["rate_plan_name"]), (9450.0, "Невозвратный"))
+        # цена на дату тоже учитывается тарифом
+        self.client.put("/api/rates", headers=self.ctx["h"], json={"room_type_ids": [self.rt["id"]], "date_from": "2034-04-01", "date_to": "2034-04-01", "price": 5000})
+        self.assertEqual(float(self.quote("2034-04-01", "2034-04-02", rate_plan_id=nr["id"])["total"]), 4500.0)
+
+    def test_plan_rules_and_isolation(self):
+        other = self.register(f"tariffo{id(self)}@example.ru")
+        p = self.plan(name="Тест")
+        self.assertEqual(self.client.post(f"/api/room-types/{self.rt['id']}/plans", headers=self.ctx["h"], json={"name": ""}).status_code, 422)
+        self.assertEqual(self.client.post(f"/api/room-types/{self.rt['id']}/plans", headers=self.ctx["h"], json={"name": "X", "percent_delta": 999}).status_code, 422)
+        self.assertEqual(self.client.post(f"/api/room-types/{self.rt['id']}/plans", headers=other["h"], json={"name": "X"}).status_code, 404)
+        self.assertEqual(self.client.patch(f"/api/plans/{p['id']}", headers=other["h"], json={"name": "взлом"}).status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/plans/{p['id']}", headers=other["h"]).status_code, 404)
+        self.assertEqual(self.client.get(f"/api/room-types/{self.rt['id']}/plans", headers=other["h"]).status_code, 404)
+        # тариф чужой категории использовать нельзя
+        foreign = self.client.post(f"/api/room-types/{other['prop']['room_types'][0]['id']}/plans", headers=other["h"], json={"name": "Чужой"}).json()
+        r = self.client.get(f"/api/bookings/quote?room_id={self.room['id']}&check_in=2034-05-01&check_out=2034-05-02&rate_plan_id={foreign['id']}", headers=self.ctx["h"])
+        self.assertEqual(r.status_code, 404)
+        for _ in range(9):
+            self.plan(name="ещё")
+        self.assertEqual(self.client.post(f"/api/room-types/{self.rt['id']}/plans", headers=self.ctx["h"], json={"name": "11-й"}).status_code, 422)
+        self.assertEqual(self.client.delete(f"/api/plans/{p['id']}", headers=self.ctx["h"]).status_code, 200)
+
+    def test_extra_guests_and_long_stay(self):
+        r = self.client.patch(f"/api/room-types/{self.rt['id']}", headers=self.ctx["h"], json={
+            "capacity": 4, "included_guests": 2, "extra_guest_price": 700, "week_discount_percent": 10, "month_discount_percent": 20})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(float(self.quote("2034-06-01", "2034-06-04", guests=2)["total"]), 10500.0)
+        q = self.quote("2034-06-01", "2034-06-04", guests=4)
+        self.assertEqual(float(q["total"]), 14700.0)  # 10 500 + 2 гостя × 700 × 3 ночи
+        self.assertTrue(any("сверх 2" in b["label"] for b in q["breakdown"]))
+        week = self.quote("2034-06-01", "2034-06-08", guests=2)  # 7 ночей: 24 500 − 10%
+        self.assertEqual(float(week["total"]), 22050.0)
+        month = self.quote("2034-07-01", "2034-07-29", guests=2)  # 28 ночей: 98 000 − 20%
+        self.assertEqual(float(month["total"]), 78400.0)
+        for bad in ({"week_discount_percent": 95}, {"extra_guest_price": -1}, {"month_discount_percent": "x"}):
+            self.assertEqual(self.client.patch(f"/api/room-types/{self.rt['id']}", headers=self.ctx["h"], json=bad).status_code, 422, bad)
+
+    def test_public_tariffs_and_request(self):
+        nr = self.plan(name="Невозвратный", percent_delta=-10, refundable=False)
+        off = self.plan(name="Скрытый", percent_delta=-50, active=False)
+        slug = self.ctx["prop"]["public_slug"]
+        self.client.patch(f"/api/properties/{self.ctx['prop']['id']}", headers=self.ctx["h"], json={"booking_enabled": True})
+        av = self.client.get(f"/api/public/{slug}/availability?check_in=2034-08-01&check_out=2034-08-03&guests=2").json()
+        opt = av["options"][0]
+        self.assertEqual([t["name"] for t in opt["tariffs"]], ["Невозвратный"])
+        self.assertEqual(float(opt["tariffs"][0]["total"]), 6300.0)
+        body = {"check_in": "2034-08-01", "check_out": "2034-08-03", "guests": 2, "guest_name": "Пётр", "guest_phone": "+7 900 123-45-67",
+                "consent": True, "room_type_id": self.rt["id"]}
+        self.assertEqual(self.client.post(f"/api/public/{slug}/book", json={**body, "rate_plan_id": off["id"]}).status_code, 404)
+        r = self.client.post(f"/api/public/{slug}/book", json={**body, "rate_plan_id": nr["id"]})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(float(r.json()["total"]), 6300.0)
+
+    def test_rates_for_explicit_dates(self):
+        r = self.client.put("/api/rates", headers=self.ctx["h"], json={
+            "room_type_ids": [self.rt["id"]], "date_from": "2034-09-01", "date_to": "2034-09-30",
+            "dates": ["2034-09-05", "2034-09-12", "2034-09-19"], "price": 9999})
+        self.assertEqual(r.json()["updated"], 3)
+        b = self.client.get("/api/board?from=2034-09-01&days=30", headers=self.ctx["h"]).json()
+        rates = b["room_types"][0]["rates"]
+        self.assertEqual(sorted(k for k, v in rates.items() if v["price"] is not None), ["2034-09-05", "2034-09-12", "2034-09-19"])
+
+
 if __name__ == "__main__":
     unittest.main()
