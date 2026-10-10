@@ -2546,6 +2546,18 @@ async function viewStats(main) {
       h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, 'Загрузка по дням недели'),
         weekdayChart(r.weekday_occupancy)));
     content.append(chartsRow);
+    // Деньги, которые реально поступили за период (по датам платежей), — в отличие от выручки по ночам
+    const cash = h('div', { class: 'card card-pad' });
+    content.append(cash);
+    api('GET', '/api/payments/summary?' + qs({ from, to: addDays(to, -1) })).then((c) => {
+      cash.append(h('h2', { style: { marginBottom: '8px' } }, 'Поступления денег'),
+        h('p', { class: 'muted small', style: { marginTop: 0 } }, 'Сколько оплат внесено за период (по дате платежа), независимо от того, за какие ночи.'),
+        h('div', { class: 'month-grid' },
+          h('div', {}, h('span', { class: 'muted small' }, 'Принято'), h('b', {}, fmtMoney(c.received))),
+          h('div', {}, h('span', { class: 'muted small' }, 'Возвраты'), h('b', {}, fmtMoney(c.refunded))),
+          h('div', {}, h('span', { class: 'muted small' }, 'Итого'), h('b', { class: 'pos' }, fmtMoney(c.net))),
+          ...c.by_method.map((m) => h('div', {}, h('span', { class: 'muted small' }, m.label), h('b', {}, fmtMoney(m.received - m.refunded))))));
+    }).catch(() => { cash.remove(); });
 
     const structureCard = (title, items, emptyText) => {
       const card = h('div', { class: 'card card-pad' }, h('h3', { style: { marginBottom: '10px' } }, title));

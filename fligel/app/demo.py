@@ -216,12 +216,12 @@ def _seed_new_features(conn, rnd, acc, prop, prop2, rooms, rooms2, today) -> Non
     # --- платежи: оплата в брони превращается в историю (часть броней — предоплата и доплата отдельно)
     run(conn, "INSERT INTO booking_payments (account_id, booking_id, kind, amount, method, paid_on, note)"
               " SELECT account_id, id, 'payment', paid_amount, (ARRAY['cash', 'card', 'transfer', 'online'])[1 + floor(random() * 4)::int],"
-              " greatest(check_in - 3, created_at::date), '' FROM bookings WHERE paid_amount > 0 AND status = 'confirmed' AND random() < 0.7")
+              " least(check_in - 3 - (random() * 25)::int, current_date), '' FROM bookings WHERE paid_amount > 0 AND status = 'confirmed' AND random() < 0.7")
     run(conn, "INSERT INTO booking_payments (account_id, booking_id, kind, amount, method, paid_on, note)"
-              " SELECT b.account_id, b.id, 'payment', round(b.paid_amount * 0.3), 'online', greatest(b.check_in - 10, b.created_at::date), 'Предоплата'"
+              " SELECT b.account_id, b.id, 'payment', round(b.paid_amount * 0.3), 'online', least(b.check_in - 10 - (random() * 20)::int, current_date), 'Предоплата'"
               " FROM bookings b WHERE b.paid_amount > 0 AND NOT EXISTS (SELECT 1 FROM booking_payments p WHERE p.booking_id = b.id)")
     run(conn, "INSERT INTO booking_payments (account_id, booking_id, kind, amount, method, paid_on, note)"
-              " SELECT b.account_id, b.id, 'payment', b.paid_amount - round(b.paid_amount * 0.3), 'cash', b.check_in, 'Доплата при заселении'"
+              " SELECT b.account_id, b.id, 'payment', b.paid_amount - round(b.paid_amount * 0.3), 'cash', least(b.check_in, current_date), 'Доплата при заселении'"
               " FROM bookings b WHERE b.paid_amount > 0 AND (SELECT count(*) FROM booking_payments p WHERE p.booking_id = b.id) = 1"
               " AND (SELECT p.note FROM booking_payments p WHERE p.booking_id = b.id) = 'Предоплата'")
     # --- справочник услуг и услуги в ближайших бронях
