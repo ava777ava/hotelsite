@@ -94,6 +94,17 @@ function toast(msg, bad = false) {
   setTimeout(() => t.remove(), bad ? 5000 : 2800);
 }
 
+// Уведомление с кнопкой «Отменить»: действие уже выполнено, но его можно вернуть в течение нескольких секунд
+function toastUndo(msg, undo, after, seconds = 8) {
+  const t = h('div', { class: 'toast with-undo' }, h('span', {}, msg),
+    h('button', { class: 'toast-undo', type: 'button', onclick: async () => {
+      t.remove();
+      try { await undo(); toast('Возвращено'); after?.(); } catch (ex) { toast(ex.message, true); }
+    } }, 'Отменить'));
+  document.getElementById('toasts').append(t);
+  setTimeout(() => t.remove(), seconds * 1000);
+}
+
 // Тема оформления: «как в системе» / светлая / тёмная (хранится в браузере)
 function applyTheme() {
   const t = (() => { try { return localStorage.getItem('theme') || 'auto'; } catch { return 'auto'; } })();
@@ -163,6 +174,35 @@ const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: '
 
 window.addEventListener('hashchange', () => render());
 
+// Горячие клавиши: работают, когда курсор не в поле ввода и не открыто окно
+const HOTKEYS = [['← →', 'Шахматка: неделя назад / вперёд'], ['T', 'Шахматка: перейти к сегодняшнему дню'], ['N', 'Новая бронь'],
+  ['/', 'Поиск гостя'], ['G, затем Ш / С / Б / У', 'Перейти: шахматка / сегодня / брони / уборка'], ['?', 'Показать эту подсказку'], ['Esc', 'Закрыть окно']];
+function hotkeysDialog() {
+  openModal('Горячие клавиши', h('table', { class: 'list' }, h('tbody', {}, HOTKEYS.map(([k, t]) => h('tr', {}, h('td', {}, h('kbd', {}, k)), h('td', {}, t))))),
+    [h('span', { class: 'spacer' }), h('button', { class: 'btn primary', onclick: () => closeModal(true) }, 'Понятно')]);
+}
+let goPending = false;
+document.addEventListener('keydown', (e) => {
+  if (!state.me || e.ctrlKey || e.metaKey || e.altKey) return;
+  const t = e.target;
+  if (t && (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName) || t.isContentEditable)) return;
+  if (modalEl || drawerEl) return;
+  const k = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+  if (goPending) {
+    goPending = false;
+    const to = { 'ш': 'board', 'п': 'today', 'с': 'today', 'б': 'bookings', 'у': 'cleaning', b: 'board', t: 'today', k: 'bookings', c: 'cleaning' }[k];
+    if (to && ROUTES[to] && routeVisible(ROUTES[to])) { e.preventDefault(); location.hash = `#/${to}`; }
+    return;
+  }
+  if (k === '?' ) { e.preventDefault(); hotkeysDialog(); }
+  else if (k === 'g' || k === 'п') goPending = true, setTimeout(() => { goPending = false; }, 1500);
+  else if (boardActions && k === 'ArrowLeft') { e.preventDefault(); boardActions.shift(-7); }
+  else if (boardActions && k === 'ArrowRight') { e.preventDefault(); boardActions.shift(7); }
+  else if (boardActions && (k === 't' || k === 'е')) boardActions.today();
+  else if (can('manager') && (k === 'n' || k === 'т')) { e.preventDefault(); bookingDrawer({}, () => render()); }
+  else if (can('manager') && (k === '/' || k === '.')) { e.preventDefault(); guestSearchDrawer(); }
+});
+
 async function boot() {
   if (store.get('token')) {
     try { state.me = await api('GET', '/api/me'); } catch { state.me = null; }
@@ -202,7 +242,7 @@ setInterval(() => { if (!document.hidden) refreshBadges(); }, 60000);
 function render() {
   closeDrawer();
   closeModal();
-  clearInterval(autoTimer); autoFn = null;
+  clearInterval(autoTimer); autoFn = null; boardActions = null;
   $app.innerHTML = '';
   if (location.hash.startsWith('#/reset-password')) return $app.append(viewResetPassword());
   if (!state.me) return $app.append(viewAuth());
@@ -285,7 +325,7 @@ function layout(route, main) {
         sideSearchBtn),
       h('nav', { class: 'nav' }, visible.map(link)),
       h('div', { class: 'side-foot' }, h('b', {}, state.me.name), ROLE[state.me.role],
-        h('br'), h('button', { onclick: logout }, 'Выйти'), ' · ', h('button', { title: 'Светлая / тёмная тема', onclick: () => { const dark = getComputedStyle(document.documentElement).colorScheme === 'dark'; store.set('theme', dark ? 'light' : 'dark'); applyTheme(); } }, 'Тема'))),
+        h('br'), h('button', { onclick: logout }, 'Выйти'), ' · ', h('button', { class: 'desk-only', title: 'Горячие клавиши', onclick: hotkeysDialog }, '⌨'), ' · ', h('button', { title: 'Светлая / тёмная тема', onclick: () => { const dark = getComputedStyle(document.documentElement).colorScheme === 'dark'; store.set('theme', dark ? 'light' : 'dark'); applyTheme(); } }, 'Тема'))),
     h('div', {},
       h('div', { class: 'mobile-top' }, h('div', { class: 'brand-mark' }),
         propertySwitcher('prop-switch') || h('div', { class: 'brand-name' }, prop ? prop.name : 'Флигель'),
@@ -504,16 +544,32 @@ function viewWizard() {
 
 // ---------- боковая панель ----------
 let drawerEl = null;
-function closeDrawer() { if (drawerEl) { drawerEl.remove(); drawerEl = null; document.removeEventListener('keydown', escClose); } }
-function escClose(e) { if (e.key === 'Escape') closeDrawer(); }
-function openDrawer(title, body, foot) {
+let drawerDirty = false;
+let drawerOnDismiss = null;
+function closeDrawer() { if (drawerEl) { drawerEl.remove(); drawerEl = null; drawerDirty = false; drawerOnDismiss = null; document.removeEventListener('keydown', escClose); } }
+// Закрытие по желанию человека (крестик, фон, Esc, «Закрыть»): если в форме есть несохранённые правки — переспросить
+function requestCloseDrawer() {
+  if (drawerDirty && !(drawerOnDismiss ? drawerOnDismiss() : confirm('У вас есть несохранённые изменения. Закрыть без сохранения?'))) return false;
   closeDrawer();
+  return true;
+}
+function escClose(e) { if (e.key === 'Escape') requestCloseDrawer(); }
+// opts.guard — следить за несохранёнными правками; opts.onDismiss — свой вопрос при закрытии (true = закрывать)
+function openDrawer(title, body, foot, opts = {}) {
+  closeDrawer();
+  drawerDirty = false;
+  drawerOnDismiss = opts.onDismiss || null;
   drawerEl = h('div', {},
-    h('div', { class: 'drawer-back', onclick: closeDrawer }),
+    h('div', { class: 'drawer-back', onclick: requestCloseDrawer }),
     h('div', { class: 'drawer', role: 'dialog', 'aria-label': title },
-      h('div', { class: 'drawer-head' }, h('h2', {}, title), h('button', { class: 'btn icon ghost', onclick: closeDrawer, 'aria-label': 'Закрыть' }, icon('close'))),
+      h('div', { class: 'drawer-head' }, h('h2', {}, title), h('button', { class: 'btn icon ghost', onclick: requestCloseDrawer, 'aria-label': 'Закрыть' }, icon('close'))),
       h('div', { class: 'drawer-body' }, body),
       foot ? h('div', { class: 'drawer-foot' }, foot) : null));
+  if (opts.guard) {
+    const mark = (e) => { if (!e.target.closest?.('.money-box')) drawerDirty = true; };
+    drawerEl.addEventListener('input', mark);
+    drawerEl.addEventListener('change', mark);
+  }
   document.body.append(drawerEl);
   document.addEventListener('keydown', escClose);
   setTimeout(() => drawerEl?.querySelector('input:not([type=hidden]):not([readonly]), select')?.focus(), 50);
@@ -521,6 +577,7 @@ function openDrawer(title, body, foot) {
 
 // ---------- шахматка ----------
 let boardData = null;
+let boardActions = null; // действия шахматки для горячих клавиш
 
 // «Быстрый старт»: чек-лист для нового аккаунта на шахматке, пока не всё настроено
 async function drawOnboarding(box) {
@@ -552,11 +609,12 @@ async function viewBoard(main) {
   if (!state.boardFrom) state.boardFrom = addDays(todayISO(), -2);
   applyZoom();
   const head = h('div', { class: 'page-head' }, h('h1', {}, 'Шахматка'));
+  let dateIn;
   const tools = h('div', { class: 'board-tools' },
     h('button', { class: 'btn icon', title: 'Раньше', onclick: () => shift(-7) }, icon('left')),
     h('button', { class: 'btn', onclick: () => { state.boardFrom = addDays(todayISO(), -2); load(); } }, 'Сегодня'),
     h('button', { class: 'btn icon', title: 'Позже', onclick: () => shift(7) }, icon('right')),
-    h('input', { class: 'input', type: 'date', style: { width: '150px' }, value: state.boardFrom, onchange: (e) => { if (e.target.value) { state.boardFrom = e.target.value; load(); } } }),
+    dateIn = h('input', { class: 'input', type: 'date', style: { width: '150px' }, value: state.boardFrom, onchange: (e) => { if (e.target.value) { state.boardFrom = e.target.value; load(); } } }),
     h('div', { class: 'seg zoom-seg', role: 'group', 'aria-label': 'Масштаб' }, [[14, '2 нед', 'Две недели'], [31, 'Месяц', 'Месяц'], [92, '3 мес', 'Три месяца']].map(([n, l, t]) =>
       h('button', { type: 'button', class: state.boardDays === n ? 'on' : '', title: t, onclick: (e) => {
         state.boardDays = n; store.set('board_days', String(n)); applyZoom();
@@ -572,7 +630,9 @@ async function viewBoard(main) {
   if (can('manager') && !store.get('onboardHidden')) drawOnboarding(onboard);
 
   const shift = (n) => { state.boardFrom = addDays(state.boardFrom, n); load(); };
+  boardActions = { shift, today: () => { state.boardFrom = addDays(todayISO(), -2); load(); } };
   const load = async () => {
+    dateIn.value = state.boardFrom;
     try {
       boardData = await api('GET', (state.me.role === 'landlord' ? '/api/landlord/board?' : '/api/board?') + qs({ property_id: state.propertyId, from: state.boardFrom, days: state.boardDays }));
       state.conflicts = boardData.open_conflicts;
@@ -814,8 +874,9 @@ async function moveDialog(b, change, reload) {
     if (f.check_out.value !== b.check_out) payload.check_out = f.check_out.value;
     try {
       await api('PATCH', `/api/bookings/${b.id}`, payload);
-      toast('Бронь перенесена');
       closeModal(); reload();
+      toastUndo('Бронь перенесена', () => api('PATCH', `/api/bookings/${b.id}`,
+        b.status === 'blocked' ? { room_id: b.room_id, check_in: b.check_in, check_out: b.check_out } : { room_id: b.room_id, check_in: b.check_in, check_out: b.check_out, total_price: b.total_price }), reload);
     } catch (ex) { note.className = 'note bad'; note.textContent = ex.message; note.style.display = ''; confirmBtn.disabled = false; }
   } }, 'Подтвердить перенос');
   const title = b.status === 'blocked' ? 'Перенести закрытые даты?' : `Перенести бронь${b.guest_name ? ` «${b.guest_name}»` : ''}?`;
@@ -1094,7 +1155,7 @@ async function guestDrawer(phone, name, onChange) {
       h('span', { class: 'muted small' }, `${s.property_name}, ${s.room_name}${s.status === 'cancelled' ? ' · отменена' : ''}`), h('span', { class: 'small' }, fmtMoney(s.total_price))))
       : h('div', { class: 'muted small' }, 'Проживаний пока нет.')),
   [h('button', { class: 'btn', onclick: () => { closeDrawer(); bookingDrawer({ guest_name: f.name.value, guest_phone: g.phone }); } }, icon('plus'), 'Новая бронь'), h('span', { class: 'spacer' }),
-    h('button', { class: 'btn foot-close', onclick: closeDrawer }, 'Закрыть'), save]);
+    h('button', { class: 'btn foot-close', onclick: requestCloseDrawer }, 'Закрыть'), save], { guard: true });
 }
 
 // Сообщение гостю: шаблон с подстановкой данных брони → отправить на email, скопировать, Telegram, MAX
@@ -1287,9 +1348,25 @@ async function printInvoice(b) {
   } catch (ex) { toast(ex.message, true); }
 }
 
+const DRAFT_KEY = 'draft_booking';
+function loadDraft() {
+  try {
+    const d = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null');
+    if (!d || Date.now() - d.at > 3 * 3600 * 1000 || d.property !== state.propertyId) return null;
+    return d.data;
+  } catch { return null; }
+}
+const clearDraft = () => { try { localStorage.removeItem(DRAFT_KEY); } catch { /* ignore */ } };
+
 async function bookingDrawer(b, onSaved) {
   await ensureBoardData();
   const isNew = !b.id;
+  // Новая бронь, открытая кнопкой (а не кликом по клетке шахматки): подхватываем черновик, если закрыли случайно
+  let restored = null;
+  if (isNew && !b.room_id && !b.guest_name) {
+    restored = loadDraft();
+    if (restored) b = { ...b, ...restored };
+  }
   const imported = !!b.feed_id;
   const readOnly = !can('manager');
   const rooms = allRooms();
@@ -1362,7 +1439,8 @@ async function bookingDrawer(b, onSaved) {
         if (q.busy) warn.push(q.busy);
         if (q.closed_dates.length && status.value !== 'blocked') warn.push('Продажи на часть дат закрыты');
         if (q.nights < q.min_stay && status.value !== 'blocked') warn.push(`Минимальный срок — ${q.min_stay} ${nightsWord(q.min_stay)}`);
-        if (warn.length) { note.className = 'note bad'; note.textContent = warn.join('. '); note.style.display = ''; }
+        if (warn.length) { note.className = 'note bad'; note.textContent = warn.join(' ') + (q.busy ? ' Свободные номера — под датами, нажмите на нужный.' : ''); note.style.display = ''; }
+        else if (q.gaps?.length && status.value !== 'blocked') { note.className = 'note warn'; note.textContent = q.gaps.join('. ') + '.'; note.style.display = ''; }
         else if (!imported && !(b.status === 'pending' && b.source === 'direct' && b.hold_expires_at)) note.style.display = 'none';
       } catch { /* покажем при сохранении */ }
     }, 200);
@@ -1488,6 +1566,16 @@ async function bookingDrawer(b, onSaved) {
     } catch (ex) { toast(ex.message, true); }
   };
   const guestHint = h('div', { style: { marginBottom: '10px' } });
+  let draftTimer;
+  const saveDraft = () => {
+    if (!isNew || readOnly) return;
+    clearTimeout(draftTimer);
+    draftTimer = setTimeout(() => {
+      const data = { room_id: f.room_id.value, check_in: f.check_in.value, check_out: f.check_out.value, guest_name: f.guest_name?.value || '', guest_phone: f.guest_phone?.value || '', guest_email: f.guest_email?.value || '', notes: f.notes.value, guests_count: f.guests_count?.value || 1, status: status.value };
+      if (!data.guest_name && !data.guest_phone && !data.guest_email && !data.notes) { clearDraft(); return; }
+      try { localStorage.setItem(DRAFT_KEY, JSON.stringify({ at: Date.now(), property: state.propertyId, data })); } catch { /* приватный режим */ }
+    }, 400);
+  };
   const guestHistoryBox = h('div', { style: { display: 'none', marginBottom: '14px' } });
   const showGuestHistory = async () => {
     const phone = f.guest_phone.value.trim();
@@ -1572,6 +1660,7 @@ async function bookingDrawer(b, onSaved) {
       if (isNew) created = await api('POST', '/api/bookings', payload);
       else await api('PATCH', `/api/bookings/${b.id}`, payload);
       if (isNew && status.value !== 'blocked' && (f.guest_phone.value || f.guest_email.value)) offerConfirmation = created;
+      if (isNew) clearDraft();
       toast(isNew ? (status.value === 'blocked' ? (extra.size ? 'Даты закрыты в нескольких номерах' : 'Даты закрыты') : (extra.size ? `Создано броней: ${extra.size + 1}` : 'Бронь создана')) : 'Изменения сохранены');
       closeDrawer(); onSaved ? onSaved() : render();
       if (offerConfirmation) offerSendConfirmation(offerConfirmation);
@@ -1584,12 +1673,22 @@ async function bookingDrawer(b, onSaved) {
   const remove = !isNew && can('manager') ? h('button', { class: 'btn danger ghost', onclick: async () => {
     const blocked = b.status === 'blocked' && !imported;
     if (!confirm(blocked ? 'Открыть эти даты для продажи?' : 'Отменить бронь? Номер освободится на всех площадках при следующей синхронизации.')) return;
-    try { await api('DELETE', `/api/bookings/${b.id}`); toast(blocked ? 'Даты открыты' : 'Бронь отменена'); closeDrawer(); onSaved ? onSaved() : render(); }
-    catch (ex) { toast(ex.message, true); }
+    try {
+      await api('DELETE', `/api/bookings/${b.id}`); closeDrawer(); onSaved ? onSaved() : render();
+      toastUndo(blocked ? 'Даты открыты' : 'Бронь отменена', () => (blocked
+        ? api('POST', '/api/bookings', { room_id: b.room_id, check_in: b.check_in, check_out: b.check_out, status: 'blocked', notes: b.notes })
+        : api('PATCH', `/api/bookings/${b.id}`, { status: b.status })), () => (onSaved ? onSaved() : render()));
+    } catch (ex) { toast(ex.message, true); }
   } }, b.status === 'blocked' && !imported ? 'Открыть даты' : 'Отменить бронь') : null;
 
   const title = isNew ? 'Новая бронь' : (b.status === 'blocked' ? 'Закрытые даты' : (b.guest_name || `Бронь ${SOURCE[b.source]}`));
-  openDrawer(title, body, readOnly ? null : [remove, h('span', { class: 'spacer' }), h('button', { class: 'btn foot-close', onclick: closeDrawer }, 'Закрыть'), save]);
+  openDrawer(title, body, readOnly ? null : [remove, h('span', { class: 'spacer' }), h('button', { class: 'btn foot-close', onclick: requestCloseDrawer }, 'Закрыть'), save],
+    { guard: !readOnly, onDismiss: isNew ? () => true : undefined });
+  if (isNew) { body.addEventListener('input', saveDraft); body.addEventListener('change', saveDraft); }
+  if (restored) {
+    note.className = 'note'; note.style.display = '';
+    note.append('Восстановлен черновик брони, который вы не успели сохранить. ', h('button', { type: 'button', class: 'link', onclick: () => { clearDraft(); closeDrawer(); bookingDrawer({}, onSaved); } }, 'Начать заново'));
+  }
   updateTotal();
   requote();
 }
@@ -1858,12 +1957,17 @@ async function viewBookings(main) {
           h('td', { class: 'wide row-actions' }, b.status === 'pending' && !b.feed_id ? [
             h('button', { class: 'btn small primary', onclick: async (e) => {
               e.stopPropagation();
-              try { await api('PATCH', `/api/bookings/${b.id}`, { status: 'confirmed' }); toast('Бронь подтверждена'); load(); refreshBadges(); } catch (ex) { toast(ex.message, true); }
+              try {
+                await api('PATCH', `/api/bookings/${b.id}`, { status: 'confirmed' }); load(); refreshBadges();
+                toastUndo('Бронь подтверждена', () => api('PATCH', `/api/bookings/${b.id}`, { status: 'pending' }), () => { load(); refreshBadges(); });
+              } catch (ex) { toast(ex.message, true); }
             } }, 'Подтвердить'),
             h('button', { class: 'btn small ghost danger', onclick: async (e) => {
               e.stopPropagation();
-              if (!confirm(`Отклонить заявку${b.guest_name ? ` от «${b.guest_name}»` : ''}? Номер освободится.`)) return;
-              try { await api('DELETE', `/api/bookings/${b.id}`); toast('Заявка отклонена'); load(); refreshBadges(); } catch (ex) { toast(ex.message, true); }
+              try {
+                await api('DELETE', `/api/bookings/${b.id}`); load(); refreshBadges();
+                toastUndo(`Заявка${b.guest_name ? ` от «${b.guest_name}»` : ''} отклонена, номер освободился`, () => api('PATCH', `/api/bookings/${b.id}`, { status: 'pending' }), () => { load(); refreshBadges(); });
+              } catch (ex) { toast(ex.message, true); }
             } }, 'Отклонить')] : null)))))),
       rows.length > shown ? h('div', { class: 'more-count' }, h('button', { class: 'btn', onclick: () => { shown += PAGE; draw(); } },
         `Показать ещё (${Math.min(PAGE, rows.length - shown)} из ${rows.length - shown} оставшихся)`)) : null,
@@ -3281,7 +3385,8 @@ const HELP = [
     'Нажмите на пустую клетку, чтобы создать бронь, или протяните мышью по нескольким дням — даты подставятся сами.',
     'Бронь можно перетащить на другие даты или в другой номер (на телефоне — нажать и подержать). Перед сохранением откроется окно: даты, номер и цену можно поправить.',
     'Красным подсвечиваются конфликты — например, когда площадка прислала бронь на уже занятые даты.',
-    'Брони с площадок (Авито, Яндекс и др.) приходят автоматически. Их даты меняются только на самой площадке.']],
+    'Брони с площадок (Авито, Яндекс и др.) приходят автоматически. Их даты меняются только на самой площадке.',
+    'Клавиши на компьютере: ← → — неделя, T — сегодня, N — новая бронь, / — поиск гостя, ? — полный список. Любое удаление или перенос можно отменить кнопкой «Отменить» в уведомлении внизу.']],
   ['Заявки с вашего сайта', null, [
     'Гость заполняет форму на странице бронирования — заявка появляется в «Бронях» с оранжевым значком. Номер на эти даты сразу блокируется.',
     'Нажмите «Подтвердить» (после звонка гостю и оплаты) или «Отклонить». Если не ответить вовремя, заявка снимется сама — срок задаёт администратор сервера (по умолчанию 48 часов).',

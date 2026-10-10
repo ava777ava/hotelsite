@@ -2284,6 +2284,28 @@ class LandlordTests(Base):
         self.assertEqual(self.client.get("/api/landlord/report", headers={"Authorization": f"Bearer {tok}"}).status_code, 403)
 
 
+class QuoteHintsTests(Base):
+    def test_busy_message_and_gap_hint(self):
+        ctx = self.register("hint1@example.ru", rooms=(("Стандарт", 2, 3500),))
+        a, b = ctx["rooms"]
+        self.book(ctx, a, "2039-03-10", "2039-03-13", guest="Иван Иванов")
+        r = self.book(ctx, a, "2039-03-12", "2039-03-14")
+        self.assertEqual(r.status_code, 409)
+        msg = r.json()["error"]
+        self.assertIn(f"Номер {a['name']} занят: Иван Иванов, с 10.03 по 13.03", msg)
+        self.assertIn("другой номер", msg)
+        base = f"/api/bookings/quote?room_id={a['id']}&check_out="
+        q = self.client.get(f"/api/bookings/quote?room_id={a['id']}&check_in=2039-03-14&check_out=2039-03-16", headers=ctx["h"]).json()
+        self.assertEqual(len(q["gaps"]), 1)  # между 13.03 и 14.03 останется одна ночь
+        self.assertIn("13.03", q["gaps"][0])
+        q = self.client.get(f"/api/bookings/quote?room_id={a['id']}&check_in=2039-03-13&check_out=2039-03-16", headers=ctx["h"]).json()
+        self.assertEqual(q["gaps"], [])  # вплотную — дырки нет
+        q = self.client.get(f"/api/bookings/quote?room_id={a['id']}&check_in=2039-03-05&check_out=2039-03-09", headers=ctx["h"]).json()
+        self.assertEqual(len(q["gaps"]), 1)  # после этой брони — одна ночь до заезда 10.03
+        q = self.client.get(f"/api/bookings/quote?room_id={a['id']}&check_in=2039-03-11&check_out=2039-03-12", headers=ctx["h"]).json()
+        self.assertTrue(q["busy"] and q["gaps"] == [])
+
+
 class FreeRoomsTests(Base):
     def test_free_rooms_for_dates(self):
         ctx = self.register("free1@example.ru", rooms=(("Стандарт", 3, 3500), ("Делюкс", 2, 5500)))

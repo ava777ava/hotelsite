@@ -2,14 +2,14 @@
 import csv
 import io
 import uuid
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import psycopg
 from starlette.responses import Response
 from starlette.routing import Route
 
-from .. import booklog, importer, telegram
+from .. import booklog, config, importer, telegram
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..pricing import quote
@@ -46,6 +46,9 @@ def _date_range(c: Ctx, default_days: int = 31) -> tuple[date, date]:
 
 
 def _overlap_info(conn, room_id: str, check_in: date, check_out: date, exclude_id: str | None) -> str:
+    """Понятный текст про занятый номер: чем занят, на какие даты, и что можно сделать."""
+    room = one(conn, "SELECT name FROM rooms WHERE id = %s", (room_id,))
+    label = f"Номер {room['name']}" if room else "Номер"
     row = one(
         conn,
         "SELECT guest_name, check_in, check_out, source, status FROM bookings"
@@ -54,10 +57,10 @@ def _overlap_info(conn, room_id: str, check_in: date, check_out: date, exclude_i
         (room_id, check_out, check_in, exclude_id, exclude_id),
     )
     if not row:
-        return "Номер уже занят на эти даты"
-    who = "закрыт" if row["status"] == "blocked" else (row["guest_name"] or "бронь без имени")
-    return (f"Номер уже занят: {who}, {row['check_in'].strftime('%d.%m')}–"
-            f"{row['check_out'].strftime('%d.%m')}")
+        return f"{label} уже занят на эти даты"
+    who = "закрыт для продажи" if row["status"] == "blocked" else f"занят: {row['guest_name'] or 'бронь без имени'}"
+    return (f"{label} {who}, с {row['check_in'].strftime('%d.%m')} по {row['check_out'].strftime('%d.%m')}. "
+            "Выберите другой номер или сдвиньте даты.")
 
 
 def _load_room(conn, account_id: str, room_id) -> dict:
@@ -344,6 +347,9 @@ def update_booking(c: Ctx):
             new["status"] = d["status"]
             if d["status"] != "pending":
                 new["hold_expires_at"] = None
+            elif b["status"] != "pending" and b["source"] == "direct" and config.REQUEST_TTL_HOURS > 0:
+                # заявку вернули в ожидание (например, отменили отклонение) — срок ожидания идёт заново
+                new["hold_expires_at"] = datetime.now(timezone.utc) + timedelta(hours=config.REQUEST_TTL_HOURS)
         if "source" in d and not b["feed_id"]:
             if d["source"] not in SOURCES:
                 raise ApiError(422, "Неверный источник")
@@ -572,8 +578,18 @@ def quote_booking(c: Ctx):
                           " AND check_in < %s AND check_out > %s AND (%s::uuid IS NULL OR id <> %s::uuid)",
                     (room["id"], check_out, check_in, exclude, exclude))
         busy = _overlap_info(conn, room["id"], check_in, check_out, exclude) if taken else None
+        gaps = []
+        if not taken:
+            prev = one(conn, "SELECT check_out FROM bookings WHERE room_id = %s AND status <> 'cancelled' AND check_out <= %s"
+                             " AND (%s::uuid IS NULL OR id <> %s::uuid) ORDER BY check_out DESC LIMIT 1", (room["id"], check_in, exclude, exclude))
+            nxt = one(conn, "SELECT check_in FROM bookings WHERE room_id = %s AND status <> 'cancelled' AND check_in >= %s"
+                            " AND (%s::uuid IS NULL OR id <> %s::uuid) ORDER BY check_in LIMIT 1", (room["id"], check_out, exclude, exclude))
+            if prev and (check_in - prev["check_out"]).days == 1:
+                gaps.append(f"Перед этой бронью останется свободной одна ночь ({check_in - timedelta(days=1):%d.%m}) — её будет трудно продать")
+            if nxt and (nxt["check_in"] - check_out).days == 1:
+                gaps.append(f"После этой брони останется свободной одна ночь ({check_out:%d.%m}) — её будет трудно продать")
     return {"total": q.total, "nights": q.nights, "min_stay": q.min_stay,
-            "closed_dates": q.closed_dates, "busy": busy, "breakdown": q.breakdown}
+            "closed_dates": q.closed_dates, "busy": busy, "breakdown": q.breakdown, "gaps": gaps}
 
 
 # ---------- шахматка ----------
