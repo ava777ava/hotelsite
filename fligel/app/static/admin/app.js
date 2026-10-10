@@ -86,7 +86,7 @@ const ago = (s) => {
   return fmtDateTime(s);
 };
 
-const loadingBox = () => h('div', { class: 'card empty' }, h('span', { class: 'spin' }), 'Загружаю…');
+const loadingBox = () => h('div', { class: 'card' }, skeleton(5));
 
 function toast(msg, bad = false) {
   const t = h('div', { class: 'toast' + (bad ? ' bad' : '') }, msg);
@@ -145,7 +145,7 @@ const state = {
   boardDays: parseInt(store.get('board_days', ''), 10) || (window.innerWidth < 860 ? 14 : 31),
   conflicts: 0,
   requests: 0,
-  financeKind: 'expense',
+  financeKind: store.get('finance_kind', 'expense'),
 };
 
 const ROUTES = {
@@ -216,7 +216,7 @@ async function refreshBadges() {
   if (!state.me || !can('manager')) return;
   try {
     const b = await api('GET', '/api/badges');
-    state.requests = b.requests; state.conflicts = b.conflicts;
+    state.requests = b.requests; state.conflicts = b.conflicts; updateTitle();
     document.querySelectorAll('[data-badge]').forEach((el) => {
       const n = state[el.dataset.badge] || 0;
       el.textContent = n; el.style.display = n ? '' : 'none';
@@ -239,6 +239,10 @@ document.addEventListener('visibilitychange', () => {
 });
 setInterval(() => { if (!document.hidden) refreshBadges(); }, 60000);
 
+let baseTitle = 'Флигель';
+// Число новых заявок видно прямо во вкладке браузера: «(3) Брони — Флигель»
+function updateTitle() { document.title = (state.requests ? `(${state.requests}) ` : '') + baseTitle; }
+
 function render() {
   closeDrawer();
   closeModal();
@@ -250,7 +254,8 @@ function render() {
   if (!state.me.properties.find((p) => p.id === state.propertyId)) state.propertyId = state.me.properties[0].id;
   const route = currentRoute();
   const def = ROUTES[route];
-  document.title = `${def.title} — Флигель`;
+  baseTitle = `${def.title} — Флигель`;
+  updateTitle();
   const main = h('main', { class: 'main' });
   $app.append(layout(route, main));
   if (!routeVisible(def)) {
@@ -361,13 +366,15 @@ function propertySwitcher(cls) {
 // Список объектов для выбора «Этот объект / Все объекты» на страницах, где это уместно.
 function scopeSeg(scope, onChange) {
   if (state.me.properties.length < 2) return null;
+  // «Этот объект / Все объекты» запоминается и одинаков на всех экранах
+  if (store.get('scope') === 'all') scope.value = 'all';
   const btnCurrent = h('button', {
     type: 'button', class: scope.value === 'current' ? 'on' : '',
-    onclick: () => { scope.value = 'current'; btnCurrent.classList.add('on'); btnAll.classList.remove('on'); onChange(); },
+    onclick: () => { scope.value = 'current'; store.set('scope', 'current'); btnCurrent.classList.add('on'); btnAll.classList.remove('on'); onChange(); },
   }, 'Этот объект');
   const btnAll = h('button', {
     type: 'button', class: scope.value === 'all' ? 'on' : '',
-    onclick: () => { scope.value = 'all'; btnAll.classList.add('on'); btnCurrent.classList.remove('on'); onChange(); },
+    onclick: () => { scope.value = 'all'; store.set('scope', 'all'); btnAll.classList.add('on'); btnCurrent.classList.remove('on'); onChange(); },
   }, 'Все объекты');
   return h('div', { class: 'seg' }, btnCurrent, btnAll);
 }
@@ -499,7 +506,7 @@ function viewWizard() {
         h('input', { class: 'input', type, value: t[key], min: type === 'number' ? 0 : null, oninput: (e) => { t[key] = e.target.value; recount(); } }));
       list.append(h('div', { class: 'type-row' }, inp('name', 'Категория'), inp('count', 'Номеров', 'number'),
         inp('capacity', 'Гостей', 'number'), inp('base_price', 'Цена за ночь', 'number'),
-        h('button', { class: 'btn icon ghost del', type: 'button', title: 'Убрать категорию', style: { marginBottom: '10px' }, disabled: types.length === 1,
+        h('button', { class: 'btn icon ghost del', type: 'button', title: 'Убрать категорию', 'aria-label': 'Убрать категорию', style: { marginBottom: '10px' }, disabled: types.length === 1,
           onclick: () => { types.splice(i, 1); drawTypes(); } }, icon('close'))));
     });
     recount();
@@ -611,9 +618,9 @@ async function viewBoard(main) {
   const head = h('div', { class: 'page-head' }, h('h1', {}, 'Шахматка'));
   let dateIn;
   const tools = h('div', { class: 'board-tools' },
-    h('button', { class: 'btn icon', title: 'Раньше', onclick: () => shift(-7) }, icon('left')),
+    h('button', { class: 'btn icon', title: 'Раньше (←)', 'aria-label': 'Неделю назад', onclick: () => shift(-7) }, icon('left')),
     h('button', { class: 'btn', onclick: () => { state.boardFrom = addDays(todayISO(), -2); load(); } }, 'Сегодня'),
-    h('button', { class: 'btn icon', title: 'Позже', onclick: () => shift(7) }, icon('right')),
+    h('button', { class: 'btn icon', title: 'Позже (→)', 'aria-label': 'Неделю вперёд', onclick: () => shift(7) }, icon('right')),
     dateIn = h('input', { class: 'input', type: 'date', style: { width: '150px' }, value: state.boardFrom, onchange: (e) => { if (e.target.value) { state.boardFrom = e.target.value; load(); } } }),
     h('div', { class: 'seg zoom-seg', role: 'group', 'aria-label': 'Масштаб' }, [[14, '2 нед', 'Две недели'], [31, 'Месяц', 'Месяц'], [92, '3 мес', 'Три месяца']].map(([n, l, t]) =>
       h('button', { type: 'button', class: state.boardDays === n ? 'on' : '', title: t, onclick: (e) => {
@@ -625,7 +632,7 @@ async function viewBoard(main) {
   const banner = h('div');
   const typeFilter = h('div', { class: 'type-filter' });
   const onboard = h('div');
-  const card = h('div', { class: 'card board-card' }, h('div', { class: 'empty' }, h('span', { class: 'spin' }), 'Загружаю…'));
+  const card = h('div', { class: 'card board-card' }, skeleton(9, 'board'));
   main.append(head, onboard, banner, typeFilter, card);
   if (can('manager') && !store.get('onboardHidden')) drawOnboarding(onboard);
 
@@ -898,6 +905,7 @@ function drawBoard(data, reload) {
     if (dt.getDay() === 0 || dt.getDay() === 6) c.push('we');
     if (d === today) c.push('today');
     if (dt.getDate() === 1 && i > 0) c.push('month-start');
+    if (holidayName(d)) c.push('holiday');
     return c.join(' ');
   };
   const board = h('div', { class: 'board' + (cellW < 30 ? ' compact' : '') });
@@ -906,7 +914,7 @@ function drawBoard(data, reload) {
   days.forEach((d, i) => {
     const dt = parseISO(d);
     const dnote = (data.date_notes || {})[d];
-    headRow.append(h('div', { class: 'b-day ' + dayClass(d, i) + (dnote ? ' has-note' : ''), title: dnote ? `Заметка: ${dnote}` : (can('manager') ? 'Нажмите, чтобы добавить заметку на эту дату' : ''),
+    headRow.append(h('div', { class: 'b-day ' + dayClass(d, i) + (dnote ? ' has-note' : ''), title: [holidayName(d), dnote ? `Заметка: ${dnote}` : (can('manager') ? 'Нажмите, чтобы добавить заметку на эту дату' : '')].filter(Boolean).join('\n'),
       onclick: () => can('manager') && dateNoteDialog(d, dnote, reload) },
       dt.getDate() === 1 || i === 0 ? h('span', { class: 'b-month' }, MONTHS_SHORT[dt.getMonth()]) : null,
       h('span', { class: 'n' }, dt.getDate()), h('span', { class: 'w' }, WD[dt.getDay()])));
@@ -949,7 +957,7 @@ function drawBoard(data, reload) {
       const free = t.rooms.length - busy;
       typeRow.append(h('div', {
         class: 'b-price' + (rate?.price != null ? ' custom' : '') + (rate?.closed ? ' closed' : ''),
-        title: `${fmtDate(d)}: ${fmtMoney(price)}${rate?.min_stay ? `, от ${rate.min_stay} ноч.` : ''}${rate?.closed ? ', продажи закрыты' : ''}. Свободно: ${free}`,
+        title: `${fmtDate(d)}: ${fmtMoney(price)}${rate?.min_stay ? `, от ${count(rate.min_stay, 'night')}` : ''}${rate?.closed ? ', продажи закрыты' : ''}. Свободно: ${free}`,
         onclick: () => can('manager') && rateDrawer(t, d, reload),
       }, fmtPriceCell(price), h('span', { class: 'free' + (free <= 0 ? ' zero' : '') }, free)));
     });
@@ -989,6 +997,7 @@ function drawBoard(data, reload) {
           title: `${label} · ${SOURCE[b.source]} · ${STATUS[b.status]}\n${fmtDate(b.check_in)} — ${fmtDate(b.check_out)}, ${nights} ${nightsWord(nights)}`
             + (draggable ? '\nПеретащите, чтобы перенести, или потяните за край, чтобы изменить длину' : ''),
         }, h('span', { class: 'ttl' }, label),
+        b.status !== 'blocked' && b.source !== 'manual' && right - left < 130 ? h('span', { class: 'sb', title: SOURCE[b.source] }, SOURCE_ABBR[b.source]) : null,
         flags[b.id]?.blacklisted ? h('span', { class: 'flag', title: 'Гость в чёрном списке' }, '⛔') : null,
         flags[b.id]?.birthday ? h('span', { class: 'flag', title: `День рождения гостя: ${fmtDate(flags[b.id].birthday)}` }, '🎂') : null,
         b.status !== 'blocked' && b.guest_name && right - left > 120 ? h('span', { class: 'src' }, SOURCE[b.source]) : null);
@@ -1013,7 +1022,7 @@ function drawBoard(data, reload) {
   // прокрутить к сегодняшнему дню на узких экранах
   requestAnimationFrame(() => {
     const idx = days.indexOf(today);
-    if (idx > 2 && scroll.scrollLeft === 0) scroll.scrollLeft = (idx - 1) * cellW;
+    if (idx > 2 && scroll.scrollLeft === 0) scroll.scrollTo({ left: (idx - 1) * cellW, behavior: 'smooth' });
   });
   return h('div', {}, scroll, notesBox, legend);
 }
@@ -1331,9 +1340,9 @@ async function printInvoice(b) {
     ];
     document.getElementById('print-sheet')?.remove();
     document.body.append(h('div', { id: 'print-sheet' },
+      letterhead(prop.name, [prop.address, prop.phone].filter(Boolean).join(' · ')),
       h('h1', { style: { fontSize: '22px', marginBottom: '2px' } }, `Счёт № ${String(b.id).slice(0, 8).toUpperCase()}`),
       h('p', { style: { marginTop: 0, color: '#555' } }, `от ${fmtDate(todayISO())} ${new Date().getFullYear()}`),
-      h('p', { style: { margin: '0 0 4px' } }, h('b', {}, prop.name)), h('p', { style: { margin: '0 0 14px', color: '#333' } }, [prop.address, prop.phone].filter(Boolean).join(' · ')),
       h('p', { style: { margin: '0 0 14px' } }, 'Гость: ', h('b', {}, b.guest_name || '—'), b.guest_phone ? `, ${b.guest_phone}` : ''),
       h('table', { style: { borderCollapse: 'collapse', width: '100%', fontSize: '14px' } },
         h('thead', {}, h('tr', {}, th('Наименование'), th('Кол-во', 1), th('Сумма', 1))),
@@ -1429,7 +1438,7 @@ async function bookingDrawer(b, onSaved) {
         loadFree();
         const q = await api('GET', '/api/bookings/quote?' + qs({ room_id: f.room_id.value, check_in: f.check_in.value, check_out: f.check_out.value, exclude: b.id,
           guests: f.guests_count?.value || 1, rate_plan_id: f.rate_plan_id.value }));
-        nightsEl.textContent = `${q.nights} ${nightsWord(q.nights)}, ${fmtDate(f.check_in.value)} — ${fmtDate(f.check_out.value)}`;
+        nightsEl.textContent = `${count(q.nights, 'night')}, ${dateRange(f.check_in.value, f.check_out.value)} · заезд ${humanDay(f.check_in.value)}`;
         nightsEl.title = (q.breakdown || []).map((x) => `${x.label}: ${fmtMoney(x.amount)}`).join('\n');
         breakdownEl.innerHTML = '';
         if ((q.breakdown || []).length > 1) breakdownEl.append(...q.breakdown.map((x) => h('div', {}, `${x.label}: `, h('b', {}, fmtMoney(x.amount)))));
@@ -1515,12 +1524,17 @@ async function bookingDrawer(b, onSaved) {
         try { await api('DELETE', `/api/bookings/${b.id}?group=1`); toast('Группа отменена'); closeDrawer(); onSaved ? onSaved() : render(); } catch (ex) { toast(ex.message, true); }
       } }, 'Отменить всю группу') : null);
   }).catch(() => {});
+  const drawDraftSoon = () => f.check_out.dispatchEvent(new Event('change', { bubbles: true }));
+  const ref = String(b.id || '').slice(0, 8).toUpperCase();
   const body = h('div', {},
     note,
+    ref ? h('div', { class: 'ref-line muted' }, `Бронь № ${ref}`, h('button', { type: 'button', class: 'link', onclick: () => copyText(ref, 'Номер брони скопирован') }, 'скопировать')) : null,
     statusSeg,
     h('label', { class: 'field' }, h('span', {}, 'Номер'), f.room_id),
     extraToggle, extraBox, extraHint,
     h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Заезд'), f.check_in), h('label', { class: 'field' }, h('span', {}, 'Выезд'), f.check_out)),
+    readOnly || imported ? null : h('div', { class: 'nights-chips' }, h('span', { class: 'muted small' }, 'Ночей:'),
+      [1, 2, 3, 5, 7, 14].map((n) => h('button', { type: 'button', class: 'chip', onclick: () => { f.check_out.value = addDays(f.check_in.value, n); drawDraftSoon(); requote(); } }, n))),
     freeBox,
     groupBox,
     guestBox,
@@ -1548,10 +1562,9 @@ async function bookingDrawer(b, onSaved) {
       const line = (k, v) => h('tr', {}, h('td', { style: { padding: '6px 10px 6px 0', color: '#555', width: '190px' } }, k), h('td', { style: { padding: '6px 0', fontWeight: 600 } }, v));
       document.getElementById('print-sheet')?.remove();
       document.body.append(h('div', { id: 'print-sheet' },
+        letterhead(prop.name, [prop.address, prop.phone].filter(Boolean).join(' · ')),
         h('h1', { style: { fontSize: '22px', marginBottom: '2px' } }, 'Подтверждение бронирования'),
-        h('p', { style: { marginTop: 0, color: '#555' } }, `№ ${String(b.id).slice(0, 8).toUpperCase()}`),
-        h('h2', { style: { fontSize: '17px', margin: '18px 0 4px' } }, prop.name),
-        h('p', { style: { margin: '0 0 18px', color: '#333' } }, [prop.address, prop.phone].filter(Boolean).join(' · ')),
+        h('p', { style: { marginTop: 0, marginBottom: '18px', color: '#555' } }, `№ ${String(b.id).slice(0, 8).toUpperCase()}`),
         h('table', { style: { borderCollapse: 'collapse', fontSize: '14px' } }, h('tbody', {},
           line('Гость', f.guest_name.value || '—'),
           line('Номер', room ? `№${room.name} (${room.type})` : '—'),
@@ -1805,9 +1818,9 @@ async function viewToday(main) {
   const content = h('div');
   const dateInput = h('input', { class: 'input', type: 'date', value: day, style: { width: '160px' }, onchange: (e) => { day = e.target.value || todayISO(); load(); } });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Заезды и выезды'),
-    h('button', { class: 'btn icon', onclick: () => { day = addDays(day, -1); dateInput.value = day; load(); } }, icon('left')),
+    h('button', { class: 'btn icon', 'aria-label': 'Предыдущий день', onclick: () => { day = addDays(day, -1); dateInput.value = day; load(); } }, icon('left')),
     dateInput,
-    h('button', { class: 'btn icon', onclick: () => { day = addDays(day, 1); dateInput.value = day; load(); } }, icon('right')),
+    h('button', { class: 'btn icon', 'aria-label': 'Следующий день', onclick: () => { day = addDays(day, 1); dateInput.value = day; load(); } }, icon('right')),
     scopeSeg(scope, () => load()),
     h('button', { class: 'btn', onclick: () => lastData && printDaySheet(day, lastData) }, icon('print'), 'Печать')), content);
   const item = (b, kind) => {
@@ -1817,7 +1830,7 @@ async function viewToday(main) {
       h('div', { style: { flex: 1, minWidth: 0 } },
         h('div', { style: { fontWeight: 600 } }, b.guest_name || `Гость с площадки ${SOURCE[b.source]}`,
           scope.value === 'all' ? h('span', { class: 'muted small', style: { fontWeight: 400 } }, ' · ', b.property_name) : null),
-        h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${b.guests_count} гост. · ${SOURCE[b.source]}`),
+        h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${count(b.guests_count, 'guest')} · ${SOURCE[b.source]}`),
         b.guest_phone ? h('a', { class: 'small tel', href: `tel:${b.guest_phone}`, onclick: (e) => e.stopPropagation() }, b.guest_phone) : null),
       kind !== 'staying' && due > 0 && can('manager') ? h('span', { class: 'pill warn num' }, `к оплате ${fmtMoney(due)}`) : null,
       b.status === 'pending' ? h('span', { class: 'pill warn' }, 'заявка') : null,
@@ -1888,7 +1901,8 @@ function homeSummary(sm) {
 // ---------- печатный лист ----------
 function printDaySheet(day, data) {
   document.getElementById('print-sheet')?.remove();
-  const th = (t) => h('th', { style: { textAlign: 'left', borderBottom: '2px solid #000', padding: '5px 6px', fontSize: '13px' } }, t);
+  const W = { 'Номер': '9%', 'Гость': '30%', 'Телефон': '21%', 'Гостей': '8%', 'К оплате': '14%', 'Отметка': '18%' };
+  const th = (t) => h('th', { style: { textAlign: 'left', borderBottom: '2px solid #000', padding: '5px 6px', fontSize: '13px', width: W[t] } }, t);
   const td = (t) => h('td', { style: { borderBottom: '1px solid #999', padding: '6px', fontSize: '13px' } }, t);
   const section = (title, list, withDue) => {
     const cols = ['Номер', 'Гость', 'Телефон', 'Гостей', withDue ? 'К оплате' : null, 'Отметка'].filter(Boolean);
@@ -1899,10 +1913,11 @@ function printDaySheet(day, data) {
       : [h('tr', {}, h('td', { colspan: String(cols.length), style: { padding: '6px', color: '#666' } }, 'Нет'))];
     return h('div', { style: { marginBottom: '26px' } },
       h('h2', { style: { margin: '0 0 8px', fontSize: '16px' } }, title),
-      h('table', { style: { width: '100%', borderCollapse: 'collapse' } },
+      h('table', { style: { width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed' } },
         h('thead', {}, h('tr', {}, cols.map(th))), h('tbody', {}, rows)));
   };
   const sheet = h('div', { id: 'print-sheet' },
+    letterhead((state.me.properties.find((p) => p.id === state.propertyId) || {}).name || 'Флигель'),
     h('h1', { style: { fontSize: '20px', marginBottom: '4px' } }, 'Заезды и выезды'),
     h('p', { style: { marginTop: 0, marginBottom: '18px', color: '#333' } }, `${fmtDate(day)}, ${WD[parseISO(day).getDay()].toLowerCase()}`),
     section('Заезды', data.arrivals, true),
@@ -1920,7 +1935,14 @@ async function viewBookings(main) {
     from: h('input', { class: 'input', type: 'date', value: addDays(todayISO(), -7), style: { width: '150px' } }),
     to: h('input', { class: 'input', type: 'date', value: addDays(todayISO(), 60), style: { width: '150px' } }),
     status: h('select', { class: 'input', style: { width: '170px' } }, h('option', { value: '' }, 'Все активные'),
-      Object.entries(STATUS).map(([k, l]) => h('option', { value: k }, l))),
+      Object.entries(STATUS).map(([k, l]) => h('option', { value: k, selected: k === store.get('bk_status', '') }, l))),
+  };
+  let chip = store.get('bk_chip', 'all');
+  const chips = h('div', { class: 'type-filter' });
+  const drawChips = () => {
+    chips.innerHTML = '';
+    [['all', 'Все'], ['requests', 'Заявки с сайта'], ['debt', 'Должны оплатить'], ['arrive', 'Заезжают сегодня']].forEach(([k, l]) => chips.append(h('button', { type: 'button', class: 'chip' + (chip === k ? ' on' : ''),
+      onclick: () => { chip = k; store.set('bk_chip', k); drawChips(); shown = PAGE; draw(); } }, l)));
   };
   const table = h('div', { class: 'card' });
   let timer;
@@ -1931,13 +1953,23 @@ async function viewBookings(main) {
       property_id: scope.value === 'current' ? state.propertyId : undefined }), `bookings_${f.from.value}_${f.to.value}.csv`) }, icon('download'), 'CSV'),
     h('button', { class: 'btn', onclick: () => importDialog(load) }, icon('upload'), 'Импорт'),
     h('button', { class: 'btn primary', onclick: () => bookingDrawer({}, load) }, icon('plus'), 'Бронь')),
-  h('div', { class: 'board-tools', style: { marginBottom: '14px' } }, f.q, f.from, '—', f.to, f.status, scopeSeg(scope, () => load())), table);
+  h('div', { class: 'board-tools', style: { marginBottom: '10px' } }, f.q, f.from, '—', f.to, f.status, scopeSeg(scope, () => load())), chips, table);
   const PAGE = 50;
   let shown = PAGE;
+  let all = [];
   let rows = [];
   const draw = () => {
     table.innerHTML = '';
-    if (!rows.length) { table.append(h('div', { class: 'empty' }, h('h3', {}, 'Броней не найдено'), 'Измените период или поиск.')); return; }
+    const today = todayISO();
+    rows = all.filter((b) => (chip === 'requests' ? b.status === 'pending' && b.source === 'direct'
+      : chip === 'debt' ? b.status === 'confirmed' && Number(b.total_price) > Number(b.paid_amount)
+      : chip === 'arrive' ? b.check_in === today && b.status !== 'cancelled' && b.status !== 'blocked' : true));
+    if (!rows.length) {
+      table.append(h('div', { class: 'empty' }, h('h3', {}, all.length ? 'В этом разделе пусто' : 'Броней не найдено'),
+        all.length ? 'Нажмите «Все», чтобы увидеть остальные брони периода.' : 'Измените период или поиск — или создайте бронь.',
+        h('div', { style: { marginTop: '12px' } }, can('manager') ? h('button', { class: 'btn primary', onclick: () => bookingDrawer({}, load) }, icon('plus'), 'Создать бронь') : null)));
+      return;
+    }
     const part = rows.slice(0, shown);
     const multi = scope.value === 'all';
     table.append(...[
@@ -1946,7 +1978,7 @@ async function viewBookings(main) {
         h('thead', {}, h('tr', {}, [multi ? 'Объект' : null, 'Заезд', 'Выезд', 'Номер', 'Гость', 'Источник', 'Статус', 'Сумма', 'Оплачено', ''].filter((t) => t !== null).map((t) => h('th', {}, t)))),
         h('tbody', {}, part.map((b) => h('tr', { class: 'click', onclick: () => bookingDrawer(b, load) },
           multi ? h('td', { class: 'muted small', 'data-l': 'Объект' }, b.property_name) : null,
-          h('td', { class: 'num', 'data-l': 'Заезд' }, fmtShort(b.check_in)), h('td', { class: 'num', 'data-l': 'Выезд' }, fmtShort(b.check_out)),
+          h('td', { class: 'num', 'data-l': 'Заезд' }, fmtShort(b.check_in), h('div', { class: 'muted small' }, humanDay(b.check_in))), h('td', { class: 'num', 'data-l': 'Выезд' }, fmtShort(b.check_out)),
           h('td', { class: 'num', 'data-l': 'Номер' }, b.room_name),
           h('td', { 'data-l': 'Гость' }, b.status === 'blocked' ? h('span', { class: 'muted' }, 'Закрыто') : (b.guest_name || h('span', { class: 'muted' }, '—')),
             b.guest_phone ? h('div', { class: 'muted small' }, b.guest_phone) : null),
@@ -1974,8 +2006,10 @@ async function viewBookings(main) {
     ].filter(Boolean));
   };
   async function load() {
+    store.set('bk_status', f.status.value);
+    if (!all.length) { table.innerHTML = ''; table.append(skeleton(6)); }
     try {
-      rows = await api('GET', '/api/bookings?' + qs({
+      all = await api('GET', '/api/bookings?' + qs({
         q: f.q.value, from: f.from.value, to: f.to.value, status: f.status.value,
         property_id: scope.value === 'current' ? state.propertyId : undefined,
       }));
@@ -1983,6 +2017,7 @@ async function viewBookings(main) {
       draw();
     } catch (ex) { table.innerHTML = ''; table.append(h('div', { class: 'empty' }, ex.message)); }
   }
+  drawChips();
   load();
 }
 
@@ -2064,8 +2099,8 @@ async function priceCalendar(card, prop) {
             const r = t.rates[d]; const dt = parseISO(d); const past = d < today;
             const price = r?.price ?? t.base_price;
             return h('button', { type: 'button', 'data-d': d, disabled: past,
-              class: 'cal-day' + (r?.price != null ? ' custom' : '') + (r?.closed ? ' closed' : '') + (past ? ' past' : '') + (d === today ? ' today' : '') + ([0, 6].includes(dt.getDay()) ? ' we' : ''),
-              title: `${fmtDate(d)}: ${fmtMoney(price)}${r?.min_stay ? `, от ${r.min_stay} ноч.` : ''}${r?.closed ? ', продажи закрыты' : ''}`,
+              class: 'cal-day' + (r?.price != null ? ' custom' : '') + (r?.closed ? ' closed' : '') + (past ? ' past' : '') + (d === today ? ' today' : '') + ([0, 6].includes(dt.getDay()) || holidayName(d) ? ' we' : ''),
+              title: `${holidayName(d) ? holidayName(d) + '. ' : ''}${fmtDate(d)}: ${fmtMoney(price)}${r?.min_stay ? `, от ${count(r.min_stay, 'night')}` : ''}${r?.closed ? ', продажи закрыты' : ''}`,
               onclick: (e) => pick(d, e.shiftKey) }, h('span', { class: 'n' }, dt.getDate()), h('span', { class: 'p' }, r?.closed ? '×' : fmtPriceCell(price)));
           }))));
     }
@@ -2388,7 +2423,7 @@ async function viewStats(main) {
     ['Этот квартал', quarterStart, nextMonth > quarterStart ? nextMonth : addDays(quarterStart, 90)],
     ['Этот год', yearStart, nextYear], ['Свой период', null, null],
   ];
-  let current = 0;
+  let current = Math.min(parseInt(store.get('stats_period', '0'), 10) || 0, periods.length - 2); // свой период не запоминаем
   const custom = { from: addDays(t, -30), to: t };
   const scope = { value: 'current' };
   const content = h('div', { class: 'stack' });
@@ -2396,7 +2431,7 @@ async function viewStats(main) {
   const seg = h('div', { class: 'seg', style: { flexWrap: 'wrap' } });
   const drawSeg = () => {
     seg.innerHTML = '';
-    periods.forEach(([l], i) => seg.append(h('button', { class: i === current ? 'on' : '', onclick: () => { current = i; drawSeg(); customBox.style.display = i === periods.length - 1 ? 'flex' : 'none'; if (i !== periods.length - 1) load(); } }, l)));
+    periods.forEach(([l], i) => seg.append(h('button', { class: i === current ? 'on' : '', onclick: () => { current = i; if (i < periods.length - 1) store.set('stats_period', String(i)); drawSeg(); customBox.style.display = i === periods.length - 1 ? 'flex' : 'none'; if (i !== periods.length - 1) load(); } }, l)));
   };
   drawSeg();
   const fromInp = h('input', { class: 'input', type: 'date', value: custom.from, style: { width: '150px' }, onchange: (e) => { custom.from = e.target.value; load(); } });
@@ -2775,7 +2810,7 @@ async function viewExpenses(main) {
   const drawTabs = () => {
     tabs.innerHTML = '';
     Object.values(FLOW).forEach((f) => tabs.append(h('button', { class: f === cfg ? 'on' : '', onclick: () => {
-      cfg = f; state.financeKind = f.kind; filters.category_id = ''; quickCat = null; drawTabs(); csvBtn.lastChild.textContent = ' CSV'; run();
+      cfg = f; state.financeKind = f.kind; store.set('finance_kind', f.kind); filters.category_id = ''; quickCat = null; drawTabs(); csvBtn.lastChild.textContent = ' CSV'; run();
     } }, f.tab)));
   };
   const flowQuery = () => ({
@@ -2933,7 +2968,7 @@ function addPropertyDrawer() {
         h('input', { class: 'input', type, value: t[key], min: type === 'number' ? 0 : null, oninput: (e) => { t[key] = e.target.value; } }));
       list.append(h('div', { class: 'type-row' }, inp('name', 'Категория'), inp('count', 'Номеров', 'number'),
         inp('capacity', 'Гостей', 'number'), inp('base_price', 'Цена за ночь', 'number'),
-        h('button', { class: 'btn icon ghost del', type: 'button', title: 'Убрать категорию', disabled: types.length === 1,
+        h('button', { class: 'btn icon ghost del', type: 'button', title: 'Убрать категорию', 'aria-label': 'Убрать категорию', disabled: types.length === 1,
           onclick: () => { types.splice(i, 1); drawTypes(); } }, icon('close'))));
     });
   };
@@ -3311,13 +3346,17 @@ async function viewNotifications(main) {
 }
 
 // ---------- профиль ----------
+// Шапка печатных документов: знак, название объекта, адрес и телефон
+const letterhead = (name, line2) => h('div', { class: 'letterhead' }, h('span', { class: 'lh-mark' }, '◆'),
+  h('div', {}, h('b', {}, name), line2 ? h('div', { class: 'lh-sub' }, line2) : null));
+
 // Печать выбранного блока страницы: копия кладётся в #print-sheet, остальное приложение при печати скрыто
 function printNode(node) {
   document.getElementById('print-sheet')?.remove();
   const sheet = h('div', { id: 'print-sheet' }, node.cloneNode(true));
   document.body.append(sheet);
+  window.addEventListener('afterprint', () => sheet.remove(), { once: true });
   window.print();
-  setTimeout(() => sheet.remove(), 500);
 }
 
 // ---------- отчёт собственнику ----------
