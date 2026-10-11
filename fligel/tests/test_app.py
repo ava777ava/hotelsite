@@ -1218,6 +1218,11 @@ class LaunchReadinessTests(Base):
         self.book(ctx, ctx["rooms"][0], d(1), d(2))
         o2 = self.client.get("/api/onboarding", headers=ctx["h"]).json()
         self.assertEqual(o2["done"], o["done"] + 1)
+        # «Запуск за 15 минут»: у каждого шага своё время, и оставшееся время уменьшается по мере настройки
+        self.assertEqual(o["total"], len(o["steps"]))
+        self.assertTrue(14 <= o["minutes_total"] <= 17)
+        self.assertEqual(o["minutes_left"] - o2["minutes_left"], 2)
+        self.assertTrue(all(s["minutes"] > 0 for s in o["steps"]))
         me = self.client.get("/api/me", headers=ctx["h"]).json()
         self.assertEqual(me["plan"], "trial")
         self.assertEqual(me["trial_ends"], (date.today() + timedelta(days=14)).isoformat())

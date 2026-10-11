@@ -242,17 +242,24 @@ def onboarding(c: Ctx):
         slug = one(conn, "SELECT public_slug FROM properties WHERE account_id = %s AND booking_enabled"
                          " ORDER BY created_at LIMIT 1", (c.account_id,))
         expenses = n("SELECT count(*) AS n FROM expenses WHERE account_id = %s")
+        direct = n("SELECT count(*) AS n FROM bookings WHERE account_id = %s AND source = 'direct'")
+        messengers = one(conn, "SELECT (SELECT count(*) FROM telegram_links WHERE account_id = %s AND chat_id IS NOT NULL)"
+                               " + (SELECT count(*) FROM max_links WHERE account_id = %s AND chat_id IS NOT NULL) AS n", (c.account_id, c.account_id))["n"]
     steps = [
-        {"key": "rooms", "title": "Добавить номера", "done": rooms > 0, "route": "settings"},
-        {"key": "prices", "title": "Настроить цены на даты (выходные, сезон)", "done": rates > 0, "route": "rates"},
-        {"key": "booking", "title": "Создать первую бронь в шахматке", "done": bookings > 0, "route": "board"},
+        {"key": "rooms", "title": "Добавить номера", "done": rooms > 0, "route": "settings", "minutes": 3},
+        {"key": "prices", "title": "Настроить цены на даты (выходные, сезон)", "done": rates > 0, "route": "rates", "minutes": 2},
+        {"key": "booking", "title": "Создать первую бронь в шахматке", "done": bookings > 0, "route": "board", "minutes": 2},
         {"key": "channels", "title": "Подключить календарь Авито, Яндекса или другой площадки", "done": feeds > 0,
-         "route": "channels"},
-        {"key": "staff", "title": "Добавить администратора или горничную", "done": staff > 0, "route": "settings"},
+         "route": "channels", "minutes": 3},
+        {"key": "site", "title": "Отправить гостям ссылку на страницу бронирования — первая заявка с сайта", "done": direct > 0, "route": "settings", "minutes": 1},
+        {"key": "notify", "title": "Подключить уведомления в Telegram или MAX", "done": messengers > 0, "route": "notifications", "minutes": 2},
+        {"key": "staff", "title": "Добавить администратора или горничную", "done": staff > 0, "route": "settings", "minutes": 2},
         {"key": "expenses", "title": "Записать первый расход — отчёты посчитают прибыль", "done": expenses > 0,
-         "route": "expenses"},
+         "route": "expenses", "minutes": 1},
     ]
+    left = sum(st["minutes"] for st in steps if not st["done"])
     return {"steps": steps, "done": sum(1 for s in steps if s["done"]), "total": len(steps),
+            "minutes_total": sum(st["minutes"] for st in steps), "minutes_left": left,
             "booking_page_slug": slug["public_slug"] if slug else None}
 
 

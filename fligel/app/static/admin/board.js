@@ -7,14 +7,35 @@ import { rateDrawer } from './rates.js';
 import { count, holidayName, skeleton, SOURCE_ABBR } from './ui.js';
 
 // «Быстрый старт»: чек-лист для нового аккаунта на шахматке, пока не всё настроено
+// Первый вход: три коротких экрана «что здесь есть и с чего начать» (показываются один раз на сотрудника)
+function welcomeTour(o) {
+  const key = `welcome_${state.me.id}`;
+  if (store.get(key) || o.done > 1 || state.me.is_demo) return;
+  const slides = [
+    ['Добро пожаловать во «Флигель»', 'Здесь все брони — с Авито, Яндекса, сайта и ручные — в одной шахматке. Занять номер дважды система не даст: защита работает на уровне базы данных.'],
+    ['С чего начать: около 15 минут', `Под шахматкой — чек-лист «Запуск за 15 минут»: номера и цены, первая бронь, календари площадок, уведомления. Он ведёт шаг за шагом и показывает, сколько осталось (сейчас ~${o.minutes_left} мин).`],
+    ['Рутину можно отдать автопилоту', 'Готовые сценарии пишут гостю инструкцию перед заездом, напоминают об оплате и отмечают уборку. Всё включается и выключается в разделе «Автопилот». Подсказки — в «Справке» в меню.'],
+  ];
+  let i = 0;
+  const draw = () => {
+    const [title, text] = slides[i];
+    const last = i === slides.length - 1;
+    openModal(title, h('div', {}, h('p', { style: { fontSize: '16px', lineHeight: '1.55' } }, text), h('div', { class: 'muted small' }, `${i + 1} из ${slides.length}`)),
+      [h('button', { class: 'btn ghost', onclick: () => { store.set(key, '1'); closeModal(true); } }, 'Пропустить'), h('span', { class: 'spacer' }),
+        h('button', { class: 'btn primary', onclick: () => { if (last) { store.set(key, '1'); closeModal(); } else { i += 1; draw(); } } }, last ? 'Начать' : 'Дальше')]);
+  };
+  draw();
+}
+
 export async function drawOnboarding(box) {
   let o;
   try { o = await api('GET', '/api/onboarding'); } catch { return; }
+  welcomeTour(o);
   if (o.done >= o.total) return;
   const bookingUrl = o.booking_page_slug ? `${location.origin}/book/${o.booking_page_slug}` : null;
   const next = o.steps.find((st) => !st.done);
   box.append(h('div', { class: 'card card-pad onboard' },
-    h('div', { class: 'onboard-head' }, h('div', {}, h('h3', {}, 'Быстрый старт'), h('div', { class: 'muted small' }, `Настроено ${o.done} из ${o.total} — так сервис начнёт приносить пользу сразу`)),
+    h('div', { class: 'onboard-head' }, h('div', {}, h('h3', {}, 'Запуск за 15 минут'), h('div', { class: 'muted small' }, `Сделано ${o.done} из ${o.total}${o.minutes_left ? `, осталось около ${o.minutes_left} мин` : ''} — так сервис начнёт приносить пользу сразу`)),
       h('button', { class: 'btn small ghost', onclick: () => { store.set('onboardHidden', '1'); box.innerHTML = ''; } }, 'Скрыть')),
     h('div', { class: 'bar-h', style: { margin: '10px 0 12px' } }, h('i', { style: { width: `${(o.done / o.total) * 100}%`, background: 'var(--pine)' } })),
     next ? h('a', { class: 'btn primary onboard-next', href: `#/${next.route}` }, `Дальше: ${next.title}`, icon('right')) : null,
