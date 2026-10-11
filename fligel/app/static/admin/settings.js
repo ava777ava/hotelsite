@@ -176,6 +176,25 @@ export function planDialog(typeId, plan, onDone) {
 }
 
 // ---------- настройки ----------
+// Диалог номера: название, постоянный код двери (подставляется в сообщения гостю как {код двери}), удаление
+function roomDialog(r, onDone) {
+  const name = h('input', { class: 'input', value: r.name, maxlength: 50 });
+  const code = h('input', { class: 'input', value: r.door_code || '', maxlength: 100, autocomplete: 'off', placeholder: 'Например, 4821#' });
+  openModal(`Номер ${r.name}`, h('div', {},
+    h('label', { class: 'field' }, h('span', {}, 'Название или номер'), name),
+    h('label', { class: 'field' }, h('span', {}, 'Постоянный код двери или сейфа'), code),
+    h('div', { class: 'muted small' }, 'Если у брони свой код, в сообщении будет он. Горничной код не показывается.')),
+  [h('button', { class: 'btn danger', onclick: async () => {
+    if (!confirm(`Удалить номер ${r.name}? Брони этого номера тоже удалятся.`)) return;
+    try { await api('DELETE', `/api/rooms/${r.id}`); closeModal(); onDone(); } catch (ex) { toast(ex.message, true); }
+  } }, 'Удалить'), h('span', { class: 'spacer' }), h('button', { class: 'btn', onclick: () => closeModal() }, 'Отмена'),
+  h('button', { class: 'btn primary', onclick: async () => {
+    if (!name.value.trim()) { toast('Укажите название номера', true); return; }
+    try { await api('PATCH', `/api/rooms/${r.id}`, { name: name.value.trim(), door_code: code.value }); closeModal(); toast('Сохранено'); onDone(); }
+    catch (ex) { toast(ex.message, true); }
+  } }, 'Сохранить')]);
+}
+
 export async function viewSettings(main) {
   const content = h('div', { class: 'stack' });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Настройки')), content);
@@ -241,15 +260,7 @@ export async function viewSettings(main) {
     typesCard.append(h('table', { class: 'list' }, h('tbody', {}, prop.room_types.map((t) => h('tr', {},
       h('td', { style: { width: '32%' } }, h('b', {}, t.name), h('div', { class: 'muted small' }, `до ${t.capacity} гостей · ${fmtMoney(t.base_price)} · от ${t.min_stay} ${nightsWord(t.min_stay)}`)),
       h('td', {}, h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
-        t.rooms.map((r) => h('button', { class: 'btn small', title: 'Переименовать или удалить', onclick: async () => {
-          const name = prompt(`Номер ${r.name}: новое название (оставьте пустым, чтобы удалить номер)`, r.name);
-          if (name === null) return;
-          try {
-            if (name.trim() === '') { if (confirm(`Удалить номер ${r.name}?`)) await api('DELETE', `/api/rooms/${r.id}`); }
-            else await api('PATCH', `/api/rooms/${r.id}`, { name });
-            load();
-          } catch (ex) { toast(ex.message, true); }
-        } }, r.name)),
+        t.rooms.map((r) => h('button', { class: 'btn small', title: 'Название, код двери, удаление', onclick: () => roomDialog(r, load) }, r.name, r.door_code ? ' 🔑' : '')),
         h('button', { class: 'btn small ghost', onclick: async () => {
           const name = prompt('Название или номер комнаты'); if (!name) return;
           try { await api('POST', '/api/rooms', { room_type_id: t.id, name }); load(); } catch (ex) { toast(ex.message, true); }

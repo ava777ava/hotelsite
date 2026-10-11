@@ -15,6 +15,7 @@ import { viewProfile } from './profile.js';
 import { viewRates } from './rates.js';
 import { viewStats } from './reports.js';
 import { viewSettings } from './settings.js';
+import { viewTasks } from './tasks.js';
 import { viewToday } from './today.js';
 import { hooks } from './core.js';
 
@@ -22,6 +23,7 @@ export const ROUTES = {
   board: { title: 'Шахматка', icon: 'board', view: viewBoard, landlord: true },
   today: { title: 'Сегодня', icon: 'today', view: viewToday },
   cleaning: { title: 'Уборка', icon: 'clean', view: viewCleaning },
+  tasks: { title: 'Задачи', icon: 'tasks', view: viewTasks },
   bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager' },
   guests: { title: 'Гости', icon: 'users', view: viewGuests, role: 'manager' },
   rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager' },
@@ -37,7 +39,7 @@ export const ROUTES = {
 };
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
 export const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
-export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
+export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
 export const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 export const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 
@@ -82,11 +84,11 @@ export async function boot() {
 // Счётчики в меню (заявки с сайта, конфликты площадок) и автообновление экранов: два сотрудника
 // работают одновременно, и новая бронь/заявка должна появиться у другого без перезагрузки страницы.
 export async function refreshBadges() {
-  if (!state.me || !can('manager')) return;
+  if (!state.me || state.me.role === 'landlord') return;
   try {
     const b = await api('GET', '/api/badges');
-    state.requests = b.requests; state.conflicts = b.conflicts; updateTitle();
-    try { state.bell = (await api('GET', '/api/notifications')).unread; } catch { /* колокольчик необязателен */ }
+    state.requests = b.requests; state.conflicts = b.conflicts; state.tasks = b.tasks || 0; updateTitle();
+    if (can('manager')) try { state.bell = (await api('GET', '/api/notifications')).unread; } catch { /* колокольчик необязателен */ }
     document.querySelectorAll('[data-bell]').forEach((el) => { el.textContent = state.bell || ''; el.style.display = state.bell ? '' : 'none'; });
     document.querySelectorAll('[data-badge]').forEach((el) => {
       const n = state[el.dataset.badge] || 0;
@@ -178,7 +180,7 @@ export function guestSearchDrawer() {
 export function layout(route, main) {
   const visible = Object.entries(ROUTES).filter(([, d]) => routeVisible(d));
   if (state.me.role === 'landlord') visible.sort((a, b2) => LANDLORD_ORDER.indexOf(a[0]) - LANDLORD_ORDER.indexOf(b2[0]));
-  const BADGE = { bookings: 'requests', channels: 'conflicts' };
+  const BADGE = { bookings: 'requests', channels: 'conflicts', tasks: 'tasks' };
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
     BADGE[key] ? h('span', { class: 'badge', 'data-badge': BADGE[key], style: { display: state[BADGE[key]] ? '' : 'none' } }, state[BADGE[key]] || 0) : null);
   const prop = state.me.properties.find((p) => p.id === state.propertyId);
@@ -187,7 +189,9 @@ export function layout(route, main) {
   const sideSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { color: '#C3CCC0' }, onclick: guestSearchDrawer }, icon('search')) : null;
   const mobileSearchBtn = can('manager') ? h('button', { class: 'btn icon ghost', title: 'Поиск гостя', 'aria-label': 'Поиск гостя', style: { color: '#fff' }, onclick: guestSearchDrawer }, icon('search')) : null;
   // На телефоне в нижней панели помещается 5 пунктов: четыре главных и «Ещё» со всеми остальными разделами.
-  const ordered = (state.me.role === 'landlord' ? LANDLORD_ORDER : MOBILE_ORDER).map((k) => visible.find(([v]) => v === k)).filter(Boolean);
+  // горничной задачи важнее броней: они идут сразу после уборки
+  const order = state.me.role === 'landlord' ? LANDLORD_ORDER : (state.me.role === 'housekeeper' ? MOBILE_ORDER.filter((k) => k !== 'tasks').flatMap((k) => (k === 'cleaning' ? [k, 'tasks'] : [k])) : MOBILE_ORDER);
+  const ordered = order.map((k) => visible.find(([v]) => v === k)).filter(Boolean);
   const mainItems = ordered.length <= 5 ? ordered : ordered.slice(0, 4);
   const rest = ordered.slice(mainItems.length);
   const moreBtn = rest.length ? h('button', { class: 'more-btn' + (rest.some(([k]) => k === route) ? ' active' : ''), onclick: () => moreSheet(rest, route) },

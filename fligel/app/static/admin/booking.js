@@ -422,6 +422,7 @@ export async function bookingDrawer(b, onSaved) {
       isNew ? inp('paid_amount', 'Предоплата, ₽', { money: true, type: 'number', min: 0, value: 0, oninput: updateTotal }) : h('div')),
     isNew ? h('label', { class: 'field', style: { display: 'none' }, 'data-prepay': '1' }, h('span', {}, 'Как оплачена предоплата'), f.pay_method = h('select', { class: 'input' }, Object.entries(PAY_METHOD).map(([k, l]) => h('option', { value: k }, l)))) : null,
     h('label', { class: 'field' }, h('span', {}, 'Источник'), f.source),
+    inp('door_code', 'Код двери или сейфа для гостя', { maxlength: 100, autocomplete: 'off', placeholder: 'Подставляется в сообщения как {код двери}' }),
     planField,
     h('div', { class: 'summary' }, nightsEl, totalEl), breakdownEl,
     isNew || status.value === 'blocked' ? null : moneyBlock(b, (m) => { b.total_price = m.total; b.paid_amount = m.paid; b.updated_at = m.updated_at; f.total_price.value = Math.round(Number(m.total)); priceTouched = true; updateTotal(); }));
@@ -460,7 +461,7 @@ export async function bookingDrawer(b, onSaved) {
     };
     if (status.value !== 'blocked') Object.assign(payload, {
       guest_name: f.guest_name.value, guest_phone: f.guest_phone.value, guest_email: f.guest_email.value,
-      guests_count: f.guests_count.value || 1, total_price: f.total_price.value, source: f.source.value,
+      guests_count: f.guests_count.value || 1, total_price: f.total_price.value, source: f.source.value, door_code: f.door_code.value,
     });
     if (isNew && f.paid_amount) { payload.paid_amount = f.paid_amount.value || 0; payload.payment_method = f.pay_method.value; }
     if (isNew && f.rate_plan_id.value && status.value !== 'blocked') payload.rate_plan_id = f.rate_plan_id.value;

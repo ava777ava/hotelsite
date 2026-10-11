@@ -96,7 +96,7 @@ def list_tasks(c: Ctx):
                            " count(*) FILTER (WHERE done_at IS NULL AND due_date = current_date) AS today"
                            " FROM tasks WHERE account_id = %s" + ("" if staff_view else " AND (assignee_id = %s OR assignee_id IS NULL)"),
                      (c.account_id,) if staff_view else (c.account_id, c.p.user_id))
-        staff = all_(conn, "SELECT id, name, role FROM users WHERE account_id = %s ORDER BY name", (c.account_id,)) if staff_view else []
+        staff = all_(conn, "SELECT id, name, role FROM users WHERE account_id = %s AND role <> 'landlord' ORDER BY name", (c.account_id,)) if staff_view else []
         rooms = all_(conn, "SELECT r.id, r.name, p.name AS property_name FROM rooms r JOIN properties p ON p.id = r.property_id"
                            " WHERE r.account_id = %s ORDER BY p.created_at, r.sort_order, r.name", (c.account_id,)) if staff_view else []
     return {"items": items, "counts": counts, "staff": staff, "rooms": rooms, "recurrence": RECURRENCE, "me": c.p.user_id}
