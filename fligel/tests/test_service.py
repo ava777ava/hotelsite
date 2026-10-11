@@ -294,5 +294,72 @@ class PublicSiteTests(Base):
             self.assertIn(needle, book)
 
 
+class BackupVerifyTests(Base):
+    """deploy/verify_backup.sh: настоящий pg_dump → восстановление во временную базу → результат в /health."""
+
+    def setUp(self):
+        import shutil
+        if not (shutil.which("pg_dump") and shutil.which("psql") and shutil.which("gzip")):
+            self.skipTest("нет pg_dump/psql в окружении")
+
+    def run_script(self, tmp, name=None):
+        import os
+        import subprocess
+        from pathlib import Path
+        script = Path(__file__).resolve().parent.parent / "deploy" / "verify_backup.sh"
+        env = {**os.environ, "DATABASE_URL": os.environ["DATABASE_URL"], "FLIGEL_BACKUP_DIR": str(tmp)}
+        return subprocess.run(["bash", str(script)] + ([name] if name else []), capture_output=True, text=True, env=env, timeout=120)
+
+    def temp_dbs(self):
+        with db.tx() as conn:
+            return [r["datname"] for r in db.all_(conn, "SELECT datname FROM pg_database WHERE datname LIKE 'fligel_verify_%'")]
+
+    def test_good_corrupt_and_empty_backups(self):
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        self.register("bk1@example.ru")
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            dump = subprocess.run(f'pg_dump "{os.environ["DATABASE_URL"]}" | gzip > "{tmp}/fligel_2030-01-01_03-00-00.sql.gz"', shell=True, capture_output=True, text=True)
+            self.assertEqual(dump.returncode, 0, dump.stderr)
+            r = self.run_script(tmp)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+            self.assertIn("OK: восстановлен", r.stdout)
+            self.assertEqual(self.temp_dbs(), [])                                      # временная база удалена
+            hc = self.client.get("/health").json()["backup_check"]
+            self.assertTrue(hc["ok"])
+            self.assertFalse(hc["stale"])
+            self.assertGreaterEqual(hc["accounts"], 1)
+            self.assertIn("fligel_2030-01-01_03-00-00.sql.gz", hc["file"])
+            # повреждённый файл
+            bad = tmp / "fligel_2030-01-02_03-00-00.sql.gz"
+            bad.write_bytes(b"this is not gzip at all")
+            r = self.run_script(tmp)
+            self.assertEqual(r.returncode, 1)
+            self.assertIn("повреждён", r.stdout)
+            hc = self.client.get("/health").json()["backup_check"]
+            self.assertFalse(hc["ok"])
+            self.assertIn("повреждён", hc["message"])
+            # пустой файл
+            bad.write_bytes(b"")
+            self.assertIn("пустой", self.run_script(tmp).stdout)
+            # нет бэкапов вообще
+            with tempfile.TemporaryDirectory() as empty:
+                r = self.run_script(Path(empty))
+                self.assertEqual(r.returncode, 1)
+                self.assertIn("нет файла бэкапа", r.stdout)
+            self.assertEqual(self.temp_dbs(), [])
+        # давность результата: старше 10 дней — stale
+        with db.tx() as conn:
+            import json as _j
+            row = db.one(conn, "SELECT value FROM service_state WHERE key = 'backup_check'")
+            v = _j.loads(row["value"]); v["at"] = "2020-01-01T00:00:00Z"
+            db.run(conn, "UPDATE service_state SET value = %s WHERE key = 'backup_check'", (_j.dumps(v),))
+        self.assertTrue(self.client.get("/health").json()["backup_check"]["stale"])
+        self.assertEqual(self.client.get("/health").status_code, 200)               # на «здоров» это не влияет
+
+
 if __name__ == "__main__":
     unittest.main()

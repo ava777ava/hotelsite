@@ -111,6 +111,25 @@ async def not_found(request: Request, exc: StarletteHTTPException):
                 status_code=exc.status_code)
 
 
+def _backup_check() -> dict | None:
+    """Результат еженедельной проверки восстановления бэкапа (deploy/verify_backup.sh). Информационное поле: на статус «здоров» не влияет —
+    но если проверка не проходила дольше 10 дней или упала, `stale`/`ok` покажут это при просмотре /health."""
+    import json
+    from datetime import datetime, timezone
+    try:
+        with db.tx() as conn:
+            row = db.one(conn, "SELECT value FROM service_state WHERE key = 'backup_check'")
+        if not row:
+            return {"ok": None, "stale": True, "message": "проверка бэкапа ещё не выполнялась"}
+        data = json.loads(row["value"])
+        at = datetime.fromisoformat(data["at"].replace("Z", "+00:00"))
+        data["age_days"] = (datetime.now(timezone.utc) - at).days
+        data["stale"] = data["age_days"] > 10
+        return data
+    except Exception:
+        return None
+
+
 def health(request: Request):
     """Для мониторинга и docker-compose healthcheck: проверяет БД и живость планировщика
     синхронизации площадок (не завис ли фоновый поток). Отдаёт 503, если что-то не так —
@@ -123,7 +142,7 @@ def health(request: Request):
         db_ok = False
     scheduler_ok = sync.scheduler_alive()
     body = {"ok": db_ok and scheduler_ok, "db": db_ok,
-            "scheduler": scheduler_ok if config.SYNC_ENABLED else None}
+            "scheduler": scheduler_ok if config.SYNC_ENABLED else None, "backup_check": _backup_check() if db_ok else None}
     return Json(body, status_code=200 if body["ok"] else 503)
 
 

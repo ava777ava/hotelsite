@@ -87,9 +87,10 @@ else
 fi
 
 echo "==> Настраиваю ежедневный бэкап (cron, 03:00, хранится последних 14)…"
-chmod +x deploy/backup.sh deploy/restore.sh
+chmod +x deploy/backup.sh deploy/restore.sh deploy/verify_backup.sh
 CRON_LINE="0 3 * * * cd $REPO_DIR && ./deploy/backup.sh >> /var/log/fligel-backup.log 2>&1"
-( crontab -l 2>/dev/null | grep -vF "deploy/backup.sh" ; echo "$CRON_LINE" ) | crontab -
+VERIFY_LINE="0 4 * * 0 cd $REPO_DIR && ./deploy/verify_backup.sh >> /var/log/fligel-backup.log 2>&1"
+( crontab -l 2>/dev/null | grep -vF "deploy/backup.sh" | grep -vF "deploy/verify_backup.sh" ; echo "$CRON_LINE" ; echo "$VERIFY_LINE" ) | crontab -
 touch /var/log/fligel-backup.log
 
 cat > /etc/logrotate.d/fligel-backup <<'ROTATE'
