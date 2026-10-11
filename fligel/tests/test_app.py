@@ -1715,9 +1715,21 @@ class LandingAndLegalTests(unittest.TestCase):
         r = self.client.get("/app/")
         self.assertEqual(r.status_code, 200)
         # SPA грузит логику из app.js — проверяем, что ссылки на юридические страницы там есть
-        js = self.client.get("/static/admin/app.js").text
+        js = self.client.get("/static/admin/auth.js").text
         for path in ("/legal/privacy", "/legal/pdn-consent", "/legal/terms"):
             self.assertIn(path, js)
+
+    def test_service_worker_precaches_every_ui_module(self):
+        # интерфейс разделён на ES-модули; офлайн-режим работает, только если все они в кэше оболочки
+        import pathlib
+        sw = self.client.get("/sw.js").text
+        names = sorted(p.name for p in (pathlib.Path(__file__).resolve().parent.parent / "app/static/admin").glob("*.js"))
+        self.assertGreaterEqual(len(names), 18)
+        for name in names:
+            self.assertIn(f"/static/admin/{name}", sw)
+        # и каждый модуль реально отдаётся сервером
+        for name in names:
+            self.assertEqual(self.client.get(f"/static/admin/{name}").status_code, 200)
 
 
 class ImportTests(Base):

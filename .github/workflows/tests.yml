@@ -35,6 +35,6 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Проверка синтаксиса интерфейса
         run: |
-          for f in app/static/admin/app.js; do node --check "$f"; done
+          for f in app/static/admin/*.js app/static/sw.js; do node --check "$f"; done
       - name: Тесты
         run: python -m unittest discover -s tests -v

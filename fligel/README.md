@@ -72,7 +72,7 @@ app/
   middleware.py      заголовки безопасности и CSP
   admin.py           CLI владельца сервиса: python -m app.admin list|show|stats|suspend|activate|set-plan|reset-password
   demo.py, demo_load.py  демо-данные (12 номеров) и нагрузочные (70 номеров, 2 года)
-  static/admin/      интерфейс (app.js — приложение, ui.js — склонения, даты, поля денег; app.css), static/sw.js — офлайн-режим,
+  static/admin/      интерфейс — ES-модули без сборки: app.js (маршруты, каркас, горячие клавиши, запуск), core.js (api, состояние `G`, окна, помощники), ui.js (склонения, даты, поля денег), по модулю на раздел (board, booking, bookings, guests, cleaning, today, rates, channels, reports, finance, settings, notifications, owner, help, profile, auth); app.css. static/sw.js — офлайн-режим (список файлов оболочки обязан включать все модули — проверяет тест),
                      static/book/ — страница для гостей
   static/landing/, static/legal/  лендинг и юридические черновики
 tests/               сквозные тесты на настоящей PostgreSQL (+ ui_smoke.py — проверка интерфейса в браузере)
@@ -198,7 +198,7 @@ certbot --nginx -d booking.вашдомен.ru
 **Как писать код в этом проекте**
 - Эндпоинт — функция `def name(c: Ctx)` с декоратором `@api("manager")` (минимальная роль; `public=True` — без входа), маршрут добавляется в `routes` модуля. Тело запроса — `c.data`, query — `c.q`, параметры пути — `c.path`, аккаунт — `c.account_id`. Ошибка пользователю — `raise ApiError(422, "текст по-русски")`.
 - SQL — сырой, через `with tx() as conn:` и `one/all_/run`. Если внутри `with tx()` бросить `ApiError`, транзакция откатится — счётчики и журналы, которые должны сохраниться, пишите до выхода из блока и бросайте ошибку снаружи.
-- Фронтенд — один файл `static/admin/app.js`, без сборки. DOM строится через `h(tag, attrs, ...children)`; не передавайте в нативный `append()` массивы или `null` (в странице появится «[object …]») — используйте `h()` или распаковку. Текст из данных вставляйте через `textContent`/`h()`, не через `innerHTML` без экранирования. CSP запрещает внешние ресурсы.
+- Фронтенд — ES-модули `static/admin/*.js`, без сборки (подключаются одним `<script type="module" src=".../app.js">`). Общие изменяемые переменные (открытое окно, данные шахматки и т. п.) живут в объекте `G` из `core.js` — модуль не может присвоить импортированную переменную. `core.js` не импортирует `app.js` (цикл): выход из аккаунта передаётся через `hooks.logout`. Новый раздел = новый модуль + строка в `ROUTES` (app.js) + имя файла в `SHELL_FILES` (sw.js). Проверка необъявленных имён: `eslint --config tests/eslint.config.mjs app/static/admin` (eslint — только у разработчика, в зависимости проекта не входит). DOM строится через `h(tag, attrs, ...children)`; не передавайте в нативный `append()` массивы или `null` (в странице появится «[object …]») — используйте `h()` или распаковку. Текст из данных вставляйте через `textContent`/`h()`, не через `innerHTML` без экранирования. CSP запрещает внешние ресурсы.
 - Деньги — `Decimal`/`numeric`, даты — `date`; «сегодня» берётся по `APP_TIMEZONE`, не по UTC.
 
 **Запуск и проверка**

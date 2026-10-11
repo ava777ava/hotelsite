@@ -1,8 +1,9 @@
 // Служебный скрипт «Флигеля»: приложение открывается без интернета (последняя шахматка, «Сегодня», уборка —
 // только для чтения). Ответы API кладутся в кэш браузера на этом устройстве и стираются при выходе из аккаунта.
-const SHELL = 'fligel-shell-v1';
+const SHELL = 'fligel-shell-v2';
 const API = 'fligel-api-v1';
-const SHELL_FILES = ['/app/', '/static/admin/app.js', '/static/admin/ui.js', '/static/admin/app.css', '/manifest.webmanifest', '/static/icons/icon.svg'];
+// Модули интерфейса (static/admin/*.js) должны быть здесь все — это проверяет тест
+const SHELL_FILES = ['/app/', '/static/admin/app.js', '/static/admin/auth.js', '/static/admin/board.js', '/static/admin/booking.js', '/static/admin/bookings.js', '/static/admin/channels.js', '/static/admin/cleaning.js', '/static/admin/core.js', '/static/admin/finance.js', '/static/admin/guests.js', '/static/admin/help.js', '/static/admin/notifications.js', '/static/admin/owner.js', '/static/admin/profile.js', '/static/admin/rates.js', '/static/admin/reports.js', '/static/admin/settings.js', '/static/admin/today.js', '/static/admin/ui.js', '/static/admin/app.css', '/manifest.webmanifest', '/static/icons/icon.svg'];
 // Только экраны для чтения; всё остальное (изменения, отчёты, экспорт) всегда идёт напрямую на сервер
 const API_READABLE = /^\/api\/(board|today|me|housekeeping|properties\/[0-9a-f-]+|bookings|notifications|badges|landlord\/(board|report|properties))(\?.*)?$/;
 
