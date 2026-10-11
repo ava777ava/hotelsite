@@ -205,7 +205,7 @@ export async function viewExpenses(main) {
       chips.innerHTML = '';
       cats.forEach((c) => chips.append(h('button', {
         type: 'button', class: 'btn small' + (quickCat === c.id ? ' primary' : ''),
-        style: quickCat === c.id ? {} : { borderColor: c.color, color: c.color },
+        style: quickCat === c.id ? {} : { borderColor: c.color },
         onclick: () => { quickCat = c.id; drawChips(); quickSave.disabled = false; },
       }, h('i', { class: 'dot', style: { background: c.color } }), c.name)));
     };
@@ -289,7 +289,7 @@ export async function viewExpenses(main) {
     content.append(h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', {}, cfg.catTitle),
       can('owner') ? h('button', { class: 'btn small', onclick: () => categoryDrawer({ onSaved: load }, cfg) }, icon('plus'), 'Своя категория') : null),
       h('div', { class: 'card-pad', style: { display: 'flex', gap: '8px', flexWrap: 'wrap', paddingTop: '10px' } },
-        cats.map((c) => h('button', { class: 'btn small' + (can('owner') ? '' : ' ghost'), style: { borderColor: c.color, color: c.color },
+        cats.map((c) => h('button', { class: 'btn small' + (can('owner') ? '' : ' ghost'), style: { borderColor: c.color },
           onclick: () => can('owner') && categoryDrawer({ ...c, onSaved: load }, cfg) }, h('i', { class: 'dot', style: { background: c.color } }), c.name))),
       !can('owner') ? h('p', { class: 'muted small card-pad', style: { paddingTop: 0 } }, 'Свои категории добавляет владелец аккаунта.') : null));
 

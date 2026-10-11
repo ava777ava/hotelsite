@@ -35,7 +35,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Проверка синтаксиса интерфейса
         run: |
-          for f in app/static/admin/*.js app/static/sw.js; do node --check "$f"; done
+          for f in app/static/admin/*.js app/static/operator/*.js app/static/sw.js; do node --check "$f"; done
       - name: Клиент PostgreSQL (для проверки восстановления бэкапа)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
       - name: Тесты

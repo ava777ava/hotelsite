@@ -302,3 +302,22 @@ export function printNode(node) {
   window.addEventListener('afterprint', () => sheet.remove(), { once: true });
   window.print();
 }
+
+// Доступность: у каждого поля ввода должна быть подпись для экранного диктора. Если разработчик не дал aria-label,
+// берём заголовок рядом (.field > span), подсказку внутри поля или текст перед полем. Срабатывает после любой перерисовки.
+function nameField(el) {
+  const near = el.closest('.field')?.querySelector(':scope > span')?.textContent
+    || el.closest('label')?.textContent
+    || el.previousElementSibling?.textContent
+    || el.parentElement?.previousElementSibling?.textContent;
+  return (el.getAttribute('placeholder') || el.title || near || '').trim().slice(0, 60);
+}
+function labelFields() {
+  document.querySelectorAll('input:not([type=hidden]):not([type=checkbox]):not([type=radio]):not([aria-label]), select:not([aria-label]), textarea:not([aria-label])').forEach((el) => {
+    if (el.closest('label') || el.getAttribute('aria-labelledby') || (el.id && document.querySelector(`label[for="${el.id}"]`))) return;
+    el.setAttribute('aria-label', nameField(el) || (el.tagName === 'SELECT' ? 'Выбор' : 'Поле ввода'));
+  });
+}
+let labelTimer = 0;
+new MutationObserver(() => { clearTimeout(labelTimer); labelTimer = setTimeout(labelFields, 30); })
+  .observe(document.body, { childList: true, subtree: true });
