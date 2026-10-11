@@ -138,5 +138,133 @@ class DoorCodeTests(StaffMixin, Base):
         self.assertEqual(board["bookings"][0]["door_code"], "1234")
 
 
+class GuestFormTests(StaffMixin, Base):
+    def link(self, ctx, bid, kind):
+        r = self.client.post(f"/api/bookings/{bid}/link", headers=ctx["h"], json={"kind": kind})
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["url"]
+
+    def test_guest_fills_questionnaire_by_secret_link(self):
+        ctx = self.register("form1@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], d(3), d(5), guest="Анна Петрова", guests_count=2).json()
+        url = self.link(ctx, b["id"], "form")
+        self.assertTrue(url.startswith("https://fligel.test/f/"))
+        self.assertEqual(self.link(ctx, b["id"], "form"), url)  # ссылка не меняется
+        token = url.rsplit("/", 1)[1]
+        # страница отдаётся без входа и без индексации
+        page = self.client.get(f"/f/{token}")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("noindex", page.text)
+        self.assertEqual(page.headers["referrer-policy"], "no-referrer")
+        info = self.client.get(f"/api/public/form/{token}").json()
+        self.assertEqual(info["guest"], "Анна")
+        self.assertFalse(info["filled"])
+        self.assertEqual(info["answers"]["guests_count"], 2)
+        self.assertNotIn("phone", str(info["answers"]))
+        r = self.client.post(f"/api/public/form/{token}", json={"arrival_time": "18:30", "guests_count": 3,
+                                                                 "wishes": "Детская кроватка", "car_number": "а123вб  116"})
+        self.assertEqual(r.status_code, 200, r.text)
+        # ответы видны сотруднику в карточке брони, номер машины приведён к виду А123ВБ 116
+        form = self.client.get(f"/api/bookings/{b['id']}/form", headers=ctx["h"]).json()["form"]
+        self.assertEqual((form["arrival_time"], form["guests_count"], form["wishes"], form["car_number"]),
+                         ("18:30", 3, "Детская кроватка", "А123ВБ 116"))
+        self.assertIsNotNone(form["filled_at"])
+        # владельцу пришло уведомление в колокольчик
+        notes = self.client.get("/api/notifications", headers=ctx["h"]).json()
+        self.assertTrue(any("заполнил анкету" in n["text"] for n in notes["items"]))
+        # можно обновить ответы
+        self.assertEqual(self.client.post(f"/api/public/form/{token}", json={"guests_count": 2}).status_code, 200)
+
+    def test_form_link_rejects_garbage_cancelled_and_foreign_access(self):
+        ctx = self.register("form2@example.ru")
+        other = self.register("form2b@example.ru")
+        self.assertEqual(self.client.get("/api/public/form/nonexistent-token").status_code, 404)
+        b = self.book(ctx, ctx["rooms"][0], d(3), d(4)).json()
+        token = self.link(ctx, b["id"], "form").rsplit("/", 1)[1]
+        self.assertEqual(self.client.post(f"/api/public/form/{token}", json={"guests_count": 0}).status_code, 422)
+        self.assertEqual(self.client.post(f"/api/public/form/{token}", json={"guests_count": 99}).status_code, 422)
+        # чужой аккаунт не может ни получить ссылку, ни посмотреть ответы
+        self.assertEqual(self.client.post(f"/api/bookings/{b['id']}/link", headers=other["h"], json={"kind": "form"}).status_code, 404)
+        self.assertEqual(self.client.get(f"/api/bookings/{b['id']}/form", headers=other["h"]).status_code, 404)
+        self.assertEqual(self.client.post(f"/api/bookings/{b['id']}/link", headers=ctx["h"], json={"kind": "passport"}).status_code, 422)
+        # отменённая бронь — ссылка перестаёт работать
+        self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"status": "cancelled"})
+        self.assertEqual(self.client.get(f"/api/public/form/{token}").status_code, 404)
+
+    def test_questionnaire_has_no_passport_fields(self):
+        # 152-ФЗ: анкета не собирает паспортные данные — ни в схеме, ни в странице
+        with db.tx() as conn:
+            cols = {r["column_name"] for r in db.all_(conn, "SELECT column_name FROM information_schema.columns WHERE table_name = 'booking_forms'")}
+        self.assertEqual(cols, {"booking_id", "account_id", "token", "arrival_time", "guests_count", "wishes", "car_number", "filled_at", "created_at"})
+        ctx = self.register("form3@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], d(3), d(4)).json()
+        token = self.link(ctx, b["id"], "form").rsplit("/", 1)[1]
+        page = self.client.get(f"/f/{token}").text.lower()
+        self.assertNotIn("серия", page)
+        self.assertIn("паспортные данные не нужны", page)
+
+    def test_placeholders_create_links_on_demand(self):
+        ctx = self.register("form4@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], d(3), d(4)).json()
+        self.assertIsNone(self.client.get(f"/api/bookings/{b['id']}/form", headers=ctx["h"]).json()["form"])
+        msg = self.client.post(f"/api/bookings/{b['id']}/message", headers=ctx["h"], json={"body": "Анкета: {ссылка на анкету}"}).json()["text"]
+        self.assertIn("https://fligel.test/f/", msg)
+        self.assertIsNotNone(self.client.get(f"/api/bookings/{b['id']}/form", headers=ctx["h"]).json()["form"])
+
+
+class ReviewTests(StaffMixin, Base):
+    def test_review_flow_stats_and_low_rating_alert(self):
+        ctx = self.register("rev1@example.ru")
+        tg = []
+        telegram.send_message = lambda chat, text: tg.append((chat, text))
+        r1, r2 = ctx["rooms"][0], ctx["rooms"][1]
+        past = self.book(ctx, r1, d(-5), d(-3), guest="Иван Смирнов").json()
+        past2 = self.book(ctx, r2, d(-6), d(-4), guest="Ольга Орлова").json()
+        future = self.book(ctx, r1, d(10), d(12)).json()
+        tok = lambda b: self.client.post(f"/api/bookings/{b['id']}/link", headers=ctx["h"], json={"kind": "review"}).json()["url"].rsplit("/", 1)[1]
+        t1, t2, tf = tok(past), tok(past2), tok(future)
+        self.assertEqual(self.client.get(f"/r/{t1}").status_code, 200)
+        info = self.client.get(f"/api/public/review/{t1}").json()
+        self.assertTrue(info["can_review"])
+        self.assertEqual(info["guest"], "Иван")
+        # до заезда отзыв оставить нельзя
+        self.assertEqual(self.client.post(f"/api/public/review/{tf}", json={"rating": 5}).status_code, 422)
+        # оценка 1–5
+        for bad in (0, 6, "", None):
+            self.assertEqual(self.client.post(f"/api/public/review/{t1}", json={"rating": bad}).status_code, 422)
+        self.assertEqual(self.client.post(f"/api/public/review/{t1}", json={"rating": 5, "comment": "Чисто и тихо"}).status_code, 200)
+        before = len(self.client.get("/api/notifications", headers=ctx["h"]).json()["items"])
+        self.assertEqual(self.client.post(f"/api/public/review/{t2}", json={"rating": 2, "comment": "Шумно"}).status_code, 200)
+        items = self.client.get("/api/notifications", headers=ctx["h"]).json()["items"]
+        self.assertEqual(len(items), before + 1)
+        self.assertIn("Низкая оценка 2 из 5", items[0]["text"])
+        # повторная низкая оценка того же гостя не шлёт второе уведомление
+        self.client.post(f"/api/public/review/{t2}", json={"rating": 1, "comment": "Очень шумно"})
+        self.assertEqual(len(self.client.get("/api/notifications", headers=ctx["h"]).json()["items"]), before + 1)
+        st = self.client.get("/api/reviews", headers=ctx["h"]).json()
+        self.assertEqual(st["overall"]["n"], 2)
+        self.assertEqual(float(st["overall"]["avg"]), 3.0)  # (5 + 1) / 2
+        self.assertEqual(st["overall"]["low"], 1)
+        self.assertEqual({x["name"]: float(x["avg"]) for x in st["by_room"]}, {"101": 5.0, "102": 1.0})
+        self.assertEqual(st["by_room"][0]["name"], "102")  # худшие сверху
+        self.assertEqual(st["waiting"], 1)
+        self.assertEqual(st["items"][0]["comment"], "Очень шумно")
+        # у сотрудника в карточке брони виден отзыв
+        rv = self.client.get(f"/api/bookings/{past['id']}/form", headers=ctx["h"]).json()["review"]
+        self.assertEqual((rv["rating"], rv["comment"]), (5, "Чисто и тихо"))
+
+    def test_review_stats_are_per_account_and_manager_only(self):
+        ctx = self.register("rev2@example.ru")
+        other = self.register("rev2b@example.ru")
+        maid = self.staff(ctx, "maid-rev2@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], d(-4), d(-2)).json()
+        tok = self.client.post(f"/api/bookings/{b['id']}/link", headers=ctx["h"], json={"kind": "review"}).json()["url"].rsplit("/", 1)[1]
+        self.client.post(f"/api/public/review/{tok}", json={"rating": 4})
+        self.assertEqual(self.client.get("/api/reviews", headers=other["h"]).json()["overall"]["n"], 0)
+        self.assertEqual(self.client.get("/api/reviews", headers=maid["h"]).status_code, 403)
+        self.assertEqual(self.client.get("/api/reviews", headers=ctx["h"]).json()["overall"]["n"], 1)
+        self.assertEqual(self.client.get("/api/public/review/nope").status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

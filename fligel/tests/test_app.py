@@ -1232,14 +1232,14 @@ class LaunchReadinessTests(Base):
 
     def test_menu_badges_count_site_requests_and_conflicts(self):
         ctx = self.register("launch7@example.ru")
-        self.assertEqual(self.client.get("/api/badges", headers=ctx["h"]).json(), {"requests": 0, "conflicts": 0})
+        self.assertEqual(self.client.get("/api/badges", headers=ctx["h"]).json(), {"requests": 0, "conflicts": 0, "tasks": 0})
         slug, rt = ctx["prop"]["public_slug"], ctx["prop"]["room_types"][0]["id"]
         self.client.post(f"/api/public/{slug}/book", json={"room_type_id": rt, "check_in": d(3), "check_out": d(5), "guest_name": "Ольга", "guest_phone": "+79001234567", "consent": True})
         self.book(ctx, ctx["rooms"][5], d(3), d(5), status="pending")  # ручная неподтверждённая — это не заявка с сайта
         self.assertEqual(self.client.get("/api/badges", headers=ctx["h"]).json()["requests"], 1)
         hh = self.client.post("/api/users", headers=ctx["h"], json={"name": "Оля", "email": "launch7h@example.ru", "role": "housekeeper", "password": "password123"})
         tok = self.client.post("/api/auth/login", json={"email": "launch7h@example.ru", "password": "password123"}).json()["token"]
-        self.assertEqual(self.client.get("/api/badges", headers={"Authorization": f"Bearer {tok}"}).json(), {"requests": 0, "conflicts": 0})
+        self.assertEqual(self.client.get("/api/badges", headers={"Authorization": f"Bearer {tok}"}).json(), {"requests": 0, "conflicts": 0, "tasks": 0})
         with db.tx() as conn:
             self.assertIsNotNone(db.one(conn, "SELECT last_login_at FROM users WHERE lower(email) = 'launch7h@example.ru'")["last_login_at"])
 

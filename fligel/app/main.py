@@ -14,7 +14,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from . import config, db, sync
-from .api import account, bookings, channels, expenses, guests, housekeeping, incomes, money, notify as notify_api, owners, photos, public, reports, tariffs, tasks
+from .api import account, bookings, channels, expenses, guestpages, guests, housekeeping, incomes, money, notify as notify_api, owners, photos, public, reports, tariffs, tasks
 from .api import telegram as telegram_api
 from .middleware import SecurityHeaders
 from .migrate import migrate
@@ -39,6 +39,11 @@ def landing_page(request: Request):
     return FileResponse(STATIC / "landing" / "index.html")
 
 
+def guest_page(request: Request):
+    """Анкета (/f/<токен>) и отзыв (/r/<токен>) — одна страница, тип определяет скрипт по адресу."""
+    return FileResponse(STATIC / "guest" / "index.html", headers={"Referrer-Policy": "no-referrer"})
+
+
 def legal_page(name: str):
     def handler(request: Request):
         return FileResponse(STATIC / "legal" / f"{name}.html")
@@ -57,7 +62,7 @@ def favicon(request: Request):
 
 def robots(request: Request):
     return PlainTextResponse(
-        "User-agent: *\nAllow: /\nDisallow: /app/\nDisallow: /api/\nDisallow: /ical/\n"
+        "User-agent: *\nAllow: /\nDisallow: /app/\nDisallow: /api/\nDisallow: /ical/\nDisallow: /f/\nDisallow: /r/\n"
         f"Sitemap: {config.PUBLIC_BASE_URL}/sitemap.xml\n")
 
 
@@ -125,6 +130,8 @@ routes = [
     Route("/app", lambda r: RedirectResponse("/app/")),
     Route("/app/", admin_page),
     Route("/book/{slug}", booking_page),
+    Route("/f/{token}", guest_page),
+    Route("/r/{token}", guest_page),
     Route("/legal/privacy", legal_page("privacy")),
     Route("/legal/pdn-consent", legal_page("pdn-consent")),
     Route("/legal/terms", legal_page("terms")),
@@ -138,6 +145,7 @@ routes = [
     *bookings.routes,
     *channels.routes,
     *expenses.routes,
+    *guestpages.routes,
     *guests.routes,
     *housekeeping.routes,
     *incomes.routes,

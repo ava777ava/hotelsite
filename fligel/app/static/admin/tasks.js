@@ -10,7 +10,7 @@ function dueLabel(t) {
   if (!t.due_date) return null;
   const days = Math.round((new Date(t.due_date + 'T00:00') - new Date(todayISO() + 'T00:00')) / 86400000);
   if (t.done_at) return `срок был ${fmtDate(t.due_date)}`;
-  if (days < 0) return `просрочено на ${-days} ${plural(-days, 'день', 'дня', 'дней')}`;
+  if (days < 0) return `просрочено на ${-days} ${plural(-days, ['день', 'дня', 'дней'])}`;
   if (days === 0) return 'сегодня';
   if (days === 1) return 'завтра';
   return `до ${fmtDate(t.due_date)}`;

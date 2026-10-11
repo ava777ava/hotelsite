@@ -4,6 +4,37 @@ import { G, SOURCE, addDays, api, can, closeDrawer, closeModal, copyText, diffDa
 import { bindPhone, guestDrawer, messageDialog, phoneActions, phoneDigits } from './guests.js';
 import { plural, count, humanDay, dateRange } from './ui.js';
 
+// ---------- анкета гостя и отзыв ----------
+// Гость отвечает по секретной ссылке (без входа): время приезда, число гостей, машина, пожелания. Паспортные данные не собираем.
+function guestAnswers(b) {
+  const box = h('div', { class: 'answers-box' });
+  const canReview = b.check_in <= todayISO();
+  async function load() {
+    let info;
+    try { info = await api('GET', `/api/bookings/${b.id}/form`); } catch { return; }
+    const link = async (kind) => {
+      try { const r = await api('POST', `/api/bookings/${b.id}/link`, { kind }); copyText(r.url, 'Ссылка скопирована — отправьте её гостю'); load(); }
+      catch (ex) { toast(ex.message, true); }
+    };
+    const f = info.form;
+    const rv = info.review;
+    box.innerHTML = '';
+    box.append(
+      h('div', { class: 'answers-head' }, h('b', {}, 'Анкета гостя'),
+        h('button', { type: 'button', class: 'link', onclick: () => link('form') }, f ? 'Скопировать ссылку' : 'Получить ссылку для гостя')),
+      f && f.filled_at ? h('div', { class: 'answers' },
+        h('div', {}, `Приедет: ${f.arrival_time || 'время не указал'} · гостей: ${f.guests_count || '—'}${f.car_number ? ` · машина ${f.car_number}` : ''}`),
+        f.wishes ? h('div', { class: 'muted' }, `Пожелания: ${f.wishes}`) : null)
+        : h('div', { class: 'muted small' }, f ? 'Гость пока не заполнил анкету.' : 'Отправьте гостю ссылку — он сообщит время приезда, число гостей и пожелания.'),
+      canReview ? h('div', { class: 'answers-head', style: { marginTop: '8px' } }, h('b', {}, 'Отзыв'),
+        h('button', { type: 'button', class: 'link', onclick: () => link('review') }, rv ? 'Скопировать ссылку' : 'Получить ссылку на отзыв')) : null,
+      rv && rv.submitted_at ? h('div', { class: 'answers' }, h('span', { class: `pill ${rv.rating <= 3 ? 'bad' : 'ok'}` }, `${rv.rating} из 5`),
+        rv.comment ? h('span', { class: 'muted' }, ` ${rv.comment}`) : null) : null);
+  }
+  load();
+  return box;
+}
+
 // ---------- карточка брони ----------
 export function allRooms() {
   if (!G.boardData) return [];
@@ -416,6 +447,7 @@ export async function bookingDrawer(b, onSaved) {
       isNew ? null : h('button', { type: 'button', class: 'btn small ghost', onclick: () => printInvoice(b) }, 'Счёт'),
       !isNew && !readOnly && !imported && ['confirmed', 'pending'].includes(b.status) && diffDays(b.check_in, b.check_out) > 1 ? h('button', { type: 'button', class: 'btn small ghost', onclick: () => relocateDialog(b, rooms, onSaved) }, 'Переселить') : null),
     guestHistoryBox,
+    isNew || readOnly || !can('manager') ? null : guestAnswers(b),
     h('div', { class: 'row3' },
       inp('guests_count', 'Гостей', { type: 'number', min: 1, value: b.guests_count || 1, oninput: () => requote() }),
       inp('total_price', 'Стоимость, ₽', { money: true, type: 'number', min: 0, value: b.total_price != null ? Math.round(b.total_price) : '', oninput: () => { priceTouched = true; updateTotal(); } }),

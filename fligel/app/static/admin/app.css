@@ -134,6 +134,7 @@ textarea.input { height: auto; min-height: 72px; padding: 9px 11px; resize: vert
 
 .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; }
 .card-pad { padding: 18px 20px; }
+.card-pad { padding: 12px 18px 16px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
 .grid-2 > * { min-width: 0; }
@@ -708,3 +709,17 @@ kbd { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; background: v
 .task-body { min-width: 0; flex: 1; overflow-wrap: break-word; }
 .task-body .hk-tags { margin-top: 6px; }
 .task-desc { margin-top: 2px; white-space: pre-line; }
+
+/* ---------- анкета и отзыв в карточке брони ---------- */
+.answers-box { margin-bottom: 14px; padding: 10px 12px; background: var(--surface-2); border-radius: 10px; font-size: 14px; }
+.answers-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.answers { margin-top: 4px; overflow-wrap: break-word; }
+
+/* ---------- отзывы ---------- */
+.dist-row { display: flex; align-items: center; gap: 10px; margin: 6px 0; font-size: 14px; }
+.dist-l { width: 54px; color: var(--muted); } .dist-n { width: 30px; text-align: right; font-variant-numeric: tabular-nums; }
+.dist-bar { flex: 1; height: 12px; background: var(--surface-2); border-radius: 6px; overflow: hidden; }
+.dist-bar i { display: block; height: 100%; background: var(--pine); border-radius: 6px; } .dist-bar i.low { background: var(--clay); }
+.review-item { padding: 10px 0; border-bottom: 1px solid var(--line); } .review-item:last-child { border-bottom: 0; }
+.review-head { display: flex; gap: 8px 10px; align-items: center; flex-wrap: wrap; }
+.review-text { margin-top: 4px; overflow-wrap: break-word; white-space: pre-line; }

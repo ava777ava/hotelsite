@@ -13,6 +13,7 @@ import { bellDrawer, viewNotifications } from './notifications.js';
 import { viewAudit, viewOwnerReport } from './owner.js';
 import { viewProfile } from './profile.js';
 import { viewRates } from './rates.js';
+import { viewReviews } from './reviews.js';
 import { viewStats } from './reports.js';
 import { viewSettings } from './settings.js';
 import { viewTasks } from './tasks.js';
@@ -26,6 +27,7 @@ export const ROUTES = {
   tasks: { title: 'Задачи', icon: 'tasks', view: viewTasks },
   bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager' },
   guests: { title: 'Гости', icon: 'users', view: viewGuests, role: 'manager' },
+  reviews: { title: 'Отзывы', icon: 'stats', view: viewReviews, role: 'manager' },
   rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager' },
   channels: { title: 'Площадки', icon: 'channels', view: viewChannels, role: 'manager' },
   expenses: { title: 'Финансы', icon: 'expenses', view: viewExpenses, role: 'manager' },
@@ -39,7 +41,7 @@ export const ROUTES = {
 };
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
 export const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
-export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'guests', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
+export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'guests', 'reviews', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
 export const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 export const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 
