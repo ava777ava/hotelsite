@@ -46,7 +46,7 @@ def main() -> None:
         if one(conn, "SELECT 1 FROM users WHERE email = 'demo@fligel.ru'"):
             print("Демо-аккаунт уже есть: demo@fligel.ru / demo12345 (также manager@, anna@, landlord@ — пароль тот же)")
             return
-        acc = one(conn, "INSERT INTO accounts (name) VALUES ('Гостиница «Флигель»') RETURNING id")["id"]
+        acc = one(conn, "INSERT INTO accounts (name, plan, is_demo) VALUES ('Гостиница «Флигель»', 'custom', true) RETURNING id")["id"]
         run(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, %s, %s, %s, 'owner')",
             (acc, "demo@fligel.ru", hash_password("demo12345"), "Андрей"))
         for email, uname, role in (("manager@fligel.ru", "Марина (администратор)", "manager"), ("anna@fligel.ru", "Анна (горничная)", "housekeeper")):
@@ -402,3 +402,26 @@ def _seed_autopilot(conn, acc, prop, today) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def reset_if_due(now=None) -> bool:
+    """Ежедневный сброс публичной песочницы: после DEMO_RESET_HOUR один раз в день демо-аккаунт пересоздаётся с чистыми данными.
+    Работает, только если включено DEMO_ENABLED и демо-аккаунт уже создан."""
+    from datetime import datetime
+    from . import config
+    if not config.DEMO_ENABLED:
+        return False
+    now = now or datetime.now()
+    today = now.date().isoformat()
+    with tx() as conn:
+        if now.hour < config.DEMO_RESET_HOUR:
+            return False
+        st = one(conn, "SELECT value FROM service_state WHERE key = 'demo_reset_on'")
+        if st and st["value"] == today:
+            return False
+        run(conn, "INSERT INTO service_state (key, value) VALUES ('demo_reset_on', %s) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()", (today,))
+        had = one(conn, "SELECT 1 FROM accounts WHERE is_demo")
+        run(conn, "DELETE FROM accounts WHERE is_demo")
+    if had:
+        main()
+    return bool(had)

@@ -126,3 +126,9 @@ footer .links { display: flex; gap: 16px; flex-wrap: wrap; }
   .mock-bar { grid-column: span 2; }
   section { padding: 40px 0; }
 }
+
+/* калькулятор экономии */
+.calc-box { max-width: 720px; margin: 0 auto; background: var(--surface, #fff); border: 1px solid var(--border, #DCDFD6); border-radius: 16px; padding: 22px; display: grid; gap: 14px; }
+.calc-box label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 14px; }
+.calc-box input { height: 46px; border: 1px solid var(--border, #DCDFD6); border-radius: 10px; padding: 0 12px; font: inherit; }
+.calc-out { font-size: 18px; line-height: 1.45; padding: 14px 16px; background: var(--pine-soft, #E1EBE6); border-radius: 12px; }

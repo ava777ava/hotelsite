@@ -23,6 +23,8 @@
     <nav>
       <a href="#features">Возможности</a>
       <a href="#pricing">Тарифы</a>
+      <a href="#calc">Расчёт</a>
+      <a href="/blog/">Блог</a>
     </nav>
     <span class="spacer"></span>
     <div class="actions">
@@ -41,6 +43,7 @@
         заявок на своём сайте и уведомления в Telegram.</p>
       <div class="cta">
         <a class="btn primary lg" href="/app/#register">Начать бесплатно на 14 дней</a>
+        <button class="btn ghost lg" id="demo-btn" type="button" hidden>Посмотреть демо без регистрации</button>
         <a class="btn ghost lg" href="#features">Что умеет сервис</a>
       </div>
       <p class="trust">Без банковской карты · Отмена в любой момент · Данные хранятся на серверах в России</p>
@@ -201,6 +204,20 @@
   </div>
 </section>
 
+<section id="calc">
+  <div class="wrap">
+    <div class="section-head">
+      <h2>Сколько вы сэкономите</h2>
+      <p>Введите, сколько платите сейчас за сервис синхронизации календарей и учёта броней, — сравним с тарифом «Флигеля». Цены других сервисов смотрите на их сайтах: мы их не приводим и не угадываем.</p>
+    </div>
+    <div class="calc-box">
+      <label>Сколько у вас объектов размещения<input id="calc-objects" type="number" min="1" max="500" value="3" inputmode="numeric"></label>
+      <label>Сколько платите сейчас, ₽ в месяц (всего)<input id="calc-current" type="number" min="0" step="100" value="3000" inputmode="numeric"></label>
+      <div class="calc-out" id="calc-out" aria-live="polite"></div>
+    </div>
+  </div>
+</section>
+
 <section>
   <div class="wrap">
     <div class="cta-band">
@@ -223,6 +240,38 @@
 </footer>
 
 <script>
+  // Калькулятор: наш тариф по числу объектов и разница с тем, что платит посетитель сейчас
+  (function () {
+    var objs = document.getElementById('calc-objects'), cur = document.getElementById('calc-current'), out = document.getElementById('calc-out');
+    if (!objs || !out) return;
+    var fmt = function (n) { return Math.round(n).toLocaleString('ru-RU') + ' ₽'; };
+    function calc() {
+      var n = Math.max(1, parseInt(objs.value, 10) || 1), now = Math.max(0, parseFloat(cur.value) || 0);
+      var plan = n <= 4 ? ['Старт', 990] : n <= 15 ? ['Бизнес', 2490] : n <= 40 ? ['Профи', 4490] : null;
+      if (!plan) { out.textContent = 'Больше 40 объектов — индивидуальные условия, напишите нам.'; return; }
+      var diff = now - plan[1];
+      var head = 'Тариф «' + plan[0] + '»: ' + fmt(plan[1]) + ' в месяц. ';
+      out.textContent = head + (diff > 0 ? 'Вы платите на ' + fmt(diff) + ' в месяц больше — это ' + fmt(diff * 12) + ' в год.'
+        : diff < 0 ? 'Сейчас вы платите меньше на ' + fmt(-diff) + ' в месяц — но проверьте, есть ли в вашем сервисе финансовые отчёты, задачи и автопилот, которые есть у нас на любом тарифе.'
+        : 'Стоимость одинаковая — сравните возможности.');
+    }
+    objs.addEventListener('input', calc); cur.addEventListener('input', calc); calc();
+  })();
+  // Демо без регистрации: кнопка появляется, только если демо включено на сервере
+  (function () {
+    var btn = document.getElementById('demo-btn');
+    if (!btn) return;
+    fetch('/api/demo/status').then(function (r) { return r.json(); }).then(function (d) {
+      if (!d.enabled) return;
+      btn.hidden = false;
+      btn.addEventListener('click', function () {
+        btn.disabled = true; btn.textContent = 'Открываем демо…';
+        fetch('/api/demo/start', { method: 'POST' }).then(function (r) { return r.json().then(function (x) { if (!r.ok) throw new Error(x.error); return x; }); })
+          .then(function (x) { try { localStorage.setItem('token', x.token); } catch (e) {} location.href = '/app/'; })
+          .catch(function (e) { btn.disabled = false; btn.textContent = 'Посмотреть демо без регистрации'; alert(e.message || 'Демо недоступно'); });
+      });
+    }).catch(function () {});
+  })();
   document.getElementById('year').textContent = new Date().getFullYear();
   // Если посетитель уже входил в систему (есть токен в этом браузере), ведём его сразу в
   // приложение, а не заставляем читать лендинг заново.

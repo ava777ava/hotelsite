@@ -196,5 +196,58 @@ class BillingClientTests(OperatorBase):
         self.assertEqual(r.json()["name"], "Из консоли")
 
 
+class DemoSandboxTests(Base):
+    def setUp(self):
+        self._enabled = config.DEMO_ENABLED
+
+    def tearDown(self):
+        config.DEMO_ENABLED = self._enabled
+
+    def test_demo_start_restrictions_and_daily_reset(self):
+        from datetime import datetime
+        from app import demo, ratelimit
+        ratelimit.reset()
+        config.DEMO_ENABLED = False
+        self.assertEqual(self.client.post("/api/demo/start", json={}).status_code, 404)
+        self.assertFalse(self.client.get("/api/demo/status").json()["enabled"])
+        config.DEMO_ENABLED = True
+        self.assertEqual(self.client.post("/api/demo/start", json={}).status_code, 404)   # демо-аккаунт ещё не создан
+        demo.main()
+        r = self.client.post("/api/demo/start", json={})
+        self.assertEqual(r.status_code, 200, r.text)
+        h = {"Authorization": f"Bearer {r.json()['token']}"}
+        me = self.client.get("/api/me", headers=h).json()
+        self.assertEqual((me["is_demo"], me["role"], me["billing_notice"]), (True, "owner", None))
+        # то, что могло бы навредить другим посетителям или сервису, в демо закрыто
+        for method, path, body in (("post", "/api/auth/change-password", {"current_password": "demo12345", "new_password": "hacked-pass-1"}),
+                                   ("post", "/api/account/delete", {"password": "demo12345", "confirm": "УДАЛИТЬ"}),
+                                   ("get", "/api/account/export", None),
+                                   ("post", "/api/users", {"name": "X", "email": "x@x.ru", "role": "manager", "password": "password123"}),
+                                   ("post", "/api/feeds", {"url": "https://example.com/a.ics"}),
+                                   ("post", "/api/billing/invoices", {"plan": "start"}),
+                                   ("post", "/api/telegram/link", {})):
+            resp = getattr(self.client, method)(path, headers=h, **({"json": body} if body is not None else {}))
+            self.assertEqual(resp.status_code, 403, (path, resp.text))
+            self.assertIn("демо", resp.json()["error"].lower())
+        # а работа с бронями и экраны — открыты
+        board = self.client.get("/api/board", headers=h).json()
+        room = board["room_types"][0]["rooms"][0]
+        mk = self.client.post("/api/bookings", headers=h, json={"room_id": room["id"], "check_in": d(100), "check_out": d(102), "guest_name": "Следы посетителя"})
+        self.assertEqual(mk.status_code, 200, mk.text)
+        # старый пароль демо-аккаунта по-прежнему работает (его никто не мог сменить)
+        self.assertEqual(self.client.post("/api/auth/login", json={"email": "demo@fligel.ru", "password": "demo12345"}).status_code, 200)
+        # сброс: до часа сброса не трогаем, после — пересоздаём с чистыми данными, в тот же день второй раз не сбрасываем
+        self.assertFalse(demo.reset_if_due(datetime(2030, 1, 1, config.DEMO_RESET_HOUR - 1 if config.DEMO_RESET_HOUR else 0, 30)) and config.DEMO_RESET_HOUR > 0)
+        self.assertTrue(demo.reset_if_due(datetime(2030, 1, 1, 12, 0)))
+        self.assertFalse(demo.reset_if_due(datetime(2030, 1, 1, 13, 0)))
+        h2 = {"Authorization": f"Bearer {self.client.post('/api/demo/start', json={}).json()['token']}"}
+        found = self.client.get(f"/api/bookings?from={d(99)}&to={d(104)}", headers=h2).json()
+        self.assertFalse([b for b in found if b["guest_name"] == "Следы посетителя"])
+        self.assertEqual(self.client.get("/api/me", headers=h).status_code, 401)           # прежняя сессия — аккаунт пересоздан
+        # реальные клиенты демо-ограничениям не подвержены
+        real = self.register("realclient@example.ru")
+        self.assertEqual(self.client.post("/api/users", headers=real["h"], json={"name": "М", "email": "m-real@example.ru", "role": "manager", "password": "password123"}).status_code, 200)
+
+
 if __name__ == "__main__":
     unittest.main()

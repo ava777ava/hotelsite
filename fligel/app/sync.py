@@ -317,6 +317,11 @@ def run_once() -> int:
     except Exception:
         log.exception("Сбой автопилота")
     try:
+        from . import demo
+        demo.reset_if_due()
+    except Exception:
+        log.exception("Сбой ежедневного сброса демо")
+    try:
         billing.run_due()
     except Exception:
         log.exception("Сбой напоминаний об оплате")

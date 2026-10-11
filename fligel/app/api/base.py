@@ -15,6 +15,20 @@ from ..util import Json, body
 
 log = logging.getLogger("fligel.api")
 
+# В публичной демо-версии (песочнице) отключено то, что могло бы навредить другим посетителям или сервису:
+# смена пароля, удаление и выгрузка аккаунта, сотрудники, подключение площадок и мессенджеров, счета, ключи API, загрузка файлов
+DEMO_BLOCKED = [("POST", r"^/api/auth/change-password$"), ("POST", r"^/api/account/delete$"), ("GET", r"^/api/account/export$"),
+                ("POST", r"^/api/users$"), ("DELETE", r"^/api/users/"), ("POST", r"^/api/feeds"), ("DELETE", r"^/api/feeds/"),
+                ("PUT", r"^/api/channels/export-mode$"), ("POST", r"^/api/notify/"), ("POST", r"^/api/telegram/(link|unlink)$"),
+                ("POST", r"^/api/billing"), ("POST", r"^/api/keys"), ("DELETE", r"^/api/keys/"), ("POST", r"^/api/webhooks"),
+                ("PATCH", r"^/api/webhooks/"), ("DELETE", r"^/api/webhooks/"), ("POST", r"^/api/room-types/[^/]+/photos$"),
+                ("PATCH", r"^/api/me/preferences$"), ("POST", r"^/api/bookings/[^/]+/message/email$")]
+
+
+def demo_blocked(method: str, path: str) -> bool:
+    import re
+    return any(m == method and re.search(rx, path) for m, rx in DEMO_BLOCKED)
+
 
 @dataclass
 class Ctx:
@@ -46,7 +60,9 @@ def api(min_role: str = "housekeeper", public: bool = False) -> Callable:
                 # Токен может быть ещё действителен, а сотрудника уже удалили или
                 # аккаунт приостановили — проверяем это на каждый запрос, а не только при входе.
                 with tx() as conn:
-                    verify_active(conn, ctx.p)
+                    state = verify_active(conn, ctx.p)
+                if state["is_demo"] and demo_blocked(ctx.request.method, ctx.request.url.path):
+                    raise ApiError(403, "В демо-версии это отключено. Зарегистрируйтесь — и всё заработает на ваших данных")
             return fn(ctx)
 
         async def handler(request: Request) -> Response:
