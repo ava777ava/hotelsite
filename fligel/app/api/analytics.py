@@ -269,6 +269,33 @@ def accountant_csv(c: Ctx):
                     headers={"Content-Disposition": f"attachment; filename=accountant_{start}_{shown_to}.csv"})
 
 
+# ---------- подсказки для главной ----------
+
+def home_hints(conn, account_id, prop_ids: list[str], today: date, days: int = 14, low_percent: int = 30) -> dict:
+    """Что можно улучшить в ближайшие дни: пустые даты (низкая загрузка) и «окна» в одну ночь между бронями номера."""
+    rooms = _rooms_count(conn, prop_ids)
+    low: list[dict] = []
+    if rooms:
+        end = today + timedelta(days=days)
+        busy = {r["day"]: r["n"] for r in all_(
+            conn, "SELECT g::date AS day, count(DISTINCT b.room_id) AS n FROM bookings b JOIN rooms r ON r.id = b.room_id"
+                  " CROSS JOIN LATERAL generate_series(greatest(b.check_in, %s::date), least(b.check_out - 1, %s::date), interval '1 day') g"
+                  " WHERE b.account_id = %s AND r.property_id = ANY(%s::uuid[]) AND b.status IN ('confirmed', 'pending', 'blocked')"
+                  " AND b.check_in < %s AND b.check_out > %s GROUP BY g::date", (today, end - timedelta(days=1), account_id, prop_ids, end, today))}
+        for i in range(days):
+            day = today + timedelta(days=i)
+            occ = round(busy.get(day, 0) * 100 / rooms)
+            if occ < low_percent:
+                low.append({"date": day, "occupancy": occ})
+    gaps = all_(conn, "SELECT r.name AS room_name, a.check_out AS date FROM bookings a JOIN bookings b ON b.room_id = a.room_id AND b.check_in = a.check_out + 1"
+                      " JOIN rooms r ON r.id = a.room_id WHERE a.account_id = %s AND r.property_id = ANY(%s::uuid[])"
+                      " AND a.status IN ('confirmed', 'pending') AND b.status IN ('confirmed', 'pending') AND a.check_out >= %s"
+                      " AND a.check_out < %s AND NOT EXISTS (SELECT 1 FROM bookings x WHERE x.room_id = a.room_id AND x.status = 'blocked'"
+                      " AND x.check_in <= a.check_out AND x.check_out > a.check_out) ORDER BY a.check_out, r.name LIMIT 20",
+                (account_id, prop_ids, today, today + timedelta(days=45)))
+    return {"low_dates": sorted(low, key=lambda x: (x["occupancy"], x["date"]))[:6], "low_total": len(low), "days": days, "gaps": gaps}
+
+
 routes = [
     Route("/api/analytics/forecast", forecast),
     Route("/api/analytics/pace", pace),

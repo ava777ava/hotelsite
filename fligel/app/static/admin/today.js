@@ -73,6 +73,22 @@ export async function viewToday(main) {
 }
 
 // Главное за минуту: что требует внимания и итог месяца на сегодня (вверху страницы «Сегодня» у владельца и администратора)
+// Подсказки: пустые даты и «окна» в одну ночь — с переходом к ценам
+function hintsCard(hn) {
+  const rows = [];
+  if (hn.low_dates.length) {
+    const list = [...hn.low_dates].sort((x, y) => (x.date < y.date ? -1 : 1)).slice(0, 4).map((x) => `${fmtShort(x.date)} (занято ${x.occupancy} %)`).join(', ');
+    rows.push(['Мало броней', `${hn.low_total} ${plural(hn.low_total, ['день', 'дня', 'дней'])} из ближайших ${hn.days}: ${list}. Можно снизить цену.`, '#/autoprice']);
+  }
+  if (hn.gaps.length) {
+    const list = hn.gaps.slice(0, 4).map((x) => `№${x.room_name}, ${fmtShort(x.date)}`).join('; ');
+    rows.push(['Окна в одну ночь', `${list}${hn.gaps.length > 4 ? ` и ещё ${hn.gaps.length - 4}` : ''}. Такую ночь проще продать со скидкой.`, '#/rates']);
+  }
+  if (!rows.length) return null;
+  return h('div', { class: 'card card-pad hints-card' }, h('h2', { style: { marginBottom: '10px' } }, 'Что можно улучшить'),
+    rows.map(([t, text, href]) => h('div', { class: 'hint-row' }, h('b', {}, t), h('span', { class: 'muted' }, text), h('a', { href, class: 'small' }, 'Цены →'))));
+}
+
 export function homeSummary(sm) {
   const a = sm.alerts, m = sm.month;
   const items = [
@@ -82,7 +98,8 @@ export function homeSummary(sm) {
     a.repairs ? ['Номера в ремонте', `${a.repairs}`, '#/cleaning', 'bad'] : null,
   ].filter(Boolean);
   const month = MONTHS_NOM[parseISO(m.from).getMonth()];
-  return h('div', { class: 'home-summary' },
+  const hints = sm.hints ? hintsCard(sm.hints) : null;
+  return h('div', {}, h('div', { class: 'home-summary' },
     h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '10px' } }, 'Требует внимания'),
       items.length ? h('div', { class: 'alert-list' }, items.map(([t, v, href, cls, sub]) => h('a', { href, class: `alert-item ${cls}` }, h('span', {}, t, sub ? h('small', {}, sub) : null), h('b', {}, v))))
         : h('div', { class: 'muted' }, 'Всё спокойно: заявок, конфликтов, долгов и поломок нет.')),
@@ -92,7 +109,7 @@ export function homeSummary(sm) {
         h('div', {}, h('span', { class: 'muted small' }, 'Расходы'), h('b', {}, fmtMoney(m.expenses))),
         h('div', {}, h('span', { class: 'muted small' }, 'Прибыль'), h('b', { class: Number(m.profit) < 0 ? 'neg' : 'pos' }, fmtMoney(m.profit))),
         h('div', {}, h('span', { class: 'muted small' }, 'Загрузка'), h('b', {}, `${m.occupancy}%`))),
-      h('a', { href: '#/stats', class: 'small', style: { display: 'inline-block', marginTop: '8px' } }, 'Подробнее в отчётах →')));
+      h('a', { href: '#/stats', class: 'small', style: { display: 'inline-block', marginTop: '8px' } }, 'Подробнее в отчётах →'))), hints);
 }
 
 // ---------- печатный лист ----------

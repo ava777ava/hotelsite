@@ -801,7 +801,8 @@ def _home_summary(conn, account_id, prop_id, today: date) -> dict:
     scope_rooms = _rooms_count(conn, prop_ids)
     m = _booking_metrics(_overlap_rows(conn, account_id, prop_ids, start, end), scope_rooms, (end - start).days)
     expenses = _expenses_total(conn, account_id, prop_ids, scope_rooms, total_rooms, start, end)
-    return {"alerts": alerts, "month": {"from": start, "revenue": m["revenue"], "expenses": expenses,
+    from .analytics import home_hints
+    return {"alerts": alerts, "hints": home_hints(conn, account_id, prop_ids, today), "month": {"from": start, "revenue": m["revenue"], "expenses": expenses,
                                         "profit": m["revenue"] - expenses, "occupancy": m["occupancy"], "sold_nights": m["sold_nights"]}}
 
 

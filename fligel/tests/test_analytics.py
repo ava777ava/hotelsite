@@ -121,6 +121,32 @@ class PaceLeadChannelTests(Base):
         self.assertEqual(float(ch["totals"]["net_revenue"]), 13400.0)
 
 
+class HomeHintsTests(Base):
+    def test_hints_low_occupancy_dates_and_one_night_gaps(self):
+        ctx = self.register("hint1@example.ru", rooms=(("Стандарт", 2, 3000),))
+        r1, r2 = ctx["rooms"]
+        self.book(ctx, r1, d(2), d(4))
+        self.book(ctx, r1, d(5), d(7))          # между ними свободна ровно одна ночь: с 4-го на 5-е
+        self.book(ctx, r2, d(8), d(10))
+        self.book(ctx, r2, d(10), d(12))        # встык — это не «окно»
+        self.book(ctx, r2, d(13), d(15))
+        self.client.post("/api/bookings", headers=ctx["h"], json={"room_id": r2["id"], "check_in": d(12), "check_out": d(13), "status": "blocked"})  # закрыто — тоже не «окно»
+        hn = self.client.get("/api/today?summary=1", headers=ctx["h"]).json()["summary"]["hints"]
+        self.assertEqual([(g["room_name"], g["date"]) for g in hn["gaps"]], [("101", d(4))])
+        # из двух номеров «меньше 30 %» — только даты, когда не занят ни один: сегодня, завтра, ночь-«окно» и 7-е (12-е закрыто — занято)
+        self.assertEqual({x["date"] for x in hn["low_dates"]}, {d(0), d(1), d(4), d(7)})
+        self.assertEqual(hn["low_total"], 4)
+        # занятая на все номера дата в подсказку не попадает
+        self.book(ctx, r1, d(8), d(9))
+        hn = self.client.get("/api/today?summary=1", headers=ctx["h"]).json()["summary"]["hints"]
+        self.assertNotIn(d(8), [x["date"] for x in hn["low_dates"]])
+        # горничной сводки с подсказками не показывают
+        r = self.client.post("/api/users", headers=ctx["h"], json={"name": "М", "email": "maid-hint1@example.ru", "role": "housekeeper", "password": "password123"})
+        tok = self.client.post("/api/auth/login", json={"email": "maid-hint1@example.ru", "password": "password123"}).json()["token"]
+        self.assertIsNone(self.client.get("/api/today?summary=1", headers={"Authorization": f"Bearer {tok}"}).json()["summary"])
+        self.assertEqual(r.status_code, 200)
+
+
 class AccountantTests(Base):
     def test_accountant_summary_by_method_and_categories_with_csv(self):
         ctx = self.register("acc1@example.ru")

@@ -734,7 +734,7 @@ kbd { font: 12px/1 ui-monospace, SFMono-Regular, Menlo, monospace; background: v
 .switch:focus-visible { outline: 2px solid var(--pine); outline-offset: 2px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; } .ph-chips { margin: 6px 0 4px; }
 .rule-form h3 { margin: 16px 0 8px; font-size: 14px; color: var(--muted); }
-.check { display: flex; align-items: center; gap: 8px; font-size: 14px; margin-bottom: 10px; cursor: pointer; }
+.rule-form .check { font-size: 14px; margin-bottom: 10px; }
 .check input { width: 18px; height: 18px; }
 .field .lbl { font-size: 12.5px; color: var(--muted); font-weight: 600; margin-bottom: 4px; display: block; }
 @media (max-width: 640px) { .rule-card { flex-wrap: wrap; } .rule-card .btn { margin-left: auto; } }
@@ -752,3 +752,12 @@ tr.total td { border-top: 2px solid var(--border); }
 
 .seg-scroll { overflow-x: auto; margin-bottom: 14px; }
 .seg-scroll .seg { max-width: none; } .seg-scroll .seg button { max-width: none; overflow: visible; text-overflow: clip; flex: none; }
+
+/* ---------- автоцены: строки предложений и журнала ---------- */
+.sg-row { display: grid; grid-template-columns: minmax(150px, 1.1fr) minmax(170px, 1fr) minmax(0, 2fr) auto; gap: 4px 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.sg-row:last-child { border-bottom: 0; } .sg-price { font-variant-numeric: tabular-nums; white-space: nowrap; } .sg-act { display: flex; gap: 6px; }
+@media (max-width: 760px) { .sg-row { grid-template-columns: 1fr auto; } .sg-why { grid-column: 1 / -1; } .sg-act { grid-column: 1 / -1; } .sg-price { text-align: right; } }
+
+.hints-card { margin-bottom: 14px; } .hint-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 4px 12px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
+.hint-row:first-of-type { border-top: 0; }
+@media (max-width: 640px) { .hint-row { grid-template-columns: 1fr; } }
