@@ -367,7 +367,7 @@ def quick_setup(c: Ctx):
 
 
 RT_COLS = ("id, property_id, name, description, capacity, base_price, min_stay, sort_order, included_guests,"
-           " extra_guest_price, week_discount_percent, month_discount_percent")
+           " extra_guest_price, week_discount_percent, month_discount_percent, min_price, max_price")
 
 
 def _percent(v, label: str):
@@ -450,6 +450,9 @@ def update_room_type(c: Ctx):
         "extra_guest_price": lambda v: parse_money(v, "Доплата за гостя"),
         "week_discount_percent": lambda v: _percent(v, "Скидка за неделю"),
         "month_discount_percent": lambda v: _percent(v, "Скидка за месяц"),
+        # границы для автоцен; пустое значение = без границы
+        "min_price": lambda v: parse_money(v, "Минимальная цена") if v not in (None, "") else None,
+        "max_price": lambda v: parse_money(v, "Максимальная цена") if v not in (None, "") else None,
     }
     sets, params = [], []
     for key, f in conv.items():

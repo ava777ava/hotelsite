@@ -1,4 +1,5 @@
 // Флигель — интерфейс администратора (раздел «главный модуль: маршруты и каркас»). ES-модуль без сборки.
+import { viewAnalytics } from './analytics.js';
 import { viewAutopilot } from './autopilot.js';
 import { viewAuth, viewResetPassword, viewWizard } from './auth.js';
 import { viewBoard } from './board.js';
@@ -33,6 +34,7 @@ export const ROUTES = {
   rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager' },
   channels: { title: 'Площадки', icon: 'channels', view: viewChannels, role: 'manager' },
   expenses: { title: 'Финансы', icon: 'expenses', view: viewExpenses, role: 'manager' },
+  analytics: { title: 'Аналитика', icon: 'trend', view: viewAnalytics, role: 'manager' },
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
@@ -43,7 +45,7 @@ export const ROUTES = {
 };
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
 export const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
-export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'guests', 'reviews', 'autopilot', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
+export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'guests', 'reviews', 'autopilot', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'analytics', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
 export const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 export const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 

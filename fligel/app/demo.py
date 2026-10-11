@@ -304,6 +304,15 @@ def _seed_new_features(conn, rnd, acc, prop, prop2, rooms, rooms2, today) -> Non
     lid = one(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, 'landlord@fligel.ru', %s, 'Пётр (собственник квартир)', 'landlord') RETURNING id",
               (acc, hash_password("demo12345")))["id"]
     run(conn, "INSERT INTO user_properties (account_id, user_id, property_id) VALUES (%s, %s, %s)", (acc, lid, prop2))
+    # --- «когда создана бронь»: у каждого канала своё окно бронирования, будущие брони появились за последние ~2 недели
+    #     (иначе все брони были бы «созданы сегодня», и аналитика темпа и окна показывала бы пустоту)
+    run(conn, """UPDATE bookings SET created_at = least(
+                   check_in::timestamptz + interval '10 hours' - interval '1 day' * (CASE source
+                       WHEN 'direct' THEN 8 + mod(abs(hashtext(id::text)), 30) WHEN 'yandex' THEN 5 + mod(abs(hashtext(id::text)), 25)
+                       WHEN 'avito' THEN 1 + mod(abs(hashtext(id::text)), 14) WHEN 'sutochno' THEN 2 + mod(abs(hashtext(id::text)), 20)
+                       ELSE mod(abs(hashtext(id::text)), 10) END),
+                   now() - interval '1 day' * (mod(abs(hashtext(id::text || 'x')), 13)) - interval '1 hour')
+               WHERE account_id = %s AND status <> 'blocked'""", (acc,))
     _seed_autopilot(conn, acc, prop, today)
 
 

@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import httpx
 import psycopg
 
-from . import automation, booklog, config, ical, notify
+from . import autoprice, automation, booklog, config, ical, notify
 from .db import all_, one, run, tx
 from .expenses import generate_due_expenses
 
@@ -316,6 +316,10 @@ def run_once() -> int:
         automation.run_due()
     except Exception:
         log.exception("Сбой автопилота")
+    try:
+        autoprice.run_due()
+    except Exception:
+        log.exception("Сбой автоцен")
     generate_due_expenses()
     notify.process_outboxes()
     notify.send_digests()
