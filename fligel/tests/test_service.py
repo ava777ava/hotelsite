@@ -249,5 +249,50 @@ class DemoSandboxTests(Base):
         self.assertEqual(self.client.post("/api/users", headers=real["h"], json={"name": "М", "email": "m-real@example.ru", "role": "manager", "password": "password123"}).status_code, 200)
 
 
+class PublicSiteTests(Base):
+    def test_blog_articles_seo_and_no_external_resources(self):
+        import json
+        import re
+        from app import blog
+        self.assertTrue(6 <= len(blog.ARTICLES) <= 8)
+        idx = self.client.get("/blog/")
+        self.assertEqual(idx.status_code, 200)
+        self.assertEqual(self.client.get("/blog", follow_redirects=False).status_code, 307)
+        sitemap = self.client.get("/sitemap.xml").text
+        for a in blog.ARTICLES:
+            self.assertIn(a["title"].replace("«", "«"), idx.text.replace("&quot;", '"'))
+            page = self.client.get(f"/blog/{a['slug']}")
+            self.assertEqual(page.status_code, 200, a["slug"])
+            html = page.text
+            self.assertIn(f"<title>{a['title']} — Флигель</title>", html)
+            self.assertRegex(html, r'<meta name="description" content="[^"]{60,}')
+            self.assertIn(f'rel="canonical" href="https://fligel.test/blog/{a["slug"]}"', html)
+            ld = json.loads(re.search(r'<script type="application/ld\+json">(.*?)</script>', html, re.S).group(1))
+            self.assertEqual((ld["@type"], ld["headline"]), ("Article", a["title"]))
+            self.assertIn(f"/blog/{a['slug']}</loc>", sitemap)
+            self.assertGreater(len(re.sub(r"<[^>]+>", " ", a["body"]).split()), 200)          # содержательная статья, не заглушка
+            # 152-ФЗ: ни внешних скриптов, шрифтов, картинок, ни счётчиков
+            self.assertEqual([u for u in re.findall(r'(?:src|href)="(https?://[^"]+)"', html) if not u.startswith("https://fligel.test")], [], a["slug"])
+            self.assertNotRegex(html.lower(), r"whatsapp|google|yandex\.ru/metrika|mc\.yandex")
+        self.assertEqual(self.client.get("/blog/no-such-article").status_code, 404)
+        self.assertIn("/blog/</loc>", sitemap)
+        self.assertIn("/api/docs</loc>", sitemap)
+
+    def test_api_docs_robots_landing_and_english_booking_page(self):
+        docs = self.client.get("/api/docs")
+        self.assertEqual(docs.status_code, 200)
+        for needle in ("Authorization: Bearer flg_", "X-Fligel-Signature", "/api/v1/bookings", "/api/v1/prices", "booking.created", "120 запросов"):
+            self.assertIn(needle, docs.text)
+        robots = self.client.get("/robots.txt").text
+        for path in ("/operator/", "/f/", "/r/", "/api/"):
+            self.assertIn(f"Disallow: {path}", robots)
+        landing = self.client.get("/").text
+        for needle in ('id="calc-objects"', 'id="demo-btn"', 'href="/blog/"', 'rel="canonical"'):
+            self.assertIn(needle, landing)
+        book = self.client.get("/book/anything").text
+        for needle in ('data-lang="en"', "Check-in", "Request sent", "Find a room"):
+            self.assertIn(needle, book)
+
+
 if __name__ == "__main__":
     unittest.main()

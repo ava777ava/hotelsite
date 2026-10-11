@@ -9,11 +9,11 @@ from starlette.middleware import Middleware
 from starlette.middleware.gzip import GZipMiddleware
 from starlette.requests import Request
 from starlette.exceptions import HTTPException as StarletteHTTPException
-from starlette.responses import FileResponse, PlainTextResponse, RedirectResponse, Response
+from starlette.responses import FileResponse, HTMLResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import config, db, sync
+from . import blog, config, db, sync
 from .api import account, analytics, integrations, v1 as v1_api, demo as demo_api, billing as billing_api, operator as operator_api, autopilot, autoprice as autoprice_api, bookings, channels, expenses, guestpages, guests, household as household_api, housekeeping, incomes, money, notify as notify_api, owners, photos, public, reports, tariffs, tasks
 from .api import telegram as telegram_api
 from .middleware import SecurityHeaders
@@ -48,6 +48,17 @@ def api_docs(request: Request):
     return FileResponse(STATIC / "docs" / "api.html")
 
 
+def blog_index(request: Request):
+    return HTMLResponse(blog.index_html())
+
+
+def blog_article(request: Request):
+    html = blog.article_html(request.path_params["slug"])
+    if html is None:
+        raise StarletteHTTPException(404)
+    return HTMLResponse(html)
+
+
 def operator_page(request: Request):
     return FileResponse(STATIC / "operator" / "index.html", headers={"Cache-Control": "no-store"})
 
@@ -75,7 +86,7 @@ def robots(request: Request):
 
 
 def sitemap(request: Request):
-    urls = ["/", "/legal/privacy", "/legal/pdn-consent", "/legal/terms"]
+    urls = ["/", "/api/docs", *blog.sitemap_urls(), "/legal/privacy", "/legal/pdn-consent", "/legal/terms"]
     body = "".join(f"<url><loc>{config.PUBLIC_BASE_URL}{u}</loc></url>" for u in urls)
     return Response('<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
                     f"{body}</urlset>", media_type="application/xml")
@@ -139,6 +150,9 @@ routes = [
     Route("/app/", admin_page),
     Route("/book/{slug}", booking_page),
     Route("/api/docs", api_docs),
+    Route("/blog/", blog_index),
+    Route("/blog", lambda r: RedirectResponse("/blog/")),
+    Route("/blog/{slug}", blog_article),
     Route("/operator/", operator_page),
     Route("/operator", lambda r: RedirectResponse("/operator/")),
     Route("/f/{token}", guest_page),
