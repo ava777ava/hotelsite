@@ -23,8 +23,8 @@ export async function viewBilling(main) {
         h('div', { class: 'card-pad' }, h('p', { class: 'muted', style: { marginTop: 0 } }, 'Все функции доступны на любом тарифе — тариф зависит от числа объектов. Оплата по счёту (безналичный расчёт); после оплаты мы продлеваем доступ вручную. Данные сохраняются при любом сроке. Превышение лимита объектов работу не останавливает.'),
           h('div', { class: 'plan-pick' }, d.plans.map((p) => {
             const months = h('select', { class: 'input', 'aria-label': `Срок оплаты, тариф ${p.label}` }, [1, 3, 6, 12].map((m) => h('option', { value: m }, `${m} мес.`)));
-            return h('div', { class: `plan-card${p.key === d.recommended_plan ? ' rec' : ''}` }, h('b', {}, p.label), h('div', { class: 'muted small' }, `до ${p.limit} объектов`), h('div', { class: 'plan-price' }, fmtMoney(p.price), h('small', {}, ' / мес')),
-              p.key === d.recommended_plan ? h('span', { class: 'pill ok' }, 'подходит вам') : null, months,
+            return h('div', { class: `plan-card${p.key === d.recommended_plan ? ' rec' : ''}` }, h('div', { style: { minHeight: '24px', display: 'flex', alignItems: 'center' } }, h('b', {}, p.label), p.key === d.recommended_plan ? h('span', { class: 'pill ok', style: { marginLeft: '8px' } }, 'подходит вам') : null), h('div', { class: 'muted small' }, `до ${p.limit} объектов`), h('div', { class: 'plan-price' }, fmtMoney(p.price), h('small', {}, ' / мес')),
+              months,
               h('button', { class: 'btn small primary', onclick: async () => {
                 try { const r = await api('POST', '/api/billing/invoices', { plan: p.key, months: months.value }); toast(`Счёт № ${r.number} выставлен`); load(); } catch (ex) { toast(ex.message, true); }
               } }, 'Выставить счёт'));

@@ -90,17 +90,17 @@ async function panel() {
     const needle = q.value.trim().toLowerCase();
     const items = data.items.filter((r) => !needle || r.name.toLowerCase().includes(needle) || (r.owner_email || '').toLowerCase().includes(needle));
     table.innerHTML = '';
-    table.append(h('div', { class: 'table-wrap' }, h('table', { class: 'list' },
+    table.append(h('div', { class: 'table-wrap' }, h('table', { class: 'list cards-mobile' },
       h('thead', {}, h('tr', {}, ['Клиент', 'Тариф', 'Оплачен до / пробный до', 'Объектов', 'Номеров', 'Брони 30д', 'Последний вход', 'Статус'].map((x) => h('th', {}, x)))),
       h('tbody', {}, items.map((r) => {
         const end = r.plan === 'trial' ? r.trial_ends : r.paid_until;
         const left = end ? Math.round((new Date(String(end).slice(0, 10) + 'T00:00') - new Date(new Date().toDateString())) / 86400000) : null;
         return h('tr', { class: 'click', onclick: () => accountDrawer(r.id, load) },
-          h('td', {}, h('b', {}, r.name), r.is_demo ? h('span', { class: 'pill none', style: { marginLeft: '6px' } }, 'демо') : null, h('div', { class: 'muted small' }, r.owner_email || '')),
-          h('td', {}, r.plan_label, r.open_invoices ? h('span', { class: 'pill warn', style: { marginLeft: '6px' } }, `счёт: ${r.open_invoices}`) : null),
-          h('td', { class: left != null && left < 0 ? 'down' : '' }, end ? fmtDate(end) : '—', left != null ? h('span', { class: 'muted small' }, left < 0 ? ` (просрочено ${-left} дн.)` : ` (${left} дн.)`) : null),
-          h('td', {}, r.properties), h('td', {}, r.rooms), h('td', {}, r.bookings_30d), h('td', { class: 'small' }, r.last_login ? fmtDateTime(r.last_login) : '—'),
-          h('td', {}, h('span', { class: `pill ${STATUS[r.status][0]}` }, STATUS[r.status][1])));
+          h('td', { class: 'wide' }, h('b', {}, r.name), r.is_demo ? h('span', { class: 'pill none', style: { marginLeft: '6px' } }, 'демо') : null, h('div', { class: 'muted small' }, r.owner_email || '')),
+          h('td', { 'data-l': 'Тариф' }, r.plan_label, r.open_invoices ? h('span', { class: 'pill warn', style: { marginLeft: '6px' } }, `счёт: ${r.open_invoices}`) : null),
+          h('td', { 'data-l': 'Оплачен до', class: left != null && left < 0 ? 'down' : '' }, end ? fmtDate(end) : '—', left != null ? h('span', { class: 'muted small' }, left < 0 ? ` (просрочено ${-left} дн.)` : ` (${left} дн.)`) : null),
+          h('td', { 'data-l': 'Объектов' }, r.properties), h('td', { 'data-l': 'Номеров' }, r.rooms), h('td', { 'data-l': 'Брони за 30 дней' }, r.bookings_30d), h('td', { 'data-l': 'Последний вход', class: 'small' }, r.last_login ? fmtDateTime(r.last_login) : '—'),
+          h('td', { 'data-l': 'Статус' }, h('span', { class: `pill ${STATUS[r.status][0]}` }, STATUS[r.status][1])));
       })))));
     if (!items.length) table.append(h('div', { class: 'card-pad muted' }, 'Ничего не найдено'));
   }

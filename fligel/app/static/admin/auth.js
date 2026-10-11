@@ -65,9 +65,9 @@ export function viewAuth() {
       'Регистрируясь, вы принимаете ', h('a', { href: '/legal/terms', target: '_blank', rel: 'noopener' }, 'условия использования'),
       ', ', h('a', { href: '/legal/privacy', target: '_blank', rel: 'noopener' }, 'политику конфиденциальности'),
       ' и даёте ', h('a', { href: '/legal/pdn-consent', target: '_blank', rel: 'noopener' }, 'согласие на обработку персональных данных'), '.') : null,
-    mode === 'login' ? h('div', { class: 'switch' },
+    mode === 'login' ? h('div', { class: 'auth-switch' },
       h('button', { type: 'button', onclick: () => forgotPasswordDrawer(f.email?.value) }, 'Забыли пароль?')) : null,
-    h('div', { class: 'switch' }, mode === 'login' ? 'Ещё нет аккаунта? ' : 'Уже есть аккаунт? ',
+    h('div', { class: 'auth-switch' }, mode === 'login' ? 'Ещё нет аккаунта? ' : 'Уже есть аккаунт? ',
       h('button', { type: 'button', onclick: () => { mode = mode === 'login' ? 'register' : 'login'; draw(); } },
         mode === 'login' ? 'Зарегистрироваться' : 'Войти')));
     formBox.append(h('div', {}, h('div', { class: 'brand auth-mobile-brand' }, h('div', { class: 'brand-mark' }), h('div', { class: 'brand-name' }, 'Флигель')), form));

@@ -113,7 +113,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
       loading: 'Загрузка…', checkin: 'Заезд', checkout: 'Выезд', guests: 'Гостей', find: 'Найти номер',
       privacy: 'Политика конфиденциальности', pdn: 'Согласие на обработку персональных данных', terms: 'Условия использования',
       titleSuffix: 'бронирование', checkinFrom: 'заезд с', checkoutBefore: 'выезд до', questions: 'Вопросы по бронированию:',
-      unavailable: 'Бронирование недоступно', searching: 'Ищем свободные номера…', noRooms: 'На эти даты свободных номеров нет. Попробуйте другие даты', orCall: ' или позвоните: ',
+      unavailable: 'Бронирование недоступно', searching: 'Ищем свободные номера…', noRooms: 'На эти даты свободных номеров нет. Попробуйте другие даты', nextWeek: 'Посмотреть на неделю позже', orCall: ' или позвоните: ',
       upTo: 'до {n} гостей', left: 'осталось {n}', photos: '{n} фото', seePhotos: 'Смотреть фото', standard: 'Стандартный', breakfast: ' · завтрак', nonRefundable: ' · без возврата',
       forNights: 'за {n} {w}', book: 'Забронировать', night: ['ночь', 'ночи', 'ночей'], months: ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'],
       guestsN: 'гостей: {n}', name: 'Имя и фамилия', phone: 'Телефон', email: 'Email (необязательно)', wishes: 'Пожелания (необязательно)', wishesPh: 'Время заезда, детская кроватка…',
@@ -125,7 +125,7 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
       loading: 'Loading…', checkin: 'Check-in', checkout: 'Check-out', guests: 'Guests', find: 'Find a room',
       privacy: 'Privacy policy', pdn: 'Consent to personal data processing', terms: 'Terms of use',
       titleSuffix: 'booking', checkinFrom: 'check-in from', checkoutBefore: 'check-out before', questions: 'Booking questions:',
-      unavailable: 'Booking is unavailable', searching: 'Looking for available rooms…', noRooms: 'No rooms available for these dates. Please try other dates', orCall: ' or call us: ',
+      unavailable: 'Booking is unavailable', searching: 'Looking for available rooms…', noRooms: 'No rooms available for these dates. Please try other dates', nextWeek: 'Check a week later', orCall: ' or call us: ',
       upTo: 'up to {n} guests', left: '{n} left', photos: '{n} photos', seePhotos: 'View photos', standard: 'Standard', breakfast: ' · breakfast included', nonRefundable: ' · non-refundable',
       forNights: 'for {n} {w}', book: 'Book', night: ['night', 'nights', 'nights'], months: ['January','February','March','April','May','June','July','August','September','October','November','December'],
       guestsN: 'guests: {n}', name: 'First and last name', phone: 'Phone', email: 'Email (optional)', wishes: 'Special requests (optional)', wishesPh: 'Arrival time, baby cot…',
@@ -211,7 +211,9 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
     try {
       const d = await call('GET', `/api/public/${encodeURIComponent(slug)}/availability?check_in=${$('ci').value}&check_out=${$('co').value}&guests=${$('guests').value}`);
       const list = document.createElement('div'); list.className = 'results';
-      if (!d.options.some((o) => o.available)) list.insertAdjacentHTML('beforeend', `<div class="msg">${esc(t('noRooms'))}${info.phone ? `${esc(t('orCall'))}${esc(info.phone)}` : ''}.</div>`);
+      if (!d.options.some((o) => o.available)) list.insertAdjacentHTML('beforeend', `<div class="msg">${esc(t('noRooms'))}${info.phone ? `${esc(t('orCall'))}${esc(info.phone)}` : ''}.<br><button type="button" class="btn-week" style="margin-top:8px;padding:8px 12px;border:1px solid currentColor;border-radius:8px;background:none;color:inherit;cursor:pointer;font:inherit">${esc(t('nextWeek'))}</button></div>`);
+      const wk = list.querySelector('.btn-week');
+      if (wk) wk.addEventListener('click', () => { const shift = (id) => { const x = new Date($(id).value + 'T00:00:00'); x.setDate(x.getDate() + 7); $(id).value = `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`; }; shift('ci'); shift('co'); search(); });
       d.options.forEach((o) => {
         const el = document.createElement('div');
         const photos = ((info.room_types || []).find((x) => x.id === o.room_type_id) || {}).photos || [];
