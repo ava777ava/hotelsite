@@ -57,7 +57,7 @@ export async function viewReviews(main) {
         kpi(`Низких (${data.low_rating} и ниже)`, o.low), data.waiting ? kpi('Ждём ответа', data.waiting) : null),
       distribution(data),
       h('div', { class: 'grid-2' },
-        table('По объектам', data.by_property, (p) => p.name),
+        data.by_property.length > 1 ? table('По объектам', data.by_property, (p) => p.name) : null,
         table('По номерам (сначала худшие)', data.by_room.slice(0, 20), (r) => [r.name, multi ? h('span', { class: 'muted small' }, ` · ${r.property_name}`) : null])),
       latest(data));
   }

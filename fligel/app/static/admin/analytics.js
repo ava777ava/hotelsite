@@ -46,6 +46,10 @@ export async function viewAnalytics(main) {
   }
   async function drawForecast() {
     const d = await api('GET', '/api/analytics/forecast?' + params());
+    if (!d.horizons.some((x) => x.sold_nights > 0)) {
+      body.append(h('div', { class: 'card empty' }, h('h3', {}, 'Пока нечего прогнозировать'), 'Как только появятся брони на ближайшие дни, здесь будут загрузка и выручка вперёд — со сравнением с прошлым годом.'));
+      return;
+    }
     body.append(h('p', { class: 'muted' }, `Что уже забронировано впереди (номеров: ${d.rooms}). Цифры растут по мере новых броней — сравните со «вчера» и «годом назад», чтобы понять, не отстаёте ли.`),
       h('div', { class: 'grid-3' }, d.horizons.map(forecastCard)), h('p', { class: 'muted small' }, d.note));
   }
