@@ -12,6 +12,7 @@
                                     pro (до 40), custom (без ограничения)
   reset-password <email>            выдать пользователю новый временный пароль (если не работает почта)
   stats                             общие цифры по сервису
+  create-operator <email> [имя]     завести оператора для веб-панели /operator/ (пароль печатается один раз)
 
 Аккаунт можно указывать email владельца (или любого сотрудника) либо началом id.
 """
@@ -98,6 +99,8 @@ def main(argv=None) -> int:
     sp = sub.add_parser("set-plan")
     sp.add_argument("account"); sp.add_argument("plan"); sp.add_argument("--paid-until")
     sub.add_parser("reset-password").add_argument("email")
+    co = sub.add_parser("create-operator")
+    co.add_argument("email"); co.add_argument("name", nargs="?", default="")
     args = ap.parse_args(argv)
     with tx() as conn:
         if args.cmd == "list":
@@ -125,6 +128,11 @@ def main(argv=None) -> int:
         elif args.cmd == "reset-password":
             print(f"Новый временный пароль для {args.email}: {reset_password(conn, args.email)}")
             print("Передайте его пользователю и попросите сменить в «Профиле».")
+        elif args.cmd == "create-operator":
+            password = secrets.token_urlsafe(12)
+            run(conn, "INSERT INTO operators (email, name, password_hash) VALUES (%s, %s, %s) ON CONFLICT (lower(email)) DO UPDATE SET password_hash = EXCLUDED.password_hash,"
+                      " failed_attempts = 0, locked_until = NULL", (args.email.strip(), args.name, hash_password(password)))
+            print(f"Оператор {args.email}: пароль {password}\nВход: /operator/ (запишите пароль — повторно он не показывается; новая выдача — той же командой)")
         elif args.cmd == "stats":
             for k, v in stats(conn).items():
                 print(f"{k:14}: {v}")

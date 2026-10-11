@@ -1468,13 +1468,16 @@ class PlatformAdminTests(Base):
         for i in range(3):  # один объект уже создан регистрацией — доводим до лимита 4
             r = self.client.post("/api/setup", headers=ctx["h"], json={"name": f"Объект {i}", "room_types": [{"name": "Стандарт", "count": 1, "base_price": 1000}]})
             self.assertEqual(r.status_code, 200, r.text)
-        r = self.client.post("/api/setup", headers=ctx["h"], json={"name": "Пятый", "room_types": [{"name": "С", "count": 1}]})
-        self.assertEqual(r.status_code, 403)
-        self.assertIn("до 4 объектов", r.json()["error"])
-        with db.tx() as conn:
-            admin.set_plan(conn, "plan1@example.ru", "business")
+        self.assertIsNone(self.client.get("/api/me", headers=ctx["h"]).json()["billing_notice"])
+        # лимит «мягкий»: пятый объект создаётся, но владелец видит предупреждение о тарифе
         r = self.client.post("/api/setup", headers=ctx["h"], json={"name": "Пятый", "room_types": [{"name": "С", "count": 1}]})
         self.assertEqual(r.status_code, 200, r.text)
+        notice = self.client.get("/api/me", headers=ctx["h"]).json()["billing_notice"]
+        self.assertEqual(notice["kind"], "limit")
+        self.assertIn("до 4", notice["text"])
+        with db.tx() as conn:
+            admin.set_plan(conn, "plan1@example.ru", "business")
+        self.assertIsNone(self.client.get("/api/me", headers=ctx["h"]).json()["billing_notice"])
         me = self.client.get("/api/me", headers=ctx["h"]).json()
         self.assertEqual((me["plan_label"], me["properties_limit"]), ("Бизнес", 15))
 

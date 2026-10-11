@@ -68,6 +68,8 @@ def principal(request: Request, min_role: str = "housekeeper") -> Principal:
         raise ApiError(401, "Сессия истекла, войдите заново")
     except jwt.InvalidTokenError:
         raise ApiError(401, "Нужно войти в систему")
+    if data.get("kind") or "acc" not in data:  # токен оператора (или чужой формы) для обычного API не годится
+        raise ApiError(401, "Нужно войти в систему")
     p = Principal(user_id=data["sub"], account_id=data["acc"], role=data["role"], iat=int(data.get("iat") or 0))
     p.require(min_role)
     return p
@@ -94,3 +96,22 @@ def new_ical_token() -> str:
 
 def new_reset_token() -> str:
     return secrets.token_urlsafe(32)
+
+
+def make_operator_token(operator_id: str) -> str:
+    now = datetime.now(timezone.utc)
+    return jwt.encode({"sub": str(operator_id), "kind": "operator", "iat": now, "exp": now + timedelta(hours=12)}, config.SECRET_KEY, algorithm="HS256")
+
+
+def operator_from_request(request: Request) -> str:
+    """Id оператора по токену панели оператора. Токены клиентов сюда не проходят (у них нет kind=operator)."""
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("bearer "):
+        raise ApiError(401, "Нужно войти в панель оператора")
+    try:
+        data = jwt.decode(header[7:], config.SECRET_KEY, algorithms=["HS256"])
+    except jwt.InvalidTokenError:
+        raise ApiError(401, "Нужно войти в панель оператора")
+    if data.get("kind") != "operator":
+        raise ApiError(401, "Нужно войти в панель оператора")
+    return data["sub"]

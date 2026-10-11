@@ -74,3 +74,15 @@ SMTP_USE_TLS = os.environ.get("SMTP_USE_TLS", "1") == "1"
 # Блокировка входа после подбора пароля
 LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "5"))
 LOGIN_LOCKOUT_MINUTES = int(os.environ.get("LOGIN_LOCKOUT_MINUTES", "15"))
+
+# Продажа сервиса: цены тарифов (₽/мес, те же, что на лендинге) и реквизиты продавца для счетов (печатаются на счёте клиенту).
+PLAN_PRICES = {"start": int(os.environ.get("PRICE_START", "990")), "business": int(os.environ.get("PRICE_BUSINESS", "2490")),
+               "pro": int(os.environ.get("PRICE_PRO", "4490"))}
+SELLER = {k: os.environ.get("SELLER_" + k.upper(), "").strip() for k in (
+    "name", "inn", "kpp", "ogrn", "address", "bank", "bik", "account", "corr_account", "email", "phone", "signer", "vat_note")}
+# Публичная демо-версия без регистрации (кнопка на лендинге): включается, когда демо-аккаунт создан командой `python -m app.demo`
+DEMO_ENABLED = os.environ.get("DEMO_ENABLED", "0") == "1"
+DEMO_RESET_HOUR = int(os.environ.get("DEMO_RESET_HOUR", "4"))
+# Вход в панель оператора и в публичный API: лимиты попыток
+OPERATOR_LOGIN_PER_10MIN = int(os.environ.get("OPERATOR_LOGIN_PER_10MIN", "10"))
+API_REQUESTS_PER_MINUTE = int(os.environ.get("API_REQUESTS_PER_MINUTE", "120"))

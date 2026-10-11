@@ -5,6 +5,7 @@ import { viewAutopilot } from './autopilot.js';
 import { viewAuth, viewResetPassword, viewWizard } from './auth.js';
 import { viewBoard } from './board.js';
 import { bookingDrawer, ensureBoardData } from './booking.js';
+import { viewBilling } from './billing.js';
 import { viewBookings } from './bookings.js';
 import { viewChannels } from './channels.js';
 import { viewCleaning } from './cleaning.js';
@@ -41,6 +42,7 @@ export const ROUTES = {
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   autopilot: { title: 'Автопилот', icon: 'bolt', view: viewAutopilot, role: 'owner' },
+  billing: { title: 'Тариф и счета', icon: 'expenses', view: viewBilling, role: 'owner' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
   profile: { title: 'Профиль', icon: 'user', view: viewProfile, landlord: true },
   audit: { title: 'Журнал действий', icon: 'list', view: viewAudit, role: 'owner' },
@@ -49,7 +51,7 @@ export const ROUTES = {
 };
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
 export const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
-export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'household', 'guests', 'reviews', 'autopilot', 'expenses', 'channels', 'notifications', 'settings', 'rates', 'autoprice', 'analytics', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
+export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'household', 'guests', 'reviews', 'autopilot', 'expenses', 'channels', 'notifications', 'settings', 'billing', 'rates', 'autoprice', 'analytics', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
 export const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 export const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 
@@ -220,8 +222,19 @@ export function layout(route, main) {
         propertySwitcher('prop-switch') || h('div', { class: 'brand-name' }, prop ? prop.name : 'Флигель'),
         bellBtn('', '#fff'), mobileSearchBtn,
         h('button', { class: 'btn small ghost', style: { color: '#fff' }, onclick: logout }, 'Выйти')),
-      main),
+      topBanner(), main),
     h('nav', { class: 'mobile-nav', 'aria-label': 'Разделы' }, mainItems.map(link), moreBtn));
+}
+
+// Полоса сверху: демо-версия или напоминание о тарифе (мягкое — работу не блокирует; «скрыть» действует до завтра)
+function topBanner() {
+  const m = state.me;
+  const n = m.is_demo ? { level: 'info', text: 'Это демо-версия с вымышленными данными: можно нажимать всё подряд. Данные сбрасываются каждую ночь; пароль, удаление аккаунта и подключение площадок отключены.', demo: true } : m.billing_notice;
+  if (!n || store.get('banner_hidden') === `${n.kind || 'demo'}:${todayISO()}`) return null;
+  const el = h('div', { class: `top-banner ${n.level || ''}`, role: 'status' }, h('span', {}, n.text),
+    n.demo ? null : h('a', { href: '#/billing', class: 'btn small' }, 'Тариф и счета'),
+    h('button', { class: 'btn small ghost', 'aria-label': 'Скрыть до завтра', onclick: () => { store.set('banner_hidden', `${n.kind || 'demo'}:${todayISO()}`); el.remove(); } }, '×'));
+  return el;
 }
 
 // Все разделы, не поместившиеся в нижнюю панель телефона

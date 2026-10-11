@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
-from .. import audit, automation, config, household, mail, ratelimit
+from .. import audit, automation, billing, config, household, mail, ratelimit
 from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
@@ -176,7 +176,7 @@ def me(c: Ctx):
     with tx() as conn:
         user = one(
             conn,
-            "SELECT u.id, u.name, u.email, u.role, u.notify_email, a.name AS account_name, a.plan, a.status, a.paid_until,"
+            "SELECT u.id, u.name, u.email, u.role, u.notify_email, a.name AS account_name, a.plan, a.status, a.paid_until, a.is_demo,"
             " a.created_at AS account_created_at FROM users u JOIN accounts a ON a.id = u.account_id"
             " WHERE u.id = %s AND u.account_id = %s",
             (c.p.user_id, c.account_id),
@@ -192,11 +192,13 @@ def me(c: Ctx):
                 "SELECT id, name, public_slug FROM properties WHERE account_id = %s ORDER BY created_at",
                 (c.account_id,),
             )
+        notice = billing.info(conn, c.account_id)["notice"] if user["role"] == "owner" else None
     created = user.pop("account_created_at")
+    demo = user.pop("is_demo")
     # Пробный период — информационный: показываем, сколько осталось, но доступ не ограничиваем
     # (подключение оплаты — отдельный этап).
     trial_ends = (created + timedelta(days=TRIAL_DAYS)).date() if user["plan"] == "trial" else None
-    return {**user, "properties": props, "trial_ends": trial_ends,
+    return {**user, "properties": props, "trial_ends": trial_ends, "billing_notice": notice, "is_demo": demo,
             "plan_label": PLAN_LABELS.get(user["plan"], user["plan"]), "properties_limit": PLANS.get(user["plan"], PLANS["trial"])}
 
 
@@ -330,12 +332,7 @@ def quick_setup(c: Ctx):
     if not isinstance(types, list) or not types:
         raise ApiError(422, "Добавьте хотя бы одну категорию номеров")
     with tx() as conn:
-        acc = one(conn, "SELECT plan FROM accounts WHERE id = %s", (c.account_id,))
-        limit = PLANS.get(acc["plan"], PLANS["trial"])
-        have = one(conn, "SELECT count(*) AS n FROM properties WHERE account_id = %s", (c.account_id,))["n"]
-        if have >= limit:
-            raise ApiError(403, f"Тариф «{PLAN_LABELS.get(acc['plan'], acc['plan'])}» включает до {limit} объектов. "
-                                "Чтобы добавить ещё, перейдите на следующий тариф — напишите нам.")
+        # лимит тарифа «мягкий»: объект создаётся, а предупреждение видно в приложении («Тариф и счета») — работу не блокируем
         prop = one(
             conn,
             "INSERT INTO properties (account_id, name, address, phone, public_slug)"
