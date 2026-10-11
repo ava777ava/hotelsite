@@ -28,7 +28,7 @@ BOOKING_COLS = (
     "b.id, b.property_id, b.room_id, b.check_in, b.check_out, b.status, b.source, b.guest_name,"
     " b.guest_phone, b.guest_email, b.guests_count, b.total_price, b.paid_amount, b.notes,"
     " b.discount_amount, b.discount_reason, b.deposit_amount, b.deposit_status, b.rate_plan_id, b.rate_plan_name,"
-    " b.group_id, b.feed_id, b.external_uid, b.hold_expires_at, b.created_at, b.updated_at"
+    " b.group_id, b.feed_id, b.external_uid, b.hold_expires_at, b.created_at, b.updated_at, b.door_code"
 )
 
 
@@ -271,13 +271,14 @@ def create_booking(c: Ctx):
                         "INSERT INTO bookings (account_id, property_id, room_id, check_in, check_out, status,"
                         " source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes,"
                         " discount_amount, discount_reason, deposit_amount, deposit_status, rate_plan_id, rate_plan_name,"
-                        " group_id)"
-                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
+                        " group_id, door_code)"
+                        " VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING *",
                         (c.account_id, rm["property_id"], rm["id"], check_in, check_out, status, source,
                          opt_str(d, "guest_name", max_len=200), opt_str(d, "guest_phone", max_len=50),
                          opt_str(d, "guest_email", max_len=200), guests, price,
                          opt_str(d, "notes"), disc, opt_str(d, "discount_reason", max_len=200) if disc else "", dep, dep_status,
-                         plan_row["id"] if plan_row else None, plan_row["name"] if plan_row else "", group_id),
+                         plan_row["id"] if plan_row else None, plan_row["name"] if plan_row else "", group_id,
+                         opt_str(d, "door_code", max_len=100)),
                     )
             except psycopg.errors.ExclusionViolation:
                 raise ApiError(409, _overlap_info(conn, rm["id"], check_in, check_out, None) + (f" (номер {rm['name']})" if extras else ""),
@@ -366,7 +367,7 @@ def update_booking(c: Ctx):
             if d["source"] not in SOURCES:
                 raise ApiError(422, "Неверный источник")
             new["source"] = d["source"]
-        for key, limit in (("guest_name", 200), ("guest_phone", 50), ("guest_email", 200), ("notes", 2000)):
+        for key, limit in (("guest_name", 200), ("guest_phone", 50), ("guest_email", 200), ("notes", 2000), ("door_code", 100)):
             if key in d:
                 new[key] = opt_str(d, key, max_len=limit)
         if "guests_count" in d:
@@ -401,11 +402,11 @@ def update_booking(c: Ctx):
                     "UPDATE bookings SET room_id=%s, check_in=%s, check_out=%s, status=%s, source=%s,"
                     " guest_name=%s, guest_phone=%s, guest_email=%s, guests_count=%s, total_price=%s,"
                     " paid_amount=%s, notes=%s, hold_expires_at=%s, discount_amount=%s, discount_reason=%s,"
-                    " deposit_amount=%s, deposit_status=%s, updated_at=now() WHERE id=%s RETURNING *",
+                    " deposit_amount=%s, deposit_status=%s, door_code=%s, updated_at=now() WHERE id=%s RETURNING *",
                     (new["room_id"], new["check_in"], new["check_out"], new["status"], new["source"],
                      new["guest_name"], new["guest_phone"], new["guest_email"], new["guests_count"],
                      new["total_price"], new["paid_amount"], new["notes"], new["hold_expires_at"],
-                     new["discount_amount"], new["discount_reason"], new["deposit_amount"], new["deposit_status"], bid),
+                     new["discount_amount"], new["discount_reason"], new["deposit_amount"], new["deposit_status"], new["door_code"], bid),
                 )
         except psycopg.errors.ExclusionViolation:
             raise ApiError(409, _overlap_info(conn, new["room_id"], new["check_in"], new["check_out"], bid),
@@ -621,7 +622,7 @@ def board(c: Ctx):
 def hide_private(rows: list[dict]) -> None:
     """Горничной контакты и деньги гостей не нужны (152-ФЗ: только необходимые данные) — убираем их из ответа."""
     for b in rows:
-        for k in ("guest_phone", "guest_email", "discount_reason", "rate_plan_name"):
+        for k in ("guest_phone", "guest_email", "discount_reason", "rate_plan_name", "door_code"):
             if k in b:
                 b[k] = ""
         for k in ("total_price", "paid_amount", "discount_amount", "deposit_amount"):
@@ -660,7 +661,7 @@ def board_payload(conn, account_id, prop, start, end, contacts: bool = True) -> 
         for b in bookings:
             parts = (b["guest_name"] or "").split()
             b["guest_name"] = (parts[0] + (f" {parts[1][0]}." if len(parts) > 1 else "")) if parts else ""
-            for k in ("guest_phone", "guest_email", "notes", "discount_reason", "rate_plan_name"):
+            for k in ("guest_phone", "guest_email", "notes", "discount_reason", "rate_plan_name", "door_code"):
                 b[k] = ""
             for k in ("paid_amount", "discount_amount", "deposit_amount"):
                 b[k] = 0

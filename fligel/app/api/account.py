@@ -11,6 +11,7 @@ from ..errors import ApiError
 from ..admin import PLAN_LABELS, PLANS
 from ..expenses import create_default_categories
 from ..util import Json, opt_str, parse_int, parse_money, parse_uuid, req_str, slugify
+from . import tasks
 from .base import Ctx, api
 
 log = logging.getLogger("fligel.auth")
@@ -212,13 +213,17 @@ def update_preferences(c: Ctx):
 def badges(c: Ctx):
     """Счётчики для меню: заявки с сайта, ждущие подтверждения, и конфликты с площадок."""
     if not c.p.role or c.p.role == "housekeeper":
-        return {"requests": 0, "conflicts": 0}
+        if c.p.role == "housekeeper":
+            with tx() as conn:
+                return {"requests": 0, "conflicts": 0, "tasks": tasks.overdue_count(conn, c.account_id, c.p.user_id, False)}
+        return {"requests": 0, "conflicts": 0, "tasks": 0}
     with tx() as conn:
         requests = one(conn, "SELECT count(*) AS n FROM bookings WHERE account_id = %s AND source = 'direct'"
                              " AND status = 'pending' AND check_out >= current_date", (c.account_id,))["n"]
         conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
                         (c.account_id,))["n"]
-    return {"requests": requests, "conflicts": conflicts}
+        overdue = tasks.overdue_count(conn, c.account_id, c.p.user_id, True)
+    return {"requests": requests, "conflicts": conflicts, "tasks": overdue}
 
 
 @api("manager")
@@ -380,7 +385,7 @@ def get_property(c: Ctx):
     with tx() as conn:
         prop = _get_property(conn, c.account_id, c.path["id"])
         types = all_(conn, f"SELECT {RT_COLS} FROM room_types WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
-        rooms = all_(conn, "SELECT id, room_type_id, name, sort_order FROM rooms"
+        rooms = all_(conn, "SELECT id, room_type_id, name, sort_order, door_code FROM rooms"
                            " WHERE property_id = %s ORDER BY sort_order, name", (prop["id"],))
     for t in types:
         t["rooms"] = [r for r in rooms if r["room_type_id"] == t["id"]]
@@ -505,8 +510,9 @@ def update_room(c: Ctx):
             if not rt:
                 raise ApiError(404, "Категория не найдена")
             rt_id = rt["id"]
-        return one(conn, "UPDATE rooms SET name = %s, room_type_id = %s WHERE id = %s"
-                         " RETURNING id, room_type_id, name, sort_order", (name, rt_id, room_id))
+        door = opt_str(c.data, "door_code", max_len=100) if "door_code" in c.data else room["door_code"]
+        return one(conn, "UPDATE rooms SET name = %s, room_type_id = %s, door_code = %s WHERE id = %s"
+                         " RETURNING id, room_type_id, name, sort_order, door_code", (name, rt_id, door, room_id))
 
 
 @api("owner")

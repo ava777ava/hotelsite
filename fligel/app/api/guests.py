@@ -29,7 +29,7 @@ DEFAULT_TEMPLATES = [
      "{имя}, спасибо, что остановились у нас ({объект})! Будем рады видеть вас снова. Если захотите вернуться — звоните: {телефон объекта}."),
 ]
 PLACEHOLDERS = ["имя", "даты", "заезд", "выезд", "ночей", "срок", "номер", "объект", "адрес", "телефон объекта",
-                "время заезда", "время выезда", "сумма", "сумма к оплате"]
+                "время заезда", "время выезда", "сумма", "сумма к оплате", "код двери", "ссылка на анкету", "ссылка на отзыв"]
 
 
 def phone_key(phone: str) -> str:
@@ -45,7 +45,7 @@ def _short(d: date) -> str:
     return d.strftime("%d.%m.%Y")
 
 
-def render_message(body: str, b: dict, prop: dict, room_name: str) -> str:
+def render_message(body: str, b: dict, prop: dict, room_name: str, extra: dict | None = None) -> str:
     nights = (b["check_out"] - b["check_in"]).days
     n_word = "ночь" if nights % 10 == 1 and nights % 100 != 11 else ("ночи" if 2 <= nights % 10 <= 4 and not 12 <= nights % 100 <= 14 else "ночей")
     values = {
@@ -56,7 +56,26 @@ def render_message(body: str, b: dict, prop: dict, room_name: str) -> str:
         "время заезда": prop["check_in_time"].strftime("%H:%M"), "время выезда": prop["check_out_time"].strftime("%H:%M"),
         "сумма": _rub(b["total_price"]), "сумма к оплате": _rub(max(Decimal(b["total_price"]) - Decimal(b["paid_amount"]), 0)),
     }
+    values.update(extra or {})
     return re.sub(r"\{([^{}]+)\}", lambda m: values.get(m.group(1).strip().lower(), m.group(0)), body)
+
+
+def message_extras(conn, body: str, b: dict) -> dict:
+    """Значения «дорогих» подстановок — только тех, что есть в тексте (ссылки создают секретные токены в базе)."""
+    from .. import guestlinks
+    low = body.lower()
+    extra: dict = {}
+    if "{код двери" in low:
+        code = (b.get("door_code") or "").strip()
+        if not code:
+            r = one(conn, "SELECT door_code FROM rooms WHERE id = %s", (b["room_id"],))
+            code = (r["door_code"] if r else "").strip()
+        extra["код двери"] = code or "уточните у администратора"
+    if "{ссылка на анкету" in low:
+        extra["ссылка на анкету"] = guestlinks.form_url(guestlinks.ensure_form(conn, b["account_id"], b["id"]))
+    if "{ссылка на отзыв" in low:
+        extra["ссылка на отзыв"] = guestlinks.review_url(guestlinks.ensure_review(conn, b))
+    return extra
 
 
 def _ensure_templates(conn, account_id) -> None:
@@ -269,7 +288,9 @@ def render_for_booking(c: Ctx):
         if not body:
             raise ApiError(422, "Выберите шаблон или введите текст")
         share = f"{config.PUBLIC_BASE_URL}/book/{prop['public_slug']}" if prop["booking_enabled"] else config.PUBLIC_BASE_URL
-    return {"text": render_message(str(body)[:3000], b, prop, room), "email": b["guest_email"], "phone": b["guest_phone"],
+        extra = message_extras(conn, str(body)[:3000], b)
+    text = render_message(str(body)[:3000], b, prop, room, extra)
+    return {"text": text, "email": b["guest_email"], "phone": b["guest_phone"],
             "subject": f"{prop['name']}: бронирование {b['check_in'].strftime('%d.%m')}–{b['check_out'].strftime('%d.%m')}",
             "share_url": share}
 

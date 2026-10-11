@@ -9,7 +9,7 @@ FIELD_LABELS = {
     "guest_name": "Гость", "guest_phone": "Телефон", "guest_email": "Email", "guests_count": "Гостей",
     "total_price": "Стоимость", "paid_amount": "Оплачено", "notes": "Комментарий",
     "discount_amount": "Скидка", "discount_reason": "Причина скидки", "deposit_amount": "Залог",
-    "deposit_status": "Статус залога",
+    "deposit_status": "Статус залога", "door_code": "Код двери",
 }
 DEPOSIT_LABELS = {"none": "нет", "expected": "ожидается", "held": "внесён", "returned": "возвращён", "kept": "удержан"}
 STATUS_LABELS = {"confirmed": "Подтверждена", "pending": "Ждёт оплаты", "blocked": "Даты закрыты",
