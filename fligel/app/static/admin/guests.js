@@ -39,7 +39,7 @@ export function phoneActions(phone) {
 
 // ---------- гости ----------
 export async function viewGuests(main) {
-  const q = h('input', { class: 'input', placeholder: 'Имя, телефон или тег', style: { width: '260px' }, value: store.get('guests_q', '') });
+  const q = h('input', { class: 'input search-field', placeholder: 'Имя, телефон или тег', style: { width: '260px' }, value: store.get('guests_q', '') });
   const sort = h('select', { class: 'input', style: { width: '210px' } }, [['last', 'Недавние'], ['visits', 'По числу визитов'], ['spent', 'По сумме'], ['name', 'По имени']].map(([k, l]) => h('option', { value: k, selected: k === store.get('guests_sort', 'last') }, l)));
   const card = h('div', { class: 'card' });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Гости')), h('div', { class: 'board-tools', style: { marginBottom: '14px' } }, q, sort), card);

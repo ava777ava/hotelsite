@@ -88,7 +88,7 @@ footer { color: var(--muted); font-size: 12.5px; margin-top: 18px; text-align: c
 
   function renderReview(d) {
     document.title = 'Оцените проживание — ' + d.property.name;
-    if (!d.can_review) return show(el('h1', {}, 'Отзыв — после заезда'), el('p', { class: 'sub' }, 'Эта ссылка заработает, когда вы заедете в ' + d.property.name + '.'));
+    if (!d.can_review) return show(el('h1', {}, 'Отзыв — после заезда'), el('p', { class: 'sub' }, 'Эта ссылка заработает, когда вы заедете. Объект: ' + d.property.name + '.'));
     var rating = d.rating || 0;
     var stars = el('div', { class: 'stars', role: 'radiogroup', 'aria-label': 'Оценка от 1 до 5' });
     var btns = [];

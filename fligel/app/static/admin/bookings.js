@@ -8,7 +8,7 @@ import { count, humanDay, skeleton } from './ui.js';
 export async function viewBookings(main) {
   const scope = { value: 'current' };
   const f = {
-    q: h('input', { class: 'input', placeholder: 'Имя, телефон или email', style: { width: '240px' } }),
+    q: h('input', { class: 'input search-field', placeholder: 'Имя, телефон или email', style: { width: '240px' } }),
     from: h('input', { class: 'input', type: 'date', value: addDays(todayISO(), -7), style: { width: '150px' } }),
     to: h('input', { class: 'input', type: 'date', value: addDays(todayISO(), 60), style: { width: '150px' } }),
     status: h('select', { class: 'input', style: { width: '170px' } }, h('option', { value: '' }, 'Все активные'),

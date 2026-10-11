@@ -159,7 +159,7 @@
       <div class="plan">
         <div class="name">Старт</div>
         <div class="objects">1–4 объекта</div>
-        <div class="price">990 ₽<span>/мес</span></div>
+        <div class="price">{{PRICE_START}} ₽<span>/мес</span></div>
         <ul>
           <li>Все функции сервиса</li>
           <li>Неограниченно номеров</li>
@@ -171,7 +171,7 @@
       <div class="plan featured">
         <div class="name">Бизнес</div>
         <div class="objects">5–15 объектов</div>
-        <div class="price">2 490 ₽<span>/мес</span></div>
+        <div class="price">{{PRICE_BUSINESS}} ₽<span>/мес</span></div>
         <ul>
           <li>Всё из тарифа «Старт»</li>
           <li>Несколько объектов в сети</li>
@@ -182,7 +182,7 @@
       <div class="plan">
         <div class="name">Профи</div>
         <div class="objects">16–40 объектов</div>
-        <div class="price">4 490 ₽<span>/мес</span></div>
+        <div class="price">{{PRICE_PRO}} ₽<span>/мес</span></div>
         <ul>
           <li>Всё из тарифа «Бизнес»</li>
           <li>Персональный менеджер</li>
@@ -248,7 +248,7 @@
     var fmt = function (n) { return Math.round(n).toLocaleString('ru-RU') + ' ₽'; };
     function calc() {
       var n = Math.max(1, parseInt(objs.value, 10) || 1), now = Math.max(0, parseFloat(cur.value) || 0);
-      var plan = n <= 4 ? ['Старт', 990] : n <= 15 ? ['Бизнес', 2490] : n <= 40 ? ['Профи', 4490] : null;
+      var plan = n <= 4 ? ['Старт', {{PRICE_START_NUM}}] : n <= 15 ? ['Бизнес', {{PRICE_BUSINESS_NUM}}] : n <= 40 ? ['Профи', {{PRICE_PRO_NUM}}] : null;
       if (!plan) { out.textContent = 'Больше 40 объектов — индивидуальные условия, напишите нам.'; return; }
       var diff = now - plan[1];
       var head = 'Тариф «' + plan[0] + '»: ' + fmt(plan[1]) + ' в месяц. ';

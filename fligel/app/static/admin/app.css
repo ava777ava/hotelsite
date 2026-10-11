@@ -801,3 +801,8 @@ tr.total td { border-top: 2px solid var(--border); }
   a.small, button.link, a.tel { display: inline-block; padding: 9px 4px; margin: -9px -4px; }
   .chip { min-height: 36px; }
 }
+@media (max-width: 640px) {
+  /* поле поиска — на всю ширину отдельной строкой, а не обрезанное рядом с фильтрами */
+  .board-tools .input.search-field:not([type=checkbox]) { flex: 1 1 100%; }
+  .filters .dash { display: none; }
+}

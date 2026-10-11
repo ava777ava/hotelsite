@@ -36,7 +36,12 @@ def booking_page(request: Request):
 
 
 def landing_page(request: Request):
-    return FileResponse(STATIC / "landing" / "index.html")
+    # цены берутся из настроек (PRICE_*), чтобы лендинг, счета и калькулятор не расходились
+    html = (STATIC / "landing" / "index.html").read_text(encoding="utf-8")
+    for key, name in (("start", "START"), ("business", "BUSINESS"), ("pro", "PRO")):
+        price = config.PLAN_PRICES[key]
+        html = html.replace("{{PRICE_%s_NUM}}" % name, str(price)).replace("{{PRICE_%s}}" % name, f"{price:,}".replace(",", " "))
+    return HTMLResponse(html)
 
 
 def guest_page(request: Request):

@@ -278,6 +278,17 @@ class PublicSiteTests(Base):
         self.assertIn("/blog/</loc>", sitemap)
         self.assertIn("/api/docs</loc>", sitemap)
 
+    def test_landing_prices_follow_config(self):
+        old = dict(config.PLAN_PRICES)
+        try:
+            config.PLAN_PRICES.update({"start": 1100, "business": 12345, "pro": 20000})
+            landing = self.client.get("/").text
+        finally:
+            config.PLAN_PRICES.update(old)
+        for needle in ("1 100 ₽", "12 345 ₽", "20 000 ₽", "['Бизнес', 12345]"):
+            self.assertIn(needle, landing)
+        self.assertNotIn("{{", landing)
+
     def test_api_docs_robots_landing_and_english_booking_page(self):
         docs = self.client.get("/api/docs")
         self.assertEqual(docs.status_code, 200)
