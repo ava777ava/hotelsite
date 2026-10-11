@@ -13,6 +13,7 @@ import { $app, G, ROLE, SOURCE, addDays, api, applyTheme, can, closeDrawer, clos
 import { viewExpenses } from './finance.js';
 import { viewGuests } from './guests.js';
 import { viewHousehold } from './household.js';
+import { viewIntegrations } from './integrations.js';
 import { viewHelp } from './help.js';
 import { bellDrawer, viewNotifications } from './notifications.js';
 import { viewAudit, viewOwnerReport } from './owner.js';
@@ -42,6 +43,7 @@ export const ROUTES = {
   stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
   notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
   autopilot: { title: 'Автопилот', icon: 'bolt', view: viewAutopilot, role: 'owner' },
+  integrations: { title: 'Интеграции', icon: 'channels', view: viewIntegrations, role: 'owner' },
   billing: { title: 'Тариф и счета', icon: 'expenses', view: viewBilling, role: 'owner' },
   settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
   profile: { title: 'Профиль', icon: 'user', view: viewProfile, landlord: true },
@@ -51,7 +53,7 @@ export const ROUTES = {
 };
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
 export const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
-export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'household', 'guests', 'reviews', 'autopilot', 'expenses', 'channels', 'notifications', 'settings', 'billing', 'rates', 'autoprice', 'analytics', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
+export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'household', 'guests', 'reviews', 'autopilot', 'expenses', 'channels', 'notifications', 'settings', 'integrations', 'billing', 'rates', 'autoprice', 'analytics', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
 export const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 export const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
 

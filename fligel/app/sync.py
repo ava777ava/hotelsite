@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import httpx
 import psycopg
 
-from . import autoprice, automation, billing, booklog, config, ical, notify
+from . import autoprice, automation, billing, booklog, webhooks, config, ical, notify
 from .db import all_, one, run, tx
 from .expenses import generate_due_expenses
 
@@ -331,6 +331,10 @@ def run_once() -> int:
         log.exception("Сбой автоцен")
     generate_due_expenses()
     notify.process_outboxes()
+    try:
+        webhooks.process_outbox()
+    except Exception:
+        log.exception("Сбой отправки вебхуков")
     notify.send_digests()
     ids = claim_due_feeds()
     for fid in ids:

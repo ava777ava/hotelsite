@@ -84,6 +84,7 @@ def api(min_role: str = "housekeeper", public: bool = False) -> Callable:
                 return Json({"error": "Внутренняя ошибка сервера"}, status_code=500)
 
         handler.__name__ = fn.__name__
+        handler.fn = fn  # «голый» обработчик без проверки токена — для публичного API (ключи вместо токена сотрудника)
         return handler
 
     return wrap
@@ -105,6 +106,38 @@ def op_api(public: bool = False) -> Callable:
                 return Json({"error": e.message, **e.extra}, status_code=e.status)
             except psycopg.errors.UniqueViolation:
                 return Json({"error": "Такая запись уже существует"}, status_code=409)
+            except Exception:
+                log.exception("Необработанная ошибка в %s %s", request.method, request.url.path)
+                return Json({"error": "Внутренняя ошибка сервера"}, status_code=500)
+
+        handler.__name__ = fn.__name__
+        return handler
+
+    return wrap
+
+
+def v1(scope: str = "read") -> Callable:
+    """Публичный API для клиентов: доступ по ключу (Authorization: Bearer flg_…), лимит запросов, у ключа права read или write."""
+    from .. import apikeys, config, ratelimit
+
+    def wrap(fn: Callable[[Ctx], Any]):
+        async def handler(request: Request) -> Response:
+            try:
+                key = await run_in_threadpool(apikeys.authenticate, request.headers.get("authorization", ""))
+                if scope == "write" and key["scope"] != "write":
+                    raise ApiError(403, "У этого ключа права только на чтение. Создайте ключ с правом записи")
+                if not ratelimit.allow(f"apikey:{key['id']}", config.API_REQUESTS_PER_MINUTE, 60):
+                    raise ApiError(429, f"Слишком много запросов: не больше {config.API_REQUESTS_PER_MINUTE} в минуту")
+                data = await body(request) if request.method in ("POST", "PUT", "PATCH") else {}
+                p = Principal(user_id=None, account_id=str(key["account_id"]), role="manager")
+                result = await run_in_threadpool(fn, Ctx(request, p, data))
+                if isinstance(result, Response):
+                    return result
+                return Json(result if result is not None else {"ok": True})
+            except ApiError as e:
+                return Json({"error": e.message, **e.extra}, status_code=e.status)
+            except psycopg.errors.ExclusionViolation:
+                return Json({"error": "Номер уже занят на эти даты", "code": "overlap"}, status_code=409)
             except Exception:
                 log.exception("Необработанная ошибка в %s %s", request.method, request.url.path)
                 return Json({"error": "Внутренняя ошибка сервера"}, status_code=500)

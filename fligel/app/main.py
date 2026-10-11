@@ -14,7 +14,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from . import config, db, sync
-from .api import account, analytics, demo as demo_api, billing as billing_api, operator as operator_api, autopilot, autoprice as autoprice_api, bookings, channels, expenses, guestpages, guests, household as household_api, housekeeping, incomes, money, notify as notify_api, owners, photos, public, reports, tariffs, tasks
+from .api import account, analytics, integrations, v1 as v1_api, demo as demo_api, billing as billing_api, operator as operator_api, autopilot, autoprice as autoprice_api, bookings, channels, expenses, guestpages, guests, household as household_api, housekeeping, incomes, money, notify as notify_api, owners, photos, public, reports, tariffs, tasks
 from .api import telegram as telegram_api
 from .middleware import SecurityHeaders
 from .migrate import migrate
@@ -42,6 +42,10 @@ def landing_page(request: Request):
 def guest_page(request: Request):
     """Анкета (/f/<токен>) и отзыв (/r/<токен>) — одна страница, тип определяет скрипт по адресу."""
     return FileResponse(STATIC / "guest" / "index.html", headers={"Referrer-Policy": "no-referrer"})
+
+
+def api_docs(request: Request):
+    return FileResponse(STATIC / "docs" / "api.html")
 
 
 def operator_page(request: Request):
@@ -134,6 +138,7 @@ routes = [
     Route("/app", lambda r: RedirectResponse("/app/")),
     Route("/app/", admin_page),
     Route("/book/{slug}", booking_page),
+    Route("/api/docs", api_docs),
     Route("/operator/", operator_page),
     Route("/operator", lambda r: RedirectResponse("/operator/")),
     Route("/f/{token}", guest_page),
@@ -148,6 +153,8 @@ routes = [
     Route("/sitemap.xml", sitemap),
     Route("/manifest.webmanifest", manifest),
     *account.routes,
+    *integrations.routes,
+    *v1_api.routes,
     *demo_api.routes,
     *billing_api.routes,
     *operator_api.routes,

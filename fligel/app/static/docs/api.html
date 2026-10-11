@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API «Флигеля» — документация</title>
+<meta name="description" content="Публичный API «Флигеля»: брони, номера, цены и вебхуки. Ключи доступа создаются в приложении, в разделе «Интеграции».">
+<link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
+<style>
+:root { --ink: #1C2420; --paper: #F4F3EE; --surface: #fff; --border: #DCDFD6; --muted: #5F6A59; --pine: #2F5D50; --code: #EEF1EA; }
+@media (prefers-color-scheme: dark) { :root { --ink: #E7EAE4; --paper: #111614; --surface: #1A211F; --border: #34403B; --muted: #A5B0A0; --pine: #7FB5A3; --code: #212A27; } }
+* { box-sizing: border-box; } body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.6 -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+.wrap { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; } h1 { font-size: 30px; margin: 0 0 6px; } h2 { margin-top: 38px; padding-top: 12px; border-top: 1px solid var(--border); } h3 { margin: 22px 0 6px; font-size: 17px; }
+p, li { max-width: 72ch; } code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: .92em; }
+pre { background: var(--code); padding: 12px 14px; border-radius: 10px; overflow-x: auto; font-size: 13.5px; line-height: 1.5; }
+.ep { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; } .m { font-weight: 700; font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--pine); color: #fff; }
+@media (prefers-color-scheme: dark) { .m { color: #0F1512; } }
+table { border-collapse: collapse; width: 100%; font-size: 14.5px; } td, th { border-bottom: 1px solid var(--border); padding: 6px 8px; text-align: left; vertical-align: top; }
+a { color: var(--pine); } .muted { color: var(--muted); } nav a { margin-right: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav><a href="/">← Флигель</a> <a href="#auth">Доступ</a> <a href="#bookings">Брони</a> <a href="#prices">Цены</a> <a href="#webhooks">Вебхуки</a> <a href="#errors">Ошибки</a></nav>
+<h1>API «Флигеля»</h1>
+<p class="muted">Версия 1. Данные — JSON в кодировке UTF-8. Даты — <code>ГГГГ-ММ-ДД</code>. Деньги — числа в рублях. Ключи создаёт владелец аккаунта в приложении: «Интеграции».</p>
+
+<h2 id="auth">Доступ</h2>
+<p>Каждый запрос подписывается ключом в заголовке <code>Authorization: Bearer flg_…</code>. Ключ показывается один раз при создании — сохраните его; потерянный ключ отзывается и создаётся заново. Права ключа: <b>read</b> — только чтение, <b>write</b> — ещё создание и изменение броней и цен. Лимит — 120 запросов в минуту на ключ; сверх лимита ответ <code>429</code>.</p>
+<pre>curl https://ВАШ-ДОМЕН/api/v1/properties \
+  -H "Authorization: Bearer flg_xxxxxxxxxxxx"</pre>
+<p>Ключ работает только с данными своего аккаунта. В демо-версии ключи не работают.</p>
+
+<h2 id="catalog">Объекты, номера, категории</h2>
+<div class="ep"><span class="m">GET</span> <code>/api/v1/properties</code></div>
+<p>Список объектов: <code>id, name, address, phone, check_in_time, check_out_time</code>.</p>
+<div class="ep"><span class="m">GET</span> <code>/api/v1/rooms?property_id=…</code></div>
+<p>Номера: <code>id, name, property_id, room_type_id, room_type, capacity, base_price</code>. Параметр <code>property_id</code> необязателен.</p>
+<div class="ep"><span class="m">GET</span> <code>/api/v1/room-types</code></div>
+<p>Категории номеров: <code>id, property_id, name, capacity, base_price, min_stay</code>.</p>
+
+<h2 id="bookings">Брони</h2>
+<div class="ep"><span class="m">GET</span> <code>/api/v1/bookings?from=2026-07-01&amp;to=2026-08-01</code></div>
+<p>Брони, пересекающиеся с периодом <code>[from, to)</code>, не более 1000. Период обязателен, не длиннее 400 дней. Необязательные фильтры: <code>property_id</code>, <code>status</code> (<code>confirmed</code>, <code>pending</code>, <code>cancelled</code>). Закрытия дат (<code>blocked</code>) не отдаются.</p>
+<div class="ep"><span class="m">GET</span> <code>/api/v1/bookings/{id}</code></div>
+<p>Одна бронь. Поля: <code>id, property_id, room_id, check_in, check_out, status, source, guest_name, guest_phone, guest_email, guests_count, total_price, paid_amount, notes, created_at, updated_at</code>.</p>
+<div class="ep"><span class="m">POST</span> <code>/api/v1/bookings</code> <span class="muted">— нужен ключ write</span></div>
+<pre>curl -X POST https://ВАШ-ДОМЕН/api/v1/bookings \
+  -H "Authorization: Bearer flg_xxxxxxxxxxxx" -H "Content-Type: application/json" \
+  -d '{"room_id": "…", "check_in": "2026-07-10", "check_out": "2026-07-13",
+       "guest_name": "Анна Петрова", "guest_phone": "+7 900 000-00-00", "guests_count": 2}'</pre>
+<p>Обязательно: <code>room_id, check_in, check_out</code>. Необязательно: <code>guest_name, guest_phone, guest_email, guests_count, total_price</code> (если не указана — считается по ценам и тарифам), <code>paid_amount, notes, status</code> (<code>confirmed</code> по умолчанию или <code>pending</code>). Источник брони всегда <code>other</code>. Если номер на эти даты занят, ответ <code>409</code>, <code>"code": "overlap"</code> — двойную бронь система не допускает ни при каких условиях.</p>
+<div class="ep"><span class="m">PATCH</span> <code>/api/v1/bookings/{id}</code> <span class="muted">— нужен ключ write</span></div>
+<p>Меняет даты, номер, данные гостя, стоимость, статус. Чтобы отменить бронь, передайте <code>"status": "cancelled"</code>. Удаления нет — отменённые брони остаются в истории. Чтобы не затереть правки сотрудника, передайте <code>expected_updated_at</code> (значение <code>updated_at</code> из последнего чтения): при расхождении ответ <code>409</code>, <code>"code": "stale"</code>.</p>
+
+<h2 id="prices">Цены</h2>
+<div class="ep"><span class="m">GET</span> <code>/api/v1/prices?room_type_id=…&amp;from=2026-07-01&amp;to=2026-07-15</code></div>
+<p>Цена, минимальный срок и признак закрытия продаж на каждую ночь периода <code>[from, to)</code> (до 400 дней): <code>date, price, min_stay, closed</code>. Если на дату цена не задана, отдаётся базовая цена категории.</p>
+<div class="ep"><span class="m">PUT</span> <code>/api/v1/prices</code> <span class="muted">— нужен ключ write</span></div>
+<pre>{"room_type_id": "…", "date_from": "2026-07-10", "date_to": "2026-07-12", "price": 4500}</pre>
+<p>Задаёт цену, <code>min_stay</code> и/или <code>closed</code> (<code>true</code> — закрыть продажи) на даты от <code>date_from</code> до <code>date_to</code> включительно; можно ограничить <code>weekdays</code> (0 — понедельник … 6 — воскресенье). Через iCal цены на площадки не передаются — это ограничение самих календарей.</p>
+
+<h2 id="webhooks">Вебхуки</h2>
+<p>Вместо постоянных запросов «что нового» подпишитесь на события. В приложении, «Интеграции → Вебхуки», укажите адрес (только <code>https</code>, публичный сервер) и события:</p>
+<table><tr><th>Событие</th><th>Когда</th></tr>
+<tr><td><code>booking.created</code></td><td>появилась новая бронь — из приложения, с сайта, из API или из календаря площадки</td></tr>
+<tr><td><code>booking.updated</code></td><td>изменились даты, номер, данные гостя, стоимость, оплата или статус</td></tr>
+<tr><td><code>booking.cancelled</code></td><td>бронь отменена</td></tr>
+<tr><td><code>booking.test</code></td><td>проверка вебхука кнопкой «Проверить»</td></tr></table>
+<p>Закрытия дат событий не создают. На адрес приходит <code>POST</code> с JSON:</p>
+<pre>{"event": "booking.created", "id": "&lt;номер доставки&gt;",
+ "data": {"id": "…", "property_id": "…", "room_id": "…", "check_in": "2026-07-10", "check_out": "2026-07-13",
+          "status": "confirmed", "source": "avito", "guest_name": "…", "guest_phone": "…", "guest_email": "…",
+          "guests_count": 2, "total_price": 10500, "paid_amount": 0, "notes": "", "created_at": "…", "updated_at": "…"}}</pre>
+<p>Заголовки: <code>X-Fligel-Event</code>, <code>X-Fligel-Delivery</code> (повтор той же доставки приходит с тем же номером — обрабатывайте идемпотентно) и <code>X-Fligel-Signature: sha256=…</code> — HMAC-SHA256 от <b>тела запроса в точности как оно пришло</b> с секретом вебхука (<code>whsec_…</code>, виден в приложении). Проверяйте подпись и сравнивайте через constant-time функцию.</p>
+<pre># Python
+import hmac, hashlib
+def valid(secret: str, raw_body: bytes, header: str) -> bool:
+    expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header)
+
+// Node.js
+const crypto = require('crypto');
+const valid = (secret, rawBody, header) => {
+  const expected = 'sha256=' + crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  return header.length === expected.length && crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(header));
+};</pre>
+<p>Ответьте кодом <code>2xx</code> в течение 8 секунд. Иначе доставка повторяется с растущей паузой (2, 4, 8… минут, не дольше часа), всего 8 попыток; потом помечается недоставленной (видно в приложении). Перенаправления (<code>3xx</code>) не выполняются. Адреса во внутренние сети отклоняются.</p>
+
+<h2 id="errors">Ошибки</h2>
+<p>Ответ с ошибкой — JSON <code>{"error": "понятный текст по-русски"}</code>, иногда с полем <code>field</code> или <code>code</code>.</p>
+<table><tr><th>Код</th><th>Значение</th></tr>
+<tr><td>401</td><td>нет ключа, он неверный или отозван</td></tr>
+<tr><td>403</td><td>у ключа нет права записи; аккаунт приостановлен</td></tr>
+<tr><td>404</td><td>объект не найден (или принадлежит другому аккаунту)</td></tr>
+<tr><td>409</td><td>номер занят на эти даты (<code>overlap</code>) или бронь изменили до вас (<code>stale</code>)</td></tr>
+<tr><td>422</td><td>неверные данные в запросе</td></tr>
+<tr><td>429</td><td>превышен лимит запросов</td></tr></table>
+</div>
+</body>
+</html>
