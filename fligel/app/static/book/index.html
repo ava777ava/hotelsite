@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Бронирование</title>
 <style>
+.langs { float: right; display: flex; gap: 4px; } .langs button { border: 1px solid var(--border); background: var(--surface); color: var(--muted); border-radius: 8px; padding: 4px 10px; cursor: pointer; font-size: 13px; font-weight: 600; } .langs button.on { background: var(--pine); color: #fff; border-color: var(--pine); }
+
 :root {
   --ink: #1C2420; --paper: #F4F3EE; --surface: #fff; --border: #DCDFD6; --line: #ECEEE8; --muted: #6A7563;
   --pine: #2F5D50; --pine-2: #264C41; --pine-soft: #E1EBE6; --clay: #B4562E; --clay-soft: #F5E0D5; --ochre: #C1852B;
@@ -86,41 +88,102 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
 </head>
 <body>
 <div class="wrap">
-  <header><h1 id="name">Загрузка…</h1><p id="addr"></p></header>
+  <header><div class="langs" role="group" aria-label="Language"><button type="button" data-lang="ru">RU</button><button type="button" data-lang="en">EN</button></div><h1 id="name" data-i18n="loading">Загрузка…</h1><p id="addr"></p></header>
   <form class="search" id="search">
-    <label>Заезд<input class="input" type="date" id="ci" required></label>
-    <label>Выезд<input class="input" type="date" id="co" required></label>
-    <label>Гостей<select class="input" id="guests"></select></label>
-    <button class="btn" type="submit">Найти номер</button>
+    <label><span data-i18n="checkin">Заезд</span><input class="input" type="date" id="ci" required></label>
+    <label><span data-i18n="checkout">Выезд</span><input class="input" type="date" id="co" required></label>
+    <label><span data-i18n="guests">Гостей</span><select class="input" id="guests"></select></label>
+    <button class="btn" type="submit" data-i18n="find">Найти номер</button>
   </form>
   <div id="out"></div>
   <p class="foot" id="foot"></p>
-  <p class="foot legal-links"><a href="/legal/privacy" target="_blank" rel="noopener">Политика конфиденциальности</a><a href="/legal/pdn-consent" target="_blank" rel="noopener">Согласие на обработку персональных данных</a><a href="/legal/terms" target="_blank" rel="noopener">Условия использования</a></p>
+  <p class="foot legal-links"><a href="/legal/privacy" target="_blank" rel="noopener" data-i18n="privacy">Политика конфиденциальности</a><a href="/legal/pdn-consent" target="_blank" rel="noopener" data-i18n="pdn">Согласие на обработку персональных данных</a><a href="/legal/terms" target="_blank" rel="noopener" data-i18n="terms">Условия использования</a></p>
 </div>
 <script>
 (() => {
   const slug = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop());
-  if (new URLSearchParams(location.search).get('embed')) document.body.classList.add('embed');
+  const params = new URLSearchParams(location.search);
+  if (params.get('embed')) document.body.classList.add('embed');
   const $ = (id) => document.getElementById(id);
   const out = $('out');
+
+  // ---------- язык: RU / EN (выбор запоминается; можно задать ссылкой ?lang=en) ----------
+  const TXT = {
+    ru: {
+      loading: 'Загрузка…', checkin: 'Заезд', checkout: 'Выезд', guests: 'Гостей', find: 'Найти номер',
+      privacy: 'Политика конфиденциальности', pdn: 'Согласие на обработку персональных данных', terms: 'Условия использования',
+      titleSuffix: 'бронирование', checkinFrom: 'заезд с', checkoutBefore: 'выезд до', questions: 'Вопросы по бронированию:',
+      unavailable: 'Бронирование недоступно', searching: 'Ищем свободные номера…', noRooms: 'На эти даты свободных номеров нет. Попробуйте другие даты', orCall: ' или позвоните: ',
+      upTo: 'до {n} гостей', left: 'осталось {n}', photos: '{n} фото', seePhotos: 'Смотреть фото', standard: 'Стандартный', breakfast: ' · завтрак', nonRefundable: ' · без возврата',
+      forNights: 'за {n} {w}', book: 'Забронировать', night: ['ночь', 'ночи', 'ночей'], months: ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'],
+      guestsN: 'гостей: {n}', name: 'Имя и фамилия', phone: 'Телефон', email: 'Email (необязательно)', wishes: 'Пожелания (необязательно)', wishesPh: 'Время заезда, детская кроватка…',
+      honeypot: 'Не заполняйте это поле', consent: 'Я согласен на <a href="/legal/pdn-consent" target="_blank" rel="noopener">обработку персональных данных</a> для оформления бронирования и принимаю <a href="/legal/terms" target="_blank" rel="noopener">условия использования сервиса</a>',
+      total: 'Итого', send: 'Отправить заявку', other: 'Выбрать другой номер', sent: 'Заявка отправлена', ref: 'Номер заявки', phoneLbl: ' Телефон: ',
+      offline: 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз', wrong: 'Что-то пошло не так', currency: '₽', locale: 'ru-RU',
+    },
+    en: {
+      loading: 'Loading…', checkin: 'Check-in', checkout: 'Check-out', guests: 'Guests', find: 'Find a room',
+      privacy: 'Privacy policy', pdn: 'Consent to personal data processing', terms: 'Terms of use',
+      titleSuffix: 'booking', checkinFrom: 'check-in from', checkoutBefore: 'check-out before', questions: 'Booking questions:',
+      unavailable: 'Booking is unavailable', searching: 'Looking for available rooms…', noRooms: 'No rooms available for these dates. Please try other dates', orCall: ' or call us: ',
+      upTo: 'up to {n} guests', left: '{n} left', photos: '{n} photos', seePhotos: 'View photos', standard: 'Standard', breakfast: ' · breakfast included', nonRefundable: ' · non-refundable',
+      forNights: 'for {n} {w}', book: 'Book', night: ['night', 'nights', 'nights'], months: ['January','February','March','April','May','June','July','August','September','October','November','December'],
+      guestsN: 'guests: {n}', name: 'First and last name', phone: 'Phone', email: 'Email (optional)', wishes: 'Special requests (optional)', wishesPh: 'Arrival time, baby cot…',
+      honeypot: 'Leave this field empty', consent: 'I agree to the <a href="/legal/pdn-consent" target="_blank" rel="noopener">processing of my personal data</a> to make this booking and accept the <a href="/legal/terms" target="_blank" rel="noopener">terms of use</a>',
+      total: 'Total', send: 'Send request', other: 'Choose another room', sent: 'Request sent', ref: 'Request number', phoneLbl: ' Phone: ',
+      offline: 'No connection to the server. Please check your internet and try again', wrong: 'Something went wrong', currency: 'RUB', locale: 'en-GB',
+    },
+  };
+  // Тексты ошибок приходят с сервера по-русски; для английской версии подбираем перевод по шаблону
+  const ERR_EN = [
+    [/Дата заезда уже прошла/, 'The check-in date is in the past'], [/Дата выезда должна быть позже/, 'Check-out must be after check-in'],
+    [/Онлайн можно забронировать до (\d+) ночей/, 'Online booking is limited to $1 nights — please call us for longer stays'],
+    [/Слишком много заявок/, 'Too many requests from your address. Please try later or call us'], [/Проверьте номер телефона/, 'Please check the phone number'],
+    [/согласие на обработку/i, 'Consent to personal data processing is required'], [/неподтверждённые заявки/, 'You already have unconfirmed requests. Please wait for our call or call us'],
+    [/вмещает до (\d+) гостей/, 'The room sleeps up to $1 guests'], [/недоступен для онлайн-бронирования/, 'The room is not available for online booking on these dates'],
+    [/свободные номера этой категории закончились/, 'The rooms of this category were just taken. Please choose other dates'], [/не найден/i, 'Not found'],
+  ];
+  const REASON_EN = [[/Вмещает до (\d+) гостей/, 'Sleeps up to $1 guests'], [/продажи закрыты/, 'Sales are closed for these dates'], [/Минимальный срок проживания — (\d+)/, 'Minimum stay: $1 nights'], [/Нет свободных номеров/, 'No rooms available for these dates']];
+  let lang = (params.get('lang') || (() => { try { return localStorage.getItem('book_lang'); } catch { return null; } })() || ((navigator.language || 'ru').toLowerCase().startsWith('ru') ? 'ru' : 'en'));
+  if (!TXT[lang]) lang = 'ru';
+  const t = (k, v) => { let x = TXT[lang][k] ?? TXT.ru[k] ?? k; if (v) Object.keys(v).forEach((n) => { x = x.replace(`{${n}}`, v[n]); }); return x; };
+  const tr = (list, msg) => { if (lang === 'ru') return msg; for (const [re, en] of list) { const m = msg.match(re); if (m) return en.replace('$1', m[1] ?? ''); } return null; };
+  const errText = (msg) => (lang === 'ru' ? msg : (tr(ERR_EN, msg) || TXT.en.wrong));
+
   const pad = (n) => String(n).padStart(2, '0');
   const iso = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const addDays = (s, n) => { const [y, m, d] = s.split('-').map(Number); const x = new Date(y, m - 1, d + n); return iso(x); };
-  const MONTHS = ['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
-  const fmtDate = (s) => { const [y, m, d] = s.split('-').map(Number); return `${d} ${MONTHS[m - 1]}`; };
-  const money = (v) => `${Math.round(Number(v)).toLocaleString('ru-RU')} ₽`;
-  const nightsWord = (n) => { const a = n % 10, b = n % 100; if (a === 1 && b !== 11) return 'ночь'; if (a >= 2 && a <= 4 && (b < 10 || b >= 20)) return 'ночи'; return 'ночей'; };
+  const fmtDate = (s) => { const [, m, d] = s.split('-').map(Number); return lang === 'ru' ? `${d} ${t('months')[m - 1]}` : `${d} ${t('months')[m - 1]}`; };
+  const money = (v) => (lang === 'ru' ? `${Math.round(Number(v)).toLocaleString('ru-RU')} ₽` : `${Math.round(Number(v)).toLocaleString('en-GB')} RUB`);
+  const nightsWord = (n) => { const w = t('night'); if (lang === 'en') return n === 1 ? w[0] : w[1]; const a = n % 10, b = n % 100; if (a === 1 && b !== 11) return w[0]; if (a >= 2 && a <= 4 && (b < 10 || b >= 20)) return w[1]; return w[2]; };
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   let info = null;
+  let lastView = null;
+
+  function applyStatic() {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach((el) => { if (!(el.id === 'name' && info)) el.textContent = t(el.dataset.i18n); });
+    document.querySelectorAll('.langs button').forEach((b) => b.classList.toggle('on', b.dataset.lang === lang));
+    if (info) {
+      document.title = `${info.name} — ${t('titleSuffix')}`;
+      $('addr').textContent = [info.address, `${t('checkinFrom')} ${info.check_in_time}, ${t('checkoutBefore')} ${info.check_out_time}`].filter(Boolean).join(' · ');
+      $('foot').textContent = info.phone ? `${t('questions')} ${info.phone}` : '';
+    }
+  }
+  document.querySelectorAll('.langs button').forEach((b) => b.addEventListener('click', () => {
+    lang = b.dataset.lang; try { localStorage.setItem('book_lang', lang); } catch { /* без хранилища */ }
+    applyStatic(); if (info && lastView !== 'done') search();
+  }));
 
   async function call(method, path, body) {
     let res;
     try { res = await fetch(path, { method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined }); }
-    catch { throw Object.assign(new Error('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз'), { data: {} }); }
+    catch { throw Object.assign(new Error(t('offline')), { data: {}, local: true }); }
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw Object.assign(new Error(data.error || 'Что-то пошло не так'), { data });
+    if (!res.ok) throw Object.assign(new Error(data.error || t('wrong')), { data });
     return data;
   }
+  const failMsg = (e) => (e.local ? e.message : errText(e.message));
 
   const today = iso(new Date());
   $('ci').min = today; $('ci').value = addDays(today, 1);
@@ -129,37 +192,38 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
     $('co').min = addDays($('ci').value, 1);
     if ($('co').value <= $('ci').value) $('co').value = addDays($('ci').value, 1);
   });
+  applyStatic();
 
   call('GET', `/api/public/${encodeURIComponent(slug)}`).then((d) => {
     info = d;
-    document.title = `${d.name} — бронирование`;
     $('name').textContent = d.name;
-    $('addr').textContent = [d.address, `заезд с ${d.check_in_time}, выезд до ${d.check_out_time}`].filter(Boolean).join(' · ');
-    const maxCap = Math.max(1, ...d.room_types.map((t) => t.capacity));
+    const maxCap = Math.max(1, ...d.room_types.map((x) => x.capacity));
     $('guests').innerHTML = Array.from({ length: maxCap }, (_, i) => `<option value="${i + 1}"${i === 1 && maxCap > 1 ? ' selected' : ''}>${i + 1}</option>`).join('');
-    $('foot').textContent = d.phone ? `Вопросы по бронированию: ${d.phone}` : '';
+    applyStatic();
     search();
-  }).catch((e) => { $('name').textContent = 'Бронирование недоступно'; $('search').style.display = 'none'; out.innerHTML = `<div class="msg">${esc(e.message)}</div>`; });
+  }).catch((e) => { $('name').textContent = t('unavailable'); $('search').style.display = 'none'; out.innerHTML = `<div class="msg">${esc(failMsg(e))}</div>`; });
 
   $('search').addEventListener('submit', (e) => { e.preventDefault(); search(); });
 
   async function search() {
-    out.innerHTML = '<div class="results"><div class="opt"><div>Ищем свободные номера…</div></div></div>';
+    lastView = 'search';
+    out.innerHTML = `<div class="results"><div class="opt"><div>${esc(t('searching'))}</div></div></div>`;
     try {
       const d = await call('GET', `/api/public/${encodeURIComponent(slug)}/availability?check_in=${$('ci').value}&check_out=${$('co').value}&guests=${$('guests').value}`);
       const list = document.createElement('div'); list.className = 'results';
-      if (!d.options.some((o) => o.available)) list.insertAdjacentHTML('beforeend', `<div class="msg">На эти даты свободных номеров нет. Попробуйте другие даты${info.phone ? ` или позвоните: ${esc(info.phone)}` : ''}.</div>`);
+      if (!d.options.some((o) => o.available)) list.insertAdjacentHTML('beforeend', `<div class="msg">${esc(t('noRooms'))}${info.phone ? `${esc(t('orCall'))}${esc(info.phone)}` : ''}.</div>`);
       d.options.forEach((o) => {
         const el = document.createElement('div');
-        const photos = ((info.room_types || []).find((t) => t.id === o.room_type_id) || {}).photos || [];
+        const photos = ((info.room_types || []).find((x) => x.id === o.room_type_id) || {}).photos || [];
         el.className = 'opt' + (o.available ? '' : ' off') + (photos.length ? ' with-photo' : '');
-        el.innerHTML = `${photos.length ? `<button class="thumb" type="button" aria-label="Смотреть фото"><img src="${esc(photos[0])}" alt="${esc(o.name)}" loading="lazy">${photos.length > 1 ? `<span class="cnt">${photos.length} фото</span>` : ''}</button>` : ''}<div><h2>${esc(o.name)}</h2>${o.description ? `<div class="desc">${esc(o.description)}</div>` : ''}
-          <div class="meta">до ${o.capacity} гостей${o.available && o.free_rooms <= 2 ? ` · <span class="left">осталось ${o.free_rooms}</span>` : ''}</div>
-          ${o.available && o.price_note ? `<div class="meta">${esc(o.price_note)}</div>` : ''}
-          ${o.available ? '' : `<div class="reason">${esc(o.reason)}</div>`}
-          ${o.available && o.tariffs.length ? `<div class="tariffs">${[{ id: '', name: 'Стандартный', total: o.total, refundable: true }, ...o.tariffs].map((t, i) => `<label class="tariff"><input type="radio" name="t-${esc(o.room_type_id)}" value="${esc(t.id)}"${i === 0 ? ' checked' : ''}><span><b>${esc(t.name)}</b>${t.breakfast ? ' · завтрак' : ''}${t.refundable === false ? ' · без возврата' : ''}${t.description ? `<small>${esc(t.description)}</small>` : ''}</span><em>${money(t.total)}</em></label>`).join('')}</div>` : ''}</div>
-          <div class="price"><b>${money(o.total)}</b><span>за ${o.nights} ${nightsWord(o.nights)}</span>
-          ${o.available ? '<div style="margin-top:8px"><button class="btn" type="button">Забронировать</button></div>' : ''}</div>`;
+        const reason = o.reason ? (lang === 'ru' ? o.reason : (tr(REASON_EN, o.reason) || 'Not available')) : '';
+        el.innerHTML = `${photos.length ? `<button class="thumb" type="button" aria-label="${esc(t('seePhotos'))}"><img src="${esc(photos[0])}" alt="${esc(o.name)}" loading="lazy">${photos.length > 1 ? `<span class="cnt">${esc(t('photos', { n: photos.length }))}</span>` : ''}</button>` : ''}<div><h2>${esc(o.name)}</h2>${o.description ? `<div class="desc">${esc(o.description)}</div>` : ''}
+          <div class="meta">${esc(t('upTo', { n: o.capacity }))}${o.available && o.free_rooms <= 2 ? ` · <span class="left">${esc(t('left', { n: o.free_rooms }))}</span>` : ''}</div>
+          ${o.available && o.price_note && lang === 'ru' ? `<div class="meta">${esc(o.price_note)}</div>` : ''}
+          ${o.available ? '' : `<div class="reason">${esc(reason)}</div>`}
+          ${o.available && o.tariffs.length ? `<div class="tariffs">${[{ id: '', name: t('standard'), total: o.total, refundable: true }, ...o.tariffs].map((x, i) => `<label class="tariff"><input type="radio" name="t-${esc(o.room_type_id)}" value="${esc(x.id)}"${i === 0 ? ' checked' : ''}><span><b>${esc(x.name)}</b>${x.breakfast ? esc(t('breakfast')) : ''}${x.refundable === false ? esc(t('nonRefundable')) : ''}${x.description ? `<small>${esc(x.description)}</small>` : ''}</span><em>${money(x.total)}</em></label>`).join('')}</div>` : ''}</div>
+          <div class="price"><b>${money(o.total)}</b><span>${esc(t('forNights', { n: o.nights, w: nightsWord(o.nights) }))}</span>
+          ${o.available ? `<div style="margin-top:8px"><button class="btn" type="button">${esc(t('book'))}</button></div>` : ''}</div>`;
         if (photos.length) el.querySelector('.thumb').addEventListener('click', () => lightbox(photos));
         let chosen = { id: '', name: '', total: o.total };
         el.querySelectorAll('.tariff input').forEach((r, i) => r.addEventListener('change', () => {
@@ -170,13 +234,13 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
         list.append(el);
       });
       out.innerHTML = ''; out.append(list);
-    } catch (e) { out.innerHTML = `<div class="msg">${esc(e.message)}</div>`; }
+    } catch (e) { out.innerHTML = `<div class="msg">${esc(failMsg(e))}</div>`; }
   }
 
   function lightbox(photos, start = 0) {
     let i = start;
     const lb = document.createElement('div'); lb.className = 'lb'; lb.setAttribute('role', 'dialog');
-    lb.innerHTML = '<img alt=""><button class="x" type="button" aria-label="Закрыть">×</button><button class="pv" type="button" aria-label="Назад">‹</button><button class="nx" type="button" aria-label="Вперёд">›</button><div class="ct"></div>';
+    lb.innerHTML = '<img alt=""><button class="x" type="button" aria-label="×">×</button><button class="pv" type="button" aria-label="‹">‹</button><button class="nx" type="button" aria-label="›">›</button><div class="ct"></div>';
     const img = lb.querySelector('img'), ct = lb.querySelector('.ct');
     const show = () => { img.src = photos[i]; ct.textContent = `${i + 1} / ${photos.length}`; };
     const step = (n) => { i = (i + n + photos.length) % photos.length; show(); };
@@ -192,32 +256,33 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
   }
 
   function form(o, d) {
+    lastView = 'form';
     out.innerHTML = `<div class="panel"><h2>${esc(o.name)}${o.tariff && o.tariff.name ? ` · ${esc(o.tariff.name)}` : ''}</h2>
-      <div style="color:var(--muted)">${fmtDate(d.check_in)} — ${fmtDate(d.check_out)}, ${o.nights} ${nightsWord(o.nights)}, гостей: ${d.guests}</div>
+      <div style="color:var(--muted)">${fmtDate(d.check_in)} — ${fmtDate(d.check_out)}, ${o.nights} ${esc(nightsWord(o.nights))}, ${esc(t('guestsN', { n: d.guests }))}</div>
       <form id="bf"><div class="grid2">
-        <label>Имя и фамилия<input class="input" name="guest_name" autocomplete="name" required></label>
-        <label>Телефон<input class="input" name="guest_phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 900 000-00-00" required></label>
-        <label class="full">Email (необязательно)<input class="input" name="guest_email" type="email" autocomplete="email"></label>
-        <label class="full">Пожелания (необязательно)<textarea class="input" name="comment" placeholder="Время заезда, детская кроватка…"></textarea></label>
+        <label>${esc(t('name'))}<input class="input" name="guest_name" autocomplete="name" required></label>
+        <label>${esc(t('phone'))}<input class="input" name="guest_phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+7 900 000-00-00" required></label>
+        <label class="full">${esc(t('email'))}<input class="input" name="guest_email" type="email" autocomplete="email"></label>
+        <label class="full">${esc(t('wishes'))}<textarea class="input" name="comment" placeholder="${esc(t('wishesPh'))}"></textarea></label>
       </div>
-      <div class="hp" aria-hidden="true"><label>Не заполняйте это поле<input name="website" tabindex="-1" autocomplete="off"></label></div>
-      <label class="consent"><input type="checkbox" name="consent" required><span>Я согласен на <a href="/legal/pdn-consent" target="_blank" rel="noopener">обработку персональных данных</a> для оформления бронирования и принимаю <a href="/legal/terms" target="_blank" rel="noopener">условия использования сервиса</a></span></label>
-      <div class="total"><span>Итого</span><b>${money(o.total)}</b></div>
+      <div class="hp" aria-hidden="true"><label>${esc(t('honeypot'))}<input name="website" tabindex="-1" autocomplete="off"></label></div>
+      <label class="consent"><input type="checkbox" name="consent" required><span>${t('consent')}</span></label>
+      <div class="total"><span>${esc(t('total'))}</span><b>${money(o.total)}</b></div>
       <div id="err"></div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" type="submit">Отправить заявку</button><button class="btn ghost" type="button" id="back">Выбрать другой номер</button></div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" type="submit">${esc(t('send'))}</button><button class="btn ghost" type="button" id="back">${esc(t('other'))}</button></div>
       </form></div>`;
     $('back').addEventListener('click', search);
     const f = $('bf');
     // телефон подставляется в виде +7 900 123-45-67 (только если курсор в конце — чтобы не мешать правке)
     f.guest_phone.addEventListener('input', () => {
       if (f.guest_phone.selectionStart !== f.guest_phone.value.length) return;
-      const raw = f.guest_phone.value.trim(); let d = raw.replace(/\D/g, '');
-      if (!d) { f.guest_phone.value = raw.startsWith('+') ? '+' : ''; return; }
-      if (raw.startsWith('+') && d[0] !== '7' && d[0] !== '8') { f.guest_phone.value = '+' + d.slice(0, 15); return; }
-      if (d[0] === '8') d = '7' + d.slice(1); else if (d[0] !== '7') d = '7' + d;
-      d = d.slice(0, 11);
-      let out = '+7'; if (d.length > 1) out += ' ' + d.slice(1, 4); if (d.length > 4) out += ' ' + d.slice(4, 7); if (d.length > 7) out += '-' + d.slice(7, 9); if (d.length > 9) out += '-' + d.slice(9, 11);
-      f.guest_phone.value = out;
+      const raw = f.guest_phone.value.trim(); let dg = raw.replace(/\D/g, '');
+      if (!dg) { f.guest_phone.value = raw.startsWith('+') ? '+' : ''; return; }
+      if (raw.startsWith('+') && dg[0] !== '7' && dg[0] !== '8') { f.guest_phone.value = '+' + dg.slice(0, 15); return; }
+      if (dg[0] === '8') dg = '7' + dg.slice(1); else if (dg[0] !== '7') dg = '7' + dg;
+      dg = dg.slice(0, 11);
+      let res = '+7'; if (dg.length > 1) res += ' ' + dg.slice(1, 4); if (dg.length > 4) res += ' ' + dg.slice(4, 7); if (dg.length > 7) res += '-' + dg.slice(7, 9); if (dg.length > 9) res += '-' + dg.slice(9, 11);
+      f.guest_phone.value = res;
     });
     f.guest_name.focus();
     f.addEventListener('submit', async (e) => {
@@ -230,13 +295,15 @@ textarea.input { height: 76px; padding: 10px 12px; resize: vertical; }
           guest_name: f.guest_name.value, guest_phone: f.guest_phone.value, guest_email: f.guest_email.value,
           comment: f.comment.value, consent: f.consent.checked, website: f.website.value,
         });
-        out.innerHTML = `<div class="panel done"><div class="mark">✓</div><h2>Заявка отправлена</h2>
+        lastView = 'done';
+        const message = lang === 'ru' ? r.message : 'Thank you! The hotel will confirm your request shortly. Please keep your request number.';
+        out.innerHTML = `<div class="panel done"><div class="mark">✓</div><h2>${esc(t('sent'))}</h2>
           <p>${esc(r.room_type)}, ${fmtDate(r.check_in)} — ${fmtDate(r.check_out)}, ${money(r.total)}</p>
-          <p style="color:var(--muted)">${esc(r.message)}${info.phone ? ` Телефон: <a href="tel:${esc(info.phone.replace(/[^\d+]/g, ''))}">${esc(info.phone)}</a>` : ''}</p>
-          <div class="ref">Номер заявки ${esc(r.reference)}</div></div>`;
+          <p style="color:var(--muted)">${esc(message)}${info.phone ? `${esc(t('phoneLbl'))}<a href="tel:${esc(info.phone.replace(/[^\d+]/g, ''))}">${esc(info.phone)}</a>` : ''}</p>
+          <div class="ref">${esc(t('ref'))} ${esc(r.reference)}</div></div>`;
         $('search').style.display = 'none';
       } catch (ex) {
-        $('err').innerHTML = `<div class="msg" style="margin:0 0 14px">${esc(ex.message)}</div>`;
+        $('err').innerHTML = `<div class="msg" style="margin:0 0 14px">${esc(failMsg(ex))}</div>`;
         if (ex.data?.field && f[ex.data.field]) f[ex.data.field].classList.add('invalid');
         btn.disabled = false;
       }
