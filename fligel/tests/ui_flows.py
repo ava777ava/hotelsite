@@ -86,7 +86,33 @@ def main() -> int:
                 page.wait_for_selector(".modal", timeout=3000)
                 page.keyboard.press("Escape")
 
+            def tasks_flow():
+                page.goto(f"{BASE}/app/#/tasks")
+                page.get_by_role("button", name="Новая задача").click()
+                page.fill(".modal input[maxlength='200']", f"Проверка e2e {label}")
+                page.get_by_role("button", name="Сохранить").click()
+                page.wait_for_selector(f".task-card:has-text('Проверка e2e {label}')", timeout=4000)
+                page.locator(f".task-card:has-text('Проверка e2e {label}') .task-check").click()
+                page.wait_for_selector(f".task-card:has-text('Проверка e2e {label}')", state="detached", timeout=4000)
+
+            def autopilot_flow():
+                page.goto(f"{BASE}/app/#/autopilot")
+                page.wait_for_selector(".switch", timeout=5000)
+                sw = page.locator(".switch").first
+                before = sw.get_attribute("aria-checked")
+                sw.click()
+                page.wait_for_function("(b) => document.querySelector('.switch').getAttribute('aria-checked') !== b", arg=before, timeout=4000)
+                page.locator(".switch").first.click()  # вернуть как было
+                page.wait_for_function("(b) => document.querySelector('.switch').getAttribute('aria-checked') === b", arg=before, timeout=4000)
+
+            def reviews_page():
+                page.goto(f"{BASE}/app/#/reviews")
+                page.wait_for_selector(".kpis, .empty", timeout=5000)
+
             step("карточка брони", open_booking)
+            step("задачи", tasks_flow)
+            step("автопилот", autopilot_flow)
+            step("отзывы", reviews_page)
             step("новая бронь", new_booking)
             step("тема", theme)
             step("колокольчик", bell)

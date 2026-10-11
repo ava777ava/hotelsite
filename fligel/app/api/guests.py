@@ -29,7 +29,8 @@ DEFAULT_TEMPLATES = [
      "{имя}, спасибо, что остановились у нас ({объект})! Будем рады видеть вас снова. Если захотите вернуться — звоните: {телефон объекта}."),
 ]
 PLACEHOLDERS = ["имя", "даты", "заезд", "выезд", "ночей", "срок", "номер", "объект", "адрес", "телефон объекта",
-                "время заезда", "время выезда", "сумма", "сумма к оплате", "код двери", "ссылка на анкету", "ссылка на отзыв"]
+                "время заезда", "время выезда", "сумма", "сумма к оплате", "код двери", "ссылка на анкету", "ссылка на отзыв",
+                "гость", "телефон гостя"]
 
 
 def phone_key(phone: str) -> str:
@@ -54,6 +55,7 @@ def render_message(body: str, b: dict, prop: dict, room_name: str, extra: dict |
         "заезд": _short(b["check_in"]), "выезд": _short(b["check_out"]), "ночей": str(nights), "срок": f"{nights} {n_word}",
         "номер": room_name, "объект": prop["name"], "адрес": prop["address"] or "—", "телефон объекта": prop["phone"] or "—",
         "время заезда": prop["check_in_time"].strftime("%H:%M"), "время выезда": prop["check_out_time"].strftime("%H:%M"),
+        "гость": (b["guest_name"] or "гость без имени").strip(), "телефон гостя": b["guest_phone"] or "—",
         "сумма": _rub(b["total_price"]), "сумма к оплате": _rub(max(Decimal(b["total_price"]) - Decimal(b["paid_amount"]), 0)),
     }
     values.update(extra or {})

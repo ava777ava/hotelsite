@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
-from .. import audit, config, mail, ratelimit
+from .. import audit, automation, config, mail, ratelimit
 from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
@@ -51,6 +51,7 @@ def register(c: Ctx):
             (acc["id"], email, hash_password(password), name),
         )
         create_default_categories(conn, acc["id"])
+        automation.ensure_presets(conn, acc["id"], use_defaults=True)
     return {"token": make_token(user["id"], acc["id"], "owner")}
 
 

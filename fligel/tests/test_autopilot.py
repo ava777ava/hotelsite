@@ -3,7 +3,7 @@ import unittest
 
 from test_app import Base, d  # noqa: F401  (test_app задаёт окружение для тестовой базы)
 
-from app import db, notify, telegram
+from app import automation, config, db, mail, notify, telegram
 
 
 class StaffMixin:
@@ -264,6 +264,218 @@ class ReviewTests(StaffMixin, Base):
         self.assertEqual(self.client.get("/api/reviews", headers=maid["h"]).status_code, 403)
         self.assertEqual(self.client.get("/api/reviews", headers=ctx["h"]).json()["overall"]["n"], 1)
         self.assertEqual(self.client.get("/api/public/review/nope").status_code, 404)
+
+
+class AutopilotTests(StaffMixin, Base):
+    def setUp(self):
+        self.sent = []
+        self._mail = (mail.send, config.SMTP_HOST)
+        mail.send = lambda to, subject, body: self.sent.append((to, subject, body))
+        config.SMTP_HOST = "smtp.test"  # почта «настроена»: письма уходят в наш мок
+
+    def tearDown(self):
+        mail.send, config.SMTP_HOST = self._mail
+
+    def rules(self, ctx):
+        r = self.client.get("/api/automation", headers=ctx["h"])
+        self.assertEqual(r.status_code, 200, r.text)
+        return {x["preset"] or x["name"]: x for x in r.json()["rules"]}
+
+    def soon(self, ctx, key, **patch):
+        """Проверяем одно правило: остальные выключаем, а у него час срабатывания 0 — тест не зависит от времени суток."""
+        rules = self.rules(ctx)
+        for k, v in rules.items():
+            if k != key and v["enabled"]:
+                self.client.patch(f"/api/automation/rules/{v['id']}", headers=ctx["h"], json={"enabled": False})
+        r = self.client.patch(f"/api/automation/rules/{rules[key]['id']}", headers=ctx["h"], json={"at_hour": 0, "enabled": True, **patch})
+        self.assertEqual(r.status_code, 200, r.text)
+        return rules[key]
+
+    def runs(self, ctx):
+        return self.client.get("/api/automation/runs", headers=ctx["h"]).json()["items"]
+
+    def test_presets_created_for_new_account_with_safe_defaults(self):
+        ctx = self.register("auto1@example.ru")
+        rules = self.rules(ctx)
+        self.assertEqual(set(rules), {p["key"] for p in automation.PRESETS})
+        on = {k for k, v in rules.items() if v["enabled"]}
+        self.assertEqual(on, {"checkin_instructions", "payment_reminder", "cleaning_after_checkout", "debt_alert"})
+        self.assertTrue(all(v["hint"] for v in rules.values()))
+        # старый аккаунт (сценариев ещё нет) получает их выключенными — ничего не уйдёт гостям без ведома владельца
+        with db.tx() as conn:
+            db.run(conn, "DELETE FROM automation_rules WHERE account_id = (SELECT account_id FROM users WHERE email = 'auto1@example.ru')")
+        rules = self.rules(ctx)
+        self.assertEqual(len(rules), len(automation.PRESETS))
+        self.assertFalse(any(v["enabled"] for v in rules.values()))
+
+    def test_checkin_instructions_email_once_with_door_code(self):
+        ctx = self.register("auto2@example.ru")
+        self.soon(ctx, "checkin_instructions")
+        b = self.book(ctx, ctx["rooms"][0], d(1), d(3), guest="Анна Петрова", guest_email="anna@guest.ru", door_code="4821#").json()
+        self.book(ctx, ctx["rooms"][1], d(1), d(3), guest="Без почты")  # другой гость без email
+        automation.run_due()
+        mine = [m for m in self.sent if m[0] == "anna@guest.ru"]
+        self.assertEqual(len(mine), 1)
+        self.assertIn("4821#", mine[0][2])
+        self.assertIn("Анна", mine[0][2])
+        self.assertNotIn("{", mine[0][1] + mine[0][2])  # все подстановки заменены
+        runs = [r for r in self.runs(ctx) if r["booking_id"] == b["id"]]
+        self.assertEqual([r["status"] for r in runs], ["done"])
+        # повторный проход не шлёт письмо второй раз
+        automation.run_due()
+        self.assertEqual(len([m for m in self.sent if m[0] == "anna@guest.ru"]), 1)
+        # гостю без email — не письмо, а напоминание сотрудникам
+        skipped = [r for r in self.runs(ctx) if r["guest_name"] == "Без почты"]
+        self.assertEqual(skipped[0]["status"], "skipped")
+        notes = self.client.get("/api/notifications", headers=ctx["h"]).json()["items"]
+        self.assertTrue(any("не указан email" in n["text"] and "Без почты" in n["text"] for n in notes))
+
+    def test_email_skipped_when_smtp_not_configured(self):
+        ctx = self.register("auto3@example.ru")
+        self.soon(ctx, "checkin_instructions")
+        config.SMTP_HOST = ""
+        self.book(ctx, ctx["rooms"][0], d(1), d(2), guest_email="g@guest.ru")
+        automation.run_due()
+        self.assertEqual(self.sent, [])
+        self.assertIn("SMTP", self.runs(ctx)[0]["detail"])
+        self.assertEqual(self.runs(ctx)[0]["status"], "skipped")
+
+    def test_payment_reminder_only_for_unpaid_and_catches_up(self):
+        ctx = self.register("auto4@example.ru")
+        self.soon(ctx, "payment_reminder")
+        self.book(ctx, ctx["rooms"][0], d(2), d(4), guest="Должник", guest_email="debtor@guest.ru")        # до заезда 2 дня: окно «за 3 дня» уже открыто
+        self.book(ctx, ctx["rooms"][1], d(2), d(4), guest="Заплатил", guest_email="paid@guest.ru", paid_amount=7000)
+        self.book(ctx, ctx["rooms"][2], d(10), d(12), guest="Далеко", guest_email="far@guest.ru")          # рано
+        automation.run_due()
+        self.assertEqual([m[0] for m in self.sent], ["debtor@guest.ru"])
+        self.assertIn("осталось внести", self.sent[0][2])
+
+    def test_cancelled_booking_does_not_trigger(self):
+        ctx = self.register("auto5@example.ru")
+        self.soon(ctx, "checkin_instructions")
+        b = self.book(ctx, ctx["rooms"][0], d(1), d(2), guest_email="x@guest.ru").json()
+        self.client.patch(f"/api/bookings/{b['id']}", headers=ctx["h"], json={"status": "cancelled"})
+        automation.run_due()
+        self.assertEqual(self.sent, [])
+
+    def test_cleaning_after_checkout_sets_status_unless_already_cleaned(self):
+        ctx = self.register("auto6@example.ru")
+        self.soon(ctx, "cleaning_after_checkout")
+        r1, r2 = ctx["rooms"][0], ctx["rooms"][1]
+        self.book(ctx, r1, d(-2), d(0), guest="Уехал")
+        self.book(ctx, r2, d(-2), d(0), guest="Уехал рано")
+        with db.tx() as conn:  # горничная уже убрала второй номер сегодня утром
+            db.run(conn, "UPDATE rooms SET cleaned_on = current_date WHERE id = %s", (r2["id"],))
+        automation.run_due()
+        with db.tx() as conn:
+            st = {str(r["id"]): r["hk_status"] for r in db.all_(conn, "SELECT id, hk_status FROM rooms WHERE id = ANY(%s::uuid[])", ([r1["id"], r2["id"]],))}
+            logged = db.one(conn, "SELECT count(*) AS n FROM room_status_log WHERE room_id = %s AND user_id IS NULL", (r1["id"],))["n"]
+        self.assertEqual(st[str(r1["id"])], "dirty")
+        self.assertEqual(st[str(r2["id"])], "clean")
+        self.assertEqual(logged, 1)
+        details = {r["guest_name"]: r["status"] for r in self.runs(ctx)}
+        self.assertEqual(details, {"Уехал": "done", "Уехал рано": "skipped"})
+
+    def test_debt_alert_goes_to_staff_bell(self):
+        ctx = self.register("auto7@example.ru")
+        self.soon(ctx, "debt_alert")
+        self.book(ctx, ctx["rooms"][0], d(-3), d(0), guest="Иван Должников", guest_phone="+79001112233", paid_amount=1000)
+        self.book(ctx, ctx["rooms"][1], d(-3), d(0), guest="Рассчитался", paid_amount=10500)
+        automation.run_due()
+        notes = [n["text"] for n in self.client.get("/api/notifications", headers=ctx["h"]).json()["items"]]
+        self.assertEqual(len([t for t in notes if "не оплачено" in t]), 1)
+        msg = [t for t in notes if "не оплачено" in t][0]
+        self.assertIn("Иван Должников", msg)
+        self.assertIn("9 500 ₽", msg)
+
+    def test_custom_rule_creates_task_and_new_booking_is_not_retroactive(self):
+        ctx = self.register("auto8@example.ru")
+        maid = self.staff(ctx, "maid-a8@example.ru")
+        old = self.book(ctx, ctx["rooms"][0], d(5), d(6), guest="Старая бронь").json()
+        r = self.client.post("/api/automation/rules", headers=ctx["h"], json={
+            "name": "Приготовить детскую кроватку", "event": "new_booking", "action": "create_task", "sources": ["manual"],
+            "params": {"title": "Кроватка в номер {номер} для {гость}", "assignee_id": maid["id"], "due_in_days": 1}})
+        self.assertEqual(r.status_code, 200, r.text)
+        self.book(ctx, ctx["rooms"][1], d(7), d(8), guest="Новая бронь", source="avito")   # другой источник — мимо условия
+        new = self.book(ctx, ctx["rooms"][2], d(7), d(8), guest="Мария Новикова").json()
+        automation.run_due()
+        tasks = self.client.get("/api/tasks", headers=ctx["h"]).json()["items"]
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["title"], "Кроватка в номер 103 для Мария Новикова")
+        self.assertEqual((tasks[0]["assignee_name"], tasks[0]["source"], tasks[0]["booking_id"]), ("Мария", "automation", new["id"]))
+        self.assertEqual(tasks[0]["due_date"], d(1))
+        self.assertNotIn(old["id"], [t["booking_id"] for t in tasks])
+
+    def test_hour_condition_delays_firing(self):
+        from datetime import datetime
+        if datetime.now().hour >= 23:
+            self.skipTest("нужен час позже текущего")
+        ctx = self.register("auto9@example.ru")
+        rule = self.soon(ctx, "checkin_instructions", at_hour=datetime.now().hour + 1)
+        self.book(ctx, ctx["rooms"][0], d(1), d(2), guest_email="late@guest.ru")
+        automation.run_due()
+        self.assertEqual(self.sent, [])
+        self.client.patch(f"/api/automation/rules/{rule['id']}", headers=ctx["h"], json={"at_hour": 0})
+        automation.run_due()
+        self.assertEqual(len(self.sent), 1)
+
+    def test_disabled_rule_does_nothing_and_enable_toggle_is_audited(self):
+        ctx = self.register("auto10@example.ru")
+        rule = self.soon(ctx, "checkin_instructions")
+        r = self.client.patch(f"/api/automation/rules/{rule['id']}", headers=ctx["h"], json={"enabled": False})
+        self.assertFalse(r.json()["enabled"])
+        self.book(ctx, ctx["rooms"][0], d(1), d(2), guest_email="off@guest.ru")
+        automation.run_due()
+        self.assertEqual(self.sent, [])
+        log = self.client.get("/api/audit", headers=ctx["h"]).json()
+        self.assertTrue(any("выключен" in str(x) for x in (log.get("items") if isinstance(log, dict) else log)))
+
+    def test_rule_validation_permissions_and_isolation(self):
+        ctx = self.register("auto11@example.ru")
+        other = self.register("auto11b@example.ru")
+        manager = self.staff(ctx, "mgr-a11@example.ru", role="manager", name="Админ")
+        good = {"name": "Свой", "event": "checkout_day", "action": "notify_staff", "params": {"text": "Выезд {гость}"}}
+        self.assertEqual(self.client.get("/api/automation", headers=manager["h"]).status_code, 403)
+        self.assertEqual(self.client.post("/api/automation/rules", headers=manager["h"], json=good).status_code, 403)
+        for patch in ({"event": "never"}, {"action": "format_disk"}, {"at_hour": 25}, {"offset_days": -1}, {"name": ""},
+                      {"sources": ["tiktok"]}, {"params": {"text": ""}}, {"property_id": other["prop"]["id"]}):
+            r = self.client.post("/api/automation/rules", headers=ctx["h"], json={**good, **patch})
+            self.assertIn(r.status_code, (404, 422), (patch, r.text))
+        r = self.client.post("/api/automation/rules", headers=ctx["h"], json=good)
+        self.assertEqual(r.status_code, 200, r.text)
+        rid = r.json()["id"]
+        # чужой аккаунт не видит и не меняет
+        self.assertNotIn(rid, [x["id"] for x in self.client.get("/api/automation", headers=other["h"]).json()["rules"]])
+        self.assertEqual(self.client.patch(f"/api/automation/rules/{rid}", headers=other["h"], json={"enabled": False}).status_code, 404)
+        self.assertEqual(self.client.delete(f"/api/automation/rules/{rid}", headers=other["h"]).status_code, 404)
+        # готовый сценарий не удалить, свой — можно; у готового нельзя поменять событие
+        preset = self.rules(ctx)["debt_alert"]
+        self.assertEqual(self.client.delete(f"/api/automation/rules/{preset['id']}", headers=ctx["h"]).status_code, 422)
+        r = self.client.patch(f"/api/automation/rules/{preset['id']}", headers=ctx["h"], json={"event": "new_booking", "action": "email_guest"})
+        self.assertEqual((r.json()["event"], r.json()["action"]), ("debt", "notify_staff"))
+        self.assertEqual(self.client.delete(f"/api/automation/rules/{rid}", headers=ctx["h"]).status_code, 200)
+
+    def test_run_now_endpoint_and_overdue_task_reminder(self):
+        ctx = self.register("auto12@example.ru")
+        self.client.post("/api/tasks", headers=ctx["h"], json={"title": "Забытая задача", "due_date": d(-1)})
+        old = automation.OVERDUE_HOUR
+        automation.OVERDUE_HOUR = 0
+        try:
+            automation.run_due()
+            automation.run_due()  # второй проход в тот же день — без повторного сообщения
+        finally:
+            automation.OVERDUE_HOUR = old
+        notes = [n["text"] for n in self.client.get("/api/notifications", headers=ctx["h"]).json()["items"] if "Просрочено" in n["text"]]
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Забытая задача", notes[0])
+        self.assertEqual(self.client.post("/api/automation/run", headers=ctx["h"], json={}).json(), {"fired": 0})
+
+    def test_messenger_events_include_automation(self):
+        ctx = self.register("auto13@example.ru")
+        st = self.client.get("/api/notify/status", headers=ctx["h"]).json()
+        keys = {e["key"] for e in st["available_events"]}
+        self.assertTrue({"automation", "task", "review"} <= keys)
+        self.assertTrue({"automation", "task", "review"} <= set(st["events"]))
 
 
 if __name__ == "__main__":

@@ -304,6 +304,47 @@ def _seed_new_features(conn, rnd, acc, prop, prop2, rooms, rooms2, today) -> Non
     lid = one(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, 'landlord@fligel.ru', %s, 'Пётр (собственник квартир)', 'landlord') RETURNING id",
               (acc, hash_password("demo12345")))["id"]
     run(conn, "INSERT INTO user_properties (account_id, user_id, property_id) VALUES (%s, %s, %s)", (acc, lid, prop2))
+    _seed_autopilot(conn, acc, prop, today)
+
+
+def _seed_autopilot(conn, acc, prop, today) -> None:
+    """Автопилот, задачи, анкеты и отзывы — чтобы разделы не были пустыми на демо."""
+    from . import automation, guestlinks
+    from .api.tasks import create_task
+    automation.ensure_presets(conn, acc, use_defaults=True)
+    run(conn, "UPDATE automation_rules SET enabled = true WHERE account_id = %s AND preset IN ('questionnaire', 'review_request')", (acc,))
+    anna = one(conn, "SELECT id FROM users WHERE email = 'anna@fligel.ru'")["id"]
+    owner = one(conn, "SELECT id FROM users WHERE email = 'demo@fligel.ru'")["id"]
+    first_room = one(conn, "SELECT id FROM rooms WHERE account_id = %s ORDER BY sort_order, name LIMIT 1", (acc,))["id"]
+    create_task(conn, acc, "Заменить лампочку в ванной", assignee_id=anna, due_date=today - timedelta(days=2), room_id=first_room, created_by=owner)
+    create_task(conn, acc, "Принять бельё из прачечной", due_date=today, created_by=owner)
+    create_task(conn, acc, "Проверить огнетушители и аптечки", description="Срок годности, пломбы на огнетушителях. Отметить в журнале.",
+                due_date=today + timedelta(days=5), recurrence="monthly", created_by=owner)
+    done = create_task(conn, acc, "Купить средство для стёкол", assignee_id=anna, due_date=today - timedelta(days=1), created_by=owner)
+    run(conn, "UPDATE tasks SET done_at = now() - interval '20 hours', done_by = %s WHERE id = %s", (anna, done["id"]))
+    run(conn, "UPDATE rooms SET door_code = '4821#' WHERE id = %s", (first_room,))
+    # анкеты: у двух ближайших заездов гость уже ответил
+    for i, b in enumerate(all_(conn, "SELECT * FROM bookings WHERE account_id = %s AND status = 'confirmed' AND check_in BETWEEN %s AND %s"
+                                     " ORDER BY check_in LIMIT 3", (acc, today + timedelta(days=1), today + timedelta(days=9)))):
+        run(conn, "UPDATE bookings SET door_code = %s WHERE id = %s", (f"{1200 + i * 111}*", b["id"]))
+        if i < 2:
+            tok = guestlinks.ensure_form(conn, acc, b["id"])
+            run(conn, "UPDATE booking_forms SET arrival_time = %s, guests_count = %s, wishes = %s, car_number = %s, filled_at = now() - interval '3 hours' WHERE token = %s",
+                (("18:30", "21:00")[i], 2, ("Детская кроватка и поздний заезд", "")[i], ("А123ВБ 116", "")[i], tok))
+    # отзывы о прошедших проживаниях и журнал автопилота
+    ratings = [(5, "Всё отлично, чисто и уютно"), (4, "Хорошо, но тонкие стены"), (2, "Шумно по ночам, плохо спали"), (5, ""), (3, "Нормально, wi-fi медленный"), (5, "Вернёмся")]
+    past = all_(conn, "SELECT * FROM bookings WHERE account_id = %s AND status = 'confirmed' AND check_out < %s ORDER BY check_out DESC LIMIT %s",
+                (acc, today, len(ratings)))
+    for b, (rating, comment) in zip(past, ratings):
+        tok = guestlinks.ensure_review(conn, b)
+        run(conn, "UPDATE reviews SET rating = %s, comment = %s, submitted_at = now() - make_interval(days => %s) WHERE token = %s",
+            (rating, comment, (b["check_out"] - today).days * -1, tok))
+    rule = {r["preset"]: r["id"] for r in all_(conn, "SELECT id, preset FROM automation_rules WHERE account_id = %s", (acc,))}
+    for b, (key, status, detail) in zip(past, (("review_request", "done", "Письмо отправлено"), ("cleaning_after_checkout", "done", "Номер: нужна уборка"),
+                                               ("checkin_instructions", "skipped", "У гостя нет email — письмо не отправлено, сотрудникам отправлено напоминание"),
+                                               ("debt_alert", "done", "Сообщение сотрудникам отправлено"))):
+        run(conn, "INSERT INTO automation_runs (account_id, rule_id, booking_id, status, detail, created_at) VALUES (%s, %s, %s, %s, %s, now() - interval '1 day')"
+                  " ON CONFLICT DO NOTHING", (acc, rule[key], b["id"], status, detail))
 
 if __name__ == "__main__":
     main()
