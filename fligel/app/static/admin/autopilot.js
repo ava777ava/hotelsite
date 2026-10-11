@@ -53,9 +53,15 @@ function ruleDialog(rule, data, onDone) {
   const chk = (key, label, def = true) => { f['p_' + key] = h('input', { type: 'checkbox', checked: p[key] ?? def }); return h('label', { class: 'check' }, f['p_' + key], ' ' + label); };
   const statusSel = h('select', { class: 'input' }, [['dirty', 'Нужна уборка'], ['inspect', 'Ждёт проверки']].map(([k, l]) => h('option', { value: k, selected: (p.status || 'dirty') === k }, l)));
   const dueIn = h('input', { class: 'input', type: 'number', min: 0, max: 60, value: p.due_in_days ?? 0 });
+  // готовые шаблоны сообщений гостю (раздел «Гости») можно взять за основу текста письма
+  const tplPick = h('label', { class: 'field' }, h('span', {}, 'Взять текст из шаблона'));
+  const tplSel = h('select', { class: 'input', onchange: () => { const t = tpls.find((x) => x.id === tplSel.value); if (t) { f.body.value = t.body; if (!f.subject.value) f.subject.value = t.name; } tplSel.value = ''; } }, h('option', { value: '' }, 'Выбрать…'));
+  let tpls = [];
+  tplPick.append(tplSel);
+  api('GET', '/api/message-templates').then((r) => { tpls = r.items; tpls.forEach((t) => tplSel.append(h('option', { value: t.id }, t.name))); }).catch(() => { tplPick.style.display = 'none'; });
   const paramBox = {
     notify_staff: h('div', {}, text('Текст сообщения сотрудникам', 'text', 3, 'Гость {гость} выезжает, не оплачено {сумма к оплате}')),
-    email_guest: h('div', {}, line('Тема письма', 'subject', '{объект}: как заселиться'), text('Текст письма', 'body', 7), chk('notify_if_missing', 'Если у гостя нет email — напомнить сотрудникам')),
+    email_guest: h('div', {}, line('Тема письма', 'subject', '{объект}: как заселиться'), tplPick, text('Текст письма', 'body', 7), chk('notify_if_missing', 'Если у гостя нет email — напомнить сотрудникам')),
     create_task: h('div', {}, line('Название задачи', 'title', 'Подготовить номер {номер} для {гость}'), text('Описание (необязательно)', 'description', 2),
       h('div', { class: 'row2' }, h('label', { class: 'field' }, h('span', {}, 'Кому'), staffSel), h('label', { class: 'field' }, h('span', {}, 'Срок: через сколько дней'), dueIn)), chk('notify', 'Сообщить сотрудникам о новой задаче')),
     set_cleaning: h('div', {}, h('label', { class: 'field' }, h('span', {}, 'Какой статус поставить номеру'), statusSel), chk('notify', 'Сообщить сотрудникам'),

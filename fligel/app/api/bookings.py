@@ -622,7 +622,7 @@ def board(c: Ctx):
 def hide_private(rows: list[dict]) -> None:
     """Горничной контакты и деньги гостей не нужны (152-ФЗ: только необходимые данные) — убираем их из ответа."""
     for b in rows:
-        for k in ("guest_phone", "guest_email", "discount_reason", "rate_plan_name", "door_code"):
+        for k in ("guest_phone", "guest_email", "discount_reason", "rate_plan_name", "door_code", "form_car"):
             if k in b:
                 b[k] = ""
         for k in ("total_price", "paid_amount", "discount_amount", "deposit_amount"):
@@ -745,8 +745,10 @@ def today(c: Ctx):
         prop_params = (prop_id,) if prop_id else ()
         rows = all_(
             conn,
-            f"SELECT {BOOKING_COLS}, r.name AS room_name, r.cleaned_on AS room_cleaned_on, p.name AS property_name"
+            f"SELECT {BOOKING_COLS}, r.name AS room_name, r.cleaned_on AS room_cleaned_on, p.name AS property_name,"
+            " f.arrival_time AS form_arrival, f.car_number AS form_car, (f.wishes <> '') AS form_wishes"
             " FROM bookings b JOIN rooms r ON r.id = b.room_id JOIN properties p ON p.id = b.property_id"
+            " LEFT JOIN booking_forms f ON f.booking_id = b.id AND f.filled_at IS NOT NULL"
             f" WHERE b.account_id = %s AND b.status IN ('confirmed', 'pending')"
             f" AND b.check_in <= %s AND b.check_out >= %s{prop_filter} ORDER BY r.sort_order",
             (c.account_id, day, day, *prop_params),

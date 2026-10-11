@@ -175,6 +175,17 @@ class GuestFormTests(StaffMixin, Base):
         # можно обновить ответы
         self.assertEqual(self.client.post(f"/api/public/form/{token}", json={"guests_count": 2}).status_code, 200)
 
+    def test_today_screen_shows_arrival_time_and_car_from_form(self):
+        ctx = self.register("form5@example.ru")
+        maid = self.staff(ctx, "maid-f5@example.ru")
+        b = self.book(ctx, ctx["rooms"][0], d(0), d(2), guest="Сегодняшний").json()
+        token = self.link(ctx, b["id"], "form").rsplit("/", 1)[1]
+        self.client.post(f"/api/public/form/{token}", json={"arrival_time": "19:15", "car_number": "в777оо 16", "wishes": "Тишина"})
+        arr = self.client.get("/api/today", headers=ctx["h"]).json()["arrivals"][0]
+        self.assertEqual((arr["form_arrival"], arr["form_car"], arr["form_wishes"]), ("19:15", "В777ОО 16", True))
+        arr = self.client.get("/api/today", headers=maid["h"]).json()["arrivals"][0]
+        self.assertEqual((arr["form_arrival"], arr["form_car"]), ("19:15", ""))  # номер машины горничной не нужен
+
     def test_form_link_rejects_garbage_cancelled_and_foreign_access(self):
         ctx = self.register("form2@example.ru")
         other = self.register("form2b@example.ru")

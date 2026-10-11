@@ -27,6 +27,7 @@ export async function viewToday(main) {
         h('div', { style: { fontWeight: 600 } }, b.guest_name || `Гость с площадки ${SOURCE[b.source]}`,
           scope.value === 'all' ? h('span', { class: 'muted small', style: { fontWeight: 400 } }, ' · ', b.property_name) : null),
         h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${count(b.guests_count, 'guest')} · ${SOURCE[b.source]}`),
+        kind === 'in' && (b.form_arrival || b.form_car || b.form_wishes) ? h('div', { class: 'small' }, '📝 ', [b.form_arrival ? `приедет в ${b.form_arrival}` : null, b.form_car ? `машина ${b.form_car}` : null, b.form_wishes ? 'есть пожелания' : null].filter(Boolean).join(' · ')) : null,
         b.guest_phone ? h('a', { class: 'small tel', href: `tel:${b.guest_phone}`, onclick: (e) => e.stopPropagation() }, b.guest_phone) : null),
       kind !== 'staying' && due > 0 && can('manager') ? h('span', { class: 'pill warn num' }, `к оплате ${fmtMoney(due)}`) : null,
       b.status === 'pending' ? h('span', { class: 'pill warn' }, 'заявка') : null,
