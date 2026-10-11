@@ -36,5 +36,54 @@ jobs:
       - name: Проверка синтаксиса интерфейса
         run: |
           for f in app/static/admin/*.js app/static/sw.js; do node --check "$f"; done
+      - name: Клиент PostgreSQL (для проверки восстановления бэкапа)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
       - name: Тесты
         run: python -m unittest discover -s tests -v
+
+  e2e:
+    # Сквозные сценарии в настоящем браузере: регистрация → объект → бронь → оплата → отчёт; заявка гостя → подтверждение
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fligel
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: fligel_e2e
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/fligel_e2e
+      SECRET_KEY: e2e-secret-key-for-ci-only-0123456789
+      PUBLIC_BASE_URL: http://localhost:8000
+      SYNC_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: fligel/requirements.txt
+      - run: pip install -r requirements.txt playwright
+      - run: playwright install --with-deps chromium
+      - name: Демо-данные и запуск сервера
+        run: |
+          python -m app.demo
+          nohup python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > server.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:8000/health && break; sleep 1; done
+      - name: Дымовая проверка всех разделов
+        run: python tests/ui_smoke.py http://127.0.0.1:8000
+      - name: Сценарии интерфейса
+        run: python tests/ui_flows.py http://127.0.0.1:8000
+      - name: Сквозные сценарии
+        run: python tests/e2e.py http://127.0.0.1:8000
+      - name: Журнал сервера при сбое
+        if: failure()
+        run: tail -n 80 server.log
