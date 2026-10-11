@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
-from .. import audit, automation, config, mail, ratelimit
+from .. import audit, automation, config, household, mail, ratelimit
 from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
@@ -536,6 +536,10 @@ def mark_cleaned(c: Ctx):
     room_id = parse_uuid(c.path["id"])
     cleaned = c.data.get("cleaned", True)
     with tx() as conn:
+        if cleaned:
+            was = one(conn, "SELECT (cleaned_on = current_date) AS today FROM rooms WHERE id = %s AND account_id = %s", (room_id, c.account_id))
+            if was and not was["today"]:
+                household.writeoff_for_cleaning(conn, c.account_id, room_id, c.p.user_id)
         row = one(conn, "UPDATE rooms SET cleaned_on = CASE WHEN %s THEN current_date ELSE NULL END,"
                         " hk_status = CASE WHEN %s THEN 'clean' ELSE hk_status END, hk_updated_at = now()"
                         " WHERE id = %s AND account_id = %s RETURNING id, cleaned_on", (bool(cleaned), bool(cleaned), room_id, c.account_id))

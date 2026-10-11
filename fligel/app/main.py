@@ -14,7 +14,7 @@ from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
 from . import config, db, sync
-from .api import account, analytics, autopilot, autoprice as autoprice_api, bookings, channels, expenses, guestpages, guests, housekeeping, incomes, money, notify as notify_api, owners, photos, public, reports, tariffs, tasks
+from .api import account, analytics, autopilot, autoprice as autoprice_api, bookings, channels, expenses, guestpages, guests, household as household_api, housekeeping, incomes, money, notify as notify_api, owners, photos, public, reports, tariffs, tasks
 from .api import telegram as telegram_api
 from .middleware import SecurityHeaders
 from .migrate import migrate
@@ -150,6 +150,7 @@ routes = [
     *expenses.routes,
     *guestpages.routes,
     *guests.routes,
+    *household_api.routes,
     *housekeeping.routes,
     *incomes.routes,
     *money.routes,

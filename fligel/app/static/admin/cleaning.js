@@ -1,5 +1,6 @@
 // Флигель — интерфейс администратора (раздел «уборка»). ES-модуль без сборки.
 import { autoRefresh } from './app.js';
+import { inventoryCheckDialog } from './household.js';
 import { api, can, closeModal, fmtDate, h, openModal, qs, state, store, toast } from './core.js';
 
 // ---------- уборка ----------
@@ -43,7 +44,7 @@ export async function viewCleaning(main) {
     if (room.status === 'inspect') out.push(manager ? b('Проверено', 'primary', () => setStatus(room, 'clean')) : h('span', { class: 'muted small' }, 'Ждёт проверки администратором'), b('Переделать', '', () => setStatus(room, 'dirty')));
     if (room.status === 'repair') out.push(manager ? b('Исправлено', 'primary', () => setStatus(room, 'dirty')) : null);
     if (room.status === 'clean' || room.status === 'occupied') out.push(b('Нужна уборка', 'ghost', () => setStatus(room, 'dirty')));
-    if (room.status !== 'repair') out.push(b('Поломка', 'ghost', () => repairDialog(room)));
+    if (room.status !== 'repair') out.push(b('Проверить инвентарь', 'ghost', () => inventoryCheckDialog(room)), b('Поломка', 'ghost', () => repairDialog(room)));
     if (manager) out.push(b(room.note ? 'Заметка' : '+ Заметка', 'ghost', () => noteDialog(room)));
     return out;
   };

@@ -314,6 +314,51 @@ def _seed_new_features(conn, rnd, acc, prop, prop2, rooms, rooms2, today) -> Non
                    now() - interval '1 day' * (mod(abs(hashtext(id::text || 'x')), 13)) - interval '1 hour')
                WHERE account_id = %s AND status <> 'blocked'""", (acc,))
     _seed_autopilot(conn, acc, prop, today)
+    _seed_household(conn, acc, prop, today)
+
+
+def _seed_household(conn, acc, prop, today) -> None:
+    """Склад, счётчики с историей и инвентарь — чтобы раздел «Хозяйство» не был пустым на демо."""
+    from decimal import Decimal
+    from .household import move
+    anna = one(conn, "SELECT id FROM users WHERE email = 'anna@fligel.ru'")["id"]
+    for name, unit, qty, mn, norm in (("Мыло жидкое", "шт", 24, 6, 1), ("Шампунь (саше)", "шт", 150, 40, 2), ("Пакеты для мусора", "рул", 5, 3, 0.25),
+                                       ("Туалетная бумага", "рул", 60, 24, 2), ("Чай и кофе (набор)", "шт", 90, 30, 1)):
+        it = one(conn, "INSERT INTO stock_items (account_id, property_id, name, unit, quantity, min_quantity, norm_per_cleaning) VALUES (%s, %s, %s, %s, 0, %s, %s) RETURNING id",
+                 (acc, prop, name, unit, mn, norm))
+        move(conn, acc, it["id"], Decimal(qty) + Decimal("20"), "in", "Закупка", None)
+        move(conn, acc, it["id"], -Decimal("20"), "cleaning", "Уборка номеров за неделю", anna)
+    # счётчики: общий (холодная вода) и по двум номерам (электричество), показания раз в месяц за полгода
+    rooms = all_(conn, "SELECT id, name FROM rooms WHERE account_id = %s AND property_id = %s ORDER BY sort_order LIMIT 2", (acc, prop))
+    cat = one(conn, "SELECT id FROM expense_categories WHERE account_id = %s AND lower(name) = 'коммунальные услуги'", (acc,))
+    owner = one(conn, "SELECT id FROM users WHERE email = 'demo@fligel.ru'")["id"]
+    for kind, room, unit, tariff, start, step in (("water_cold", None, "м³", Decimal("48.5"), Decimal("1200"), Decimal("38")),
+                                                  ("electricity", rooms[0], "кВт·ч", Decimal("6.2"), Decimal("8400"), Decimal("310")),
+                                                  ("electricity", rooms[1], "кВт·ч", Decimal("6.2"), Decimal("7900"), Decimal("270"))):
+        m = one(conn, "INSERT INTO meters (account_id, property_id, room_id, kind, unit, tariff) VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+                (acc, prop, room["id"] if room else None, kind, unit, tariff))
+        value, prev = start, None
+        for k in range(6, -1, -1):
+            day = today - timedelta(days=30 * k)
+            if prev is not None:
+                value += step + Decimal(k * 3)
+            cons = value - prev if prev is not None else Decimal("0")
+            cost = (cons * tariff).quantize(Decimal("0.01"))
+            exp_id = None
+            if cost > 0 and cat:
+                exp_id = one(conn, "INSERT INTO expenses (account_id, property_id, room_id, category_id, date, amount, comment, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+                             (acc, prop, room["id"] if room else None, cat["id"], day, cost, f"Счётчик: {cons} {unit} × {tariff} ₽", owner))["id"]
+            run(conn, "INSERT INTO meter_readings (account_id, meter_id, date, value, consumption, tariff, cost, expense_id, user_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (acc, m["id"], day, value, cons, tariff, cost, exp_id, owner))
+            prev = value
+    # инвентарь типового номера и одна проверка после выезда
+    std = all_(conn, "SELECT r.id FROM rooms r JOIN room_types rt ON rt.id = r.room_type_id WHERE r.account_id = %s AND r.property_id = %s AND rt.name = 'Стандарт' ORDER BY r.sort_order", (acc, prop))
+    for r in std:
+        for i, (name, qty) in enumerate((("Чайник", 1), ("Фен", 1), ("Полотенца банные", 4), ("Халат", 2), ("Плед", 1), ("Пульт от телевизора", 1))):
+            run(conn, "INSERT INTO inventory_items (account_id, room_id, name, qty, sort_order) VALUES (%s, %s, %s, %s, %s)", (acc, r["id"], name, qty, i))
+    if std:
+        chk = one(conn, "INSERT INTO inventory_checks (account_id, room_id, user_id, problems, created_at) VALUES (%s, %s, %s, 1, now() - interval '1 day') RETURNING id", (acc, std[0]["id"], anna))
+        run(conn, "INSERT INTO inventory_check_items (check_id, name, qty, state, note) VALUES (%s, 'Фен', 1, 'broken', 'Не включается')", (chk["id"],))
 
 
 def _seed_autopilot(conn, acc, prop, today) -> None:

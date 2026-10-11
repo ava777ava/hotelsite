@@ -1,7 +1,7 @@
 """Уборка: статусы номеров, экран горничной, назначение, заметки к номерам."""
 from starlette.routing import Route
 
-from .. import audit, notify
+from .. import audit, household, notify
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..util import opt_str, parse_uuid
@@ -63,9 +63,12 @@ def set_status(c: Ctx):
     rid = parse_uuid(c.path["id"], "Номер")
     report = None
     with tx() as conn:
-        room = one(conn, "SELECT r.id, r.name, r.hk_status FROM rooms r WHERE r.id = %s AND r.account_id = %s", (rid, c.account_id))
+        room = one(conn, "SELECT r.id, r.name, r.hk_status, r.cleaned_on FROM rooms r WHERE r.id = %s AND r.account_id = %s", (rid, c.account_id))
         if not room:
             raise ApiError(404, "Номер не найден")
+        # убрано: один раз за день списываем расходники по нормам (повторное «Убрано» не списывает снова)
+        if status == "clean" and (room["cleaned_on"] is None or room["cleaned_on"] < one(conn, "SELECT current_date AS d")["d"]):
+            household.writeoff_for_cleaning(conn, c.account_id, rid, c.p.user_id)
         run(conn, "UPDATE rooms SET hk_status = %s, hk_note = %s, hk_updated_at = now(),"
                   " cleaned_on = CASE WHEN %s = 'clean' THEN current_date ELSE cleaned_on END,"
                   " hk_assigned_on = CASE WHEN %s = 'clean' THEN NULL ELSE hk_assigned_on END WHERE id = %s",

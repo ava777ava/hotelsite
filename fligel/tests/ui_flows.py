@@ -109,7 +109,16 @@ def main() -> int:
                 page.goto(f"{BASE}/app/#/reviews")
                 page.wait_for_selector(".kpis, .empty", timeout=5000)
 
+            def household_flow():
+                page.goto(f"{BASE}/app/#/household")
+                page.wait_for_selector(".stock-row", timeout=5000)
+                page.get_by_role("button", name="Счётчики").click()
+                page.wait_for_selector(".meter-card", timeout=5000)
+                page.get_by_role("button", name="Инвентарь").click()
+                page.wait_for_selector(".inv-add", timeout=5000)
+
             step("карточка брони", open_booking)
+            step("хозяйство", household_flow)
             step("задачи", tasks_flow)
             step("автопилот", autopilot_flow)
             step("отзывы", reviews_page)

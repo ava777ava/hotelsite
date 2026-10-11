@@ -19,7 +19,7 @@ from .db import all_, one, run, tx
 log = logging.getLogger("fligel.telegram")
 
 # События, на которые можно подписаться, и подписи для интерфейса
-EVENTS = ("new_booking", "cancellation", "conflict", "sync_error", "digest", "room_issue", "automation", "task", "review")
+EVENTS = ("new_booking", "cancellation", "conflict", "sync_error", "digest", "room_issue", "automation", "task", "review", "stock")
 EVENT_LABELS = {
     "new_booking": "Новая бронь",
     "cancellation": "Отмена брони",
@@ -30,6 +30,7 @@ EVENT_LABELS = {
     "automation": "Сообщения автопилота (напоминания, долги, нет email у гостя)",
     "task": "Задачи команды (просроченные, назначенные вам)",
     "review": "Низкая оценка в отзыве гостя",
+    "stock": "Расходник на складе заканчивается",
 }
 LINK_CODE_TTL_MINUTES = 30
 MAX_ATTEMPTS = 8  # после стольких неудачных попыток сообщение помечается как окончательно неотправленное

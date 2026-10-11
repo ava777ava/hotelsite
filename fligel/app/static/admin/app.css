@@ -761,3 +761,24 @@ tr.total td { border-top: 2px solid var(--border); }
 .hints-card { margin-bottom: 14px; } .hint-row { display: grid; grid-template-columns: 150px 1fr auto; gap: 4px 12px; padding: 6px 0; border-top: 1px solid var(--line); font-size: 14px; }
 .hint-row:first-of-type { border-top: 0; }
 @media (max-width: 640px) { .hint-row { grid-template-columns: 1fr; } }
+
+/* ---------- хозяйство ---------- */
+.stock-row { display: grid; grid-template-columns: minmax(0, 1.6fr) auto auto; gap: 6px 14px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.stock-row:last-child { border-bottom: 0; } .stock-row.low .stock-qty { color: var(--clay); }
+.stock-name { min-width: 0; overflow-wrap: break-word; } .stock-name .pill { margin-left: 8px; }
+.stock-qty { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; } .stock-qty small { font-size: 13px; color: var(--muted); font-weight: 500; }
+.stock-act { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+@media (max-width: 760px) { .stock-row { grid-template-columns: 1fr auto; } .stock-act { grid-column: 1 / -1; justify-content: flex-start; } .stock-act .btn { height: 40px; } }
+.move-row { display: grid; grid-template-columns: 110px minmax(0, 1.2fr) 90px minmax(0, 2fr); gap: 4px 12px; padding: 6px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+.move-row:last-child { border-bottom: 0; }
+@media (max-width: 760px) { .move-row { grid-template-columns: 1fr auto; } .move-row > :nth-child(4) { grid-column: 1 / -1; } }
+.meter-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
+.meter-card { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; display: grid; gap: 4px; background: var(--surface); }
+.meter-head { display: flex; align-items: center; gap: 8px; } .meter-head .spacer { flex: 1; }
+.meter-val { font-size: 26px; font-weight: 650; font-variant-numeric: tabular-nums; } .meter-val small { font-size: 14px; color: var(--muted); font-weight: 500; }
+.meter-act { display: flex; gap: 8px; margin-top: 6px; }
+.inv-row { padding: 10px 0; border-bottom: 1px solid var(--line); } .inv-row:last-child { border-bottom: 0; } .inv-name { margin-bottom: 6px; overflow-wrap: break-word; }
+.inv-seg { display: flex; width: 100%; } .inv-seg button { flex: 1; height: 42px; }
+.inv-seg button.on.inv-ok { background: var(--pine-soft); color: var(--pine); } .inv-seg button.on.inv-missing { background: var(--ochre-soft); color: var(--ochre-ink); } .inv-seg button.on.inv-broken { background: var(--clay-soft); color: var(--clay); }
+.inv-edit { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); } .inv-edit b { flex: 1; min-width: 0; overflow-wrap: break-word; }
+.inv-add { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; } .inv-add .input:first-child { flex: 1; min-width: 160px; }
