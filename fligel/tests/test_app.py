@@ -55,10 +55,14 @@ class Base(unittest.TestCase):
     def tearDownClass(cls):
         cls.client.__exit__(None, None, None)
 
-    def register(self, email: str, rooms=(("Стандарт", 8, 3500), ("Делюкс", 4, 5500))) -> dict:
+    def register(self, email: str, rooms=(("Стандарт", 8, 3500), ("Делюкс", 4, 5500)), all_modules=True) -> dict:
         r = self.client.post("/api/auth/register", json={
             "account_name": "Гостиница", "name": "Иван", "email": email, "password": "password123"})
         self.assertEqual(r.status_code, 200, r.text)
+        if all_modules:   # у новых аккаунтов необязательные модули выключены; большинству тестов нужны все разделы
+            from app import modules as _modules
+            with db.tx() as conn:
+                db.run(conn, "UPDATE accounts SET modules = %s WHERE id = (SELECT account_id FROM users WHERE lower(email) = %s)", (_modules.KEYS, email.lower()))
         headers = {"Authorization": f"Bearer {r.json()['token']}"}
         r = self.client.post("/api/setup", headers=headers, json={
             "name": "Гостиница Флигель", "address": "Казань",

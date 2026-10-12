@@ -806,3 +806,13 @@ tr.total td { border-top: 2px solid var(--border); }
   .board-tools .input.search-field:not([type=checkbox]) { flex: 1 1 100%; }
   .filters .dash { display: none; }
 }
+
+/* меню по группам: Работа / Деньги / Настройка, редкие пункты — мелкими ссылками внизу */
+.nav-group { font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase; color: #8FA096; padding: 12px 12px 3px; }
+.nav-group:first-child { padding-top: 0; }
+.side-more { display: flex; flex-wrap: wrap; gap: 2px 4px; margin-top: auto; padding: 8px 4px 0; border-top: 1px solid rgba(255,255,255,.1); }
+.side-more a { color: #A6B3A3; font-size: 12.5px; text-decoration: none; padding: 4px 8px; border-radius: 6px; display: inline-flex; gap: 6px; align-items: center; }
+.side-more a:hover { background: rgba(255,255,255,.07); color: #fff; }
+.side-more a.active { color: #fff; background: rgba(255,255,255,.12); }
+.side-more .badge { background: var(--clay); color: #fff; font-size: 10px; border-radius: 9px; padding: 0 6px; }
+.side-more + .side-foot { margin-top: 0; border-top: 0; }

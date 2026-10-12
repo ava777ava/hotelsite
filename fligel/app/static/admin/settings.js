@@ -195,6 +195,32 @@ function roomDialog(r, onDone) {
   } }, 'Сохранить')]);
 }
 
+// «Модули»: необязательные разделы выключены, пока владелец их не включит, — чтобы новичку не было сложно
+async function modulesCard() {
+  const card = h('div', { class: 'card', id: 'modules-card' });
+  const items = (await api('GET', '/api/modules')).items;
+  const draw = () => {
+    card.innerHTML = '';
+    card.append(h('div', { class: 'card-head' }, h('h2', {}, 'Модули')),
+      h('p', { class: 'muted small card-pad', style: { margin: 0, paddingBottom: '0' } }, 'Основное — шахматка, брони, гости, цены, площадки, уборка, финансы и отчёты — работает всегда. Остальное включайте, когда понадобится: данные при выключении не теряются.'),
+      h('div', { class: 'card-pad stack' }, items.map((m) => h('div', { class: 'row', style: { display: 'flex', gap: '12px', alignItems: 'flex-start' } },
+        h('button', { type: 'button', class: `switch${m.enabled ? ' on' : ''}`, role: 'switch', 'aria-checked': String(m.enabled), 'aria-label': `${m.label}: ${m.enabled ? 'включён' : 'выключен'}`,
+          onclick: async () => {
+            const next = items.filter((x) => (x.key === m.key ? !x.enabled : x.enabled)).map((x) => x.key);
+            try {
+              await api('PUT', '/api/modules', { modules: next });
+              m.enabled = !m.enabled;
+              state.me = await api('GET', '/api/me');
+              toast(`${m.label}: ${m.enabled ? 'включён — раздел появился в меню' : 'выключен'}`);
+              render();
+            } catch (ex) { toast(ex.message, true); }
+          } }, h('i')),
+        h('div', {}, h('b', {}, m.label), h('div', { class: 'muted small' }, m.description))))));
+  };
+  draw();
+  return card;
+}
+
 export async function viewSettings(main) {
   const content = h('div', { class: 'stack' });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Настройки')), content);
@@ -212,6 +238,7 @@ export async function viewSettings(main) {
         state.me.properties.map((p) => h('tr', { class: 'click', onclick: () => switchProperty(p.id) },
           h('td', {}, p.id === state.propertyId ? h('b', {}, p.name) : p.name),
           h('td', { style: { textAlign: 'right' } }, p.id === state.propertyId ? h('span', { class: 'pill ok' }, 'выбран') : null))))))));
+    content.append(await modulesCard());
     content.append(h('div', { class: 'grid-2' },
       h('div', { class: 'card card-pad' }, h('h2', { style: { marginBottom: '14px' } }, 'Объект'),
         field('name', 'Название'), field('address', 'Адрес'), field('phone', 'Телефон для гостей', { type: 'tel' }),
@@ -276,7 +303,7 @@ export async function viewSettings(main) {
       h('button', { class: 'btn small', onclick: () => {
         const g = {};
         const fld = (k, l, a = {}) => h('label', { class: 'field' }, h('span', {}, l), g[k] = h('input', { class: 'input', ...a }));
-        g.role = h('select', { class: 'input', onchange: () => { propBox.style.display = g.role.value === 'landlord' ? '' : 'none'; } }, h('option', { value: 'manager' }, 'Администратор — брони, цены, площадки'), h('option', { value: 'housekeeper' }, 'Горничная — уборка, шахматка и заезды'), h('option', { value: 'landlord' }, 'Собственник — только чтение своих объектов и отчёт'));
+        g.role = h('select', { class: 'input', onchange: () => { propBox.style.display = g.role.value === 'landlord' ? '' : 'none'; } }, h('option', { value: 'manager' }, 'Администратор — брони, цены, площадки'), h('option', { value: 'housekeeper' }, 'Горничная — уборка, шахматка и заезды'), (state.me.modules || []).includes('owners') ? h('option', { value: 'landlord' }, 'Собственник — только чтение своих объектов и отчёт') : null);
         const propChecks = state.me.properties.map((pr) => [pr.id, h('input', { type: 'checkbox' }), pr.name]);
         const propBox = h('div', { class: 'field', style: { display: 'none' } }, h('span', {}, 'Какие объекты видит собственник'), propChecks.map(([, cb, name]) => h('label', { class: 'check' }, cb, name)));
         openDrawer('Новый сотрудник', h('div', {}, fld('name', 'Имя'), fld('email', 'Email для входа', { type: 'email' }), fld('password', 'Временный пароль', { type: 'text' }),

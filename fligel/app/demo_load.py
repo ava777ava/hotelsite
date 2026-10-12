@@ -11,6 +11,7 @@ import random
 import time
 from datetime import date, timedelta
 
+from . import modules
 from .auth import hash_password, new_ical_token
 from .db import all_, one, run, tx
 from .expenses import create_default_categories
@@ -31,7 +32,7 @@ def main(rooms_total: int = 70, years: int = 2) -> None:
         if one(conn, "SELECT 1 FROM users WHERE email = %s", (EMAIL,)):
             print(f"Нагрузочный аккаунт уже есть: {EMAIL} / {PASSWORD}")
             return
-        acc = one(conn, "INSERT INTO accounts (name) VALUES ('Нагрузочный тест: Большой отель') RETURNING id")["id"]
+        acc = one(conn, "INSERT INTO accounts (name, modules) VALUES ('Нагрузочный тест: Большой отель', %s) RETURNING id", (modules.KEYS,))["id"]
         run(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, %s, %s, %s, 'owner')",
             (acc, EMAIL, hash_password(PASSWORD), "Нагрузочный владелец"))
         prop = one(conn, "INSERT INTO properties (account_id, name, address, phone, public_slug) VALUES"

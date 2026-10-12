@@ -160,7 +160,7 @@ def run_due() -> int:
     """Раз в день пересчитывает цены у аккаунтов с включёнными автоценами (вызывается планировщиком)."""
     with tx() as conn:
         ids = [r["account_id"] for r in all_(conn, "SELECT s.account_id FROM price_settings s JOIN accounts a ON a.id = s.account_id"
-                                                   " WHERE s.mode <> 'off' AND a.status = 'active'"
+                                                   " WHERE s.mode <> 'off' AND a.status = 'active' AND 'autoprice' = ANY(a.modules)"
                                                    " AND (s.last_run_on IS NULL OR s.last_run_on < current_date)")]
     done = 0
     for aid in ids:

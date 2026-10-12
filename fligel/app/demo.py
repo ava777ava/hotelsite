@@ -4,6 +4,7 @@
 import random
 from datetime import date, timedelta
 
+from . import modules
 from .auth import hash_password, new_ical_token
 from .db import all_, one, run, tx
 from .expenses import create_default_categories
@@ -46,7 +47,7 @@ def main() -> None:
         if one(conn, "SELECT 1 FROM users WHERE email = 'demo@fligel.ru'"):
             print("Демо-аккаунт уже есть: demo@fligel.ru / demo12345 (также manager@, anna@, landlord@ — пароль тот же)")
             return
-        acc = one(conn, "INSERT INTO accounts (name, plan, is_demo) VALUES ('Гостиница «Флигель»', 'custom', true) RETURNING id")["id"]
+        acc = one(conn, "INSERT INTO accounts (name, plan, is_demo, modules) VALUES ('Гостиница «Флигель»', 'custom', true, %s) RETURNING id", (modules.KEYS,))["id"]
         run(conn, "INSERT INTO users (account_id, email, password_hash, name, role) VALUES (%s, %s, %s, %s, 'owner')",
             (acc, "demo@fligel.ru", hash_password("demo12345"), "Андрей"))
         for email, uname, role in (("manager@fligel.ru", "Марина (администратор)", "manager"), ("anna@fligel.ru", "Анна (горничная)", "housekeeper")):

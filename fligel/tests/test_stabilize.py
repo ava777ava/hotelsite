@@ -5,7 +5,7 @@ import unittest
 
 from test_app import Base, d  # noqa: F401
 
-from app import config, db, mail, outbox, telegram
+from app import automation, config, db, mail, modules, outbox, telegram
 
 
 class OutboxTests(Base):
@@ -149,6 +149,62 @@ class ConfigWarningsTests(Base):
         config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_WEBHOOK_SECRET = "tok", ""
         data = self.client.get("/api/operator/accounts", headers={"Authorization": f"Bearer {tok}"}).json()
         self.assertTrue(any("TELEGRAM_WEBHOOK_SECRET" in w for w in data["warnings"]))
+
+
+class ModulesTests(Base):
+    def test_new_account_has_only_base_and_owner_can_toggle(self):
+        ctx = self.register(f"mod{id(self)}@example.ru", all_modules=False)
+        me = self.client.get("/api/me", headers=ctx["h"]).json()
+        self.assertEqual(me["modules"], [])
+        items = self.client.get("/api/modules", headers=ctx["h"]).json()["items"]
+        self.assertEqual([i["key"] for i in items], modules.KEYS)
+        self.assertFalse(any(i["enabled"] for i in items))
+        r = self.client.put("/api/modules", headers=ctx["h"], json={"modules": ["tasks", "analytics", "tasks"]})
+        self.assertEqual(r.json()["modules"], ["analytics", "tasks"])   # порядок реестра, без повторов
+        self.assertEqual(self.client.get("/api/me", headers=ctx["h"]).json()["modules"], ["analytics", "tasks"])
+        self.assertEqual(self.client.put("/api/modules", headers=ctx["h"], json={"modules": ["bogus"]}).status_code, 422)
+        self.assertEqual(self.client.put("/api/modules", headers=ctx["h"], json={"modules": "tasks"}).status_code, 422)
+        log = self.client.get("/api/audit", headers=ctx["h"]).json()
+        self.assertTrue(any("Модули" in (x.get("text") or "") for x in log["items"]))
+
+    def test_only_owner_can_change_modules(self):
+        ctx = self.register(f"modo{id(self)}@example.ru")
+        staff = self.client.post("/api/users", headers=ctx["h"], json={"name": "Админ", "email": f"adm{id(self)}@example.ru", "password": "password123", "role": "manager"})
+        self.assertEqual(staff.status_code, 200, staff.text)
+        tok = self.client.post("/api/auth/login", json={"email": f"adm{id(self)}@example.ru", "password": "password123"}).json()["token"]
+        h = {"Authorization": f"Bearer {tok}"}
+        self.assertEqual(self.client.put("/api/modules", headers=h, json={"modules": []}).status_code, 403)
+        self.assertEqual(self.client.get("/api/modules", headers=h).status_code, 200)
+
+    def test_disabled_autopilot_does_not_run(self):
+        ctx = self.register(f"modrun{id(self)}@example.ru", all_modules=False)
+        acc = ctx["prop"]["account_id"]
+        with db.tx() as conn:
+            db.run(conn, "UPDATE automation_rules SET enabled = false WHERE account_id = %s", (acc,))
+            db.run(conn, "INSERT INTO automation_rules (account_id, name, event, action, params) VALUES (%s, 'Тест', 'new_booking', 'notify_staff', '{\"text\": \"Новая бронь\"}')", (acc,))
+        self.book(ctx, ctx["rooms"][0], d(5), d(7))
+
+        def runs():
+            with db.tx() as conn:
+                return db.one(conn, "SELECT count(*) AS n FROM automation_runs WHERE account_id = %s", (acc,))["n"]
+        automation.run_due()
+        self.assertEqual(runs(), 0)     # модуль выключен — автопилот молчит
+        self.client.put("/api/modules", headers=ctx["h"], json={"modules": ["autopilot"]})
+        automation.run_due()
+        self.assertEqual(runs(), 1)
+
+    def test_backfill_keeps_modules_in_use(self):
+        ctx = self.register(f"modfill{id(self)}@example.ru", all_modules=False)
+        acc = ctx["prop"]["account_id"]
+        self.client.post("/api/tasks", headers=ctx["h"], json={"title": "Починить кран"})
+        self.book(ctx, ctx["rooms"][0], d(5), d(7))
+        # повторяем backfill-запрос миграции 026 (он выполняется при деплое для уже существующих аккаунтов)
+        backfill = "UPDATE accounts a SET" + open("app/migrations/026_modules.sql", encoding="utf-8").read().split("UPDATE accounts a SET", 1)[1].rstrip().rstrip(";")
+        with db.tx() as conn:
+            db.run(conn, "UPDATE accounts SET modules = '{}' WHERE id = %s", (acc,))
+            db.run(conn, backfill)
+            mods = db.one(conn, "SELECT modules FROM accounts WHERE id = %s", (acc,))["modules"]
+        self.assertEqual(sorted(mods), ["analytics", "tasks"])   # есть задачи и брони; склада, правил цен, ключей API нет
 
 
 if __name__ == "__main__":

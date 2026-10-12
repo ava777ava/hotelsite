@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
-from .. import audit, automation, billing, config, household, mail, ratelimit
+from .. import audit, automation, billing, config, household, mail, modules, ratelimit
 from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
@@ -202,13 +202,33 @@ def me(c: Ctx):
                 (c.account_id,),
             )
         notice = billing.info(conn, c.account_id)["notice"] if user["role"] == "owner" else None
+        mods = modules.enabled(conn, c.account_id)
     created = user.pop("account_created_at")
     demo = user.pop("is_demo")
     # Пробный период — информационный: показываем, сколько осталось, но доступ не ограничиваем
     # (подключение оплаты — отдельный этап).
     trial_ends = (created + timedelta(days=TRIAL_DAYS)).date() if user["plan"] == "trial" else None
-    return {**user, "properties": props, "trial_ends": trial_ends, "billing_notice": notice, "is_demo": demo,
+    return {**user, "properties": props, "trial_ends": trial_ends, "billing_notice": notice, "is_demo": demo, "modules": mods,
             "plan_label": PLAN_LABELS.get(user["plan"], user["plan"]), "properties_limit": PLANS.get(user["plan"], PLANS["trial"])}
+
+
+@api("manager")
+def modules_list(c: Ctx):
+    with tx() as conn:
+        on = modules.enabled(conn, c.account_id)
+    return {"items": [{"key": k, "label": m["label"], "description": m["description"], "enabled": k in on} for k, m in modules.MODULES.items()]}
+
+
+@api("owner")
+def modules_save(c: Ctx):
+    with tx() as conn:
+        before = set(modules.enabled(conn, c.account_id))
+        keys = modules.save(conn, c.account_id, c.data.get("modules"))
+        changed = sorted(before.symmetric_difference(keys))
+        if changed:
+            audit.record(conn, c.account_id, c.p.user_id, "modules_changed",
+                         "Модули: " + ", ".join(f"{modules.MODULES[k]['label']} — {'включён' if k in keys else 'выключен'}" for k in changed), "account", c.account_id)
+    return {"modules": keys}
 
 
 @api()
@@ -617,6 +637,8 @@ def delete_account(c: Ctx):
 routes = [
     Route("/api/auth/register", register, methods=["POST"]),
     Route("/api/auth/login", login, methods=["POST"]),
+    Route("/api/modules", modules_list),
+    Route("/api/modules", modules_save, methods=["PUT"]),
     Route("/api/auth/forgot-password", forgot_password, methods=["POST"]),
     Route("/api/auth/reset-password", reset_password, methods=["POST"]),
     Route("/api/auth/change-password", change_password, methods=["POST"]),

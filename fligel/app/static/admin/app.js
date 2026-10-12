@@ -27,32 +27,35 @@ import { viewToday } from './today.js';
 import { hooks } from './core.js';
 
 export const ROUTES = {
-  board: { title: 'Шахматка', icon: 'board', view: viewBoard, landlord: true },
-  today: { title: 'Сегодня', icon: 'today', view: viewToday },
-  cleaning: { title: 'Уборка', icon: 'clean', view: viewCleaning },
-  tasks: { title: 'Задачи', icon: 'tasks', view: viewTasks },
-  household: { title: 'Хозяйство', icon: 'box', view: viewHousehold },
-  bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager' },
-  guests: { title: 'Гости', icon: 'users', view: viewGuests, role: 'manager' },
-  reviews: { title: 'Отзывы', icon: 'stats', view: viewReviews, role: 'manager' },
-  rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager' },
-  autoprice: { title: 'Автоцены', icon: 'rates', view: viewAutoprice, role: 'manager' },
-  channels: { title: 'Площадки', icon: 'channels', view: viewChannels, role: 'manager' },
-  expenses: { title: 'Финансы', icon: 'expenses', view: viewExpenses, role: 'manager' },
-  analytics: { title: 'Аналитика', icon: 'trend', view: viewAnalytics, role: 'manager' },
-  stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager' },
-  notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager' },
-  autopilot: { title: 'Автопилот', icon: 'bolt', view: viewAutopilot, role: 'owner' },
-  integrations: { title: 'Интеграции', icon: 'channels', view: viewIntegrations, role: 'owner' },
-  billing: { title: 'Тариф и счета', icon: 'expenses', view: viewBilling, role: 'owner' },
-  settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner' },
-  profile: { title: 'Профиль', icon: 'user', view: viewProfile, landlord: true },
-  audit: { title: 'Журнал действий', icon: 'list', view: viewAudit, role: 'owner' },
-  ownerreport: { title: 'Отчёт собственнику', icon: 'stats', view: viewOwnerReport, roles: ['landlord', 'manager', 'owner'] },
-  help: { title: 'Справка', icon: 'help', view: viewHelp, landlord: true },
+  board: { title: 'Шахматка', icon: 'board', view: viewBoard, landlord: true, group: 'work' },
+  today: { title: 'Сегодня', icon: 'today', view: viewToday, group: 'work' },
+  cleaning: { title: 'Уборка', icon: 'clean', view: viewCleaning, group: 'work' },
+  tasks: { title: 'Задачи', icon: 'tasks', view: viewTasks, group: 'work', module: 'tasks' },
+  household: { title: 'Хозяйство', icon: 'box', view: viewHousehold, group: 'work', module: 'household' },
+  bookings: { title: 'Брони', icon: 'list', view: viewBookings, role: 'manager', group: 'work' },
+  guests: { title: 'Гости', icon: 'users', view: viewGuests, role: 'manager', group: 'work' },
+  reviews: { title: 'Отзывы', icon: 'stats', view: viewReviews, role: 'manager', group: 'work', module: 'autopilot' },
+  rates: { title: 'Цены', icon: 'rates', view: viewRates, role: 'manager', group: 'money' },
+  autoprice: { title: 'Автоцены', icon: 'rates', view: viewAutoprice, role: 'manager', group: 'money', module: 'autoprice' },
+  channels: { title: 'Площадки', icon: 'channels', view: viewChannels, role: 'manager', group: 'setup' },
+  expenses: { title: 'Финансы', icon: 'expenses', view: viewExpenses, role: 'manager', group: 'money' },
+  analytics: { title: 'Аналитика', icon: 'trend', view: viewAnalytics, role: 'manager', group: 'money', module: 'analytics' },
+  stats: { title: 'Отчёты', icon: 'stats', view: viewStats, role: 'manager', group: 'money' },
+  notifications: { title: 'Уведомления', icon: 'bell', view: viewNotifications, role: 'manager', group: 'more' },
+  autopilot: { title: 'Автопилот', icon: 'bolt', view: viewAutopilot, role: 'owner', group: 'setup', module: 'autopilot' },
+  integrations: { title: 'Интеграции', icon: 'channels', view: viewIntegrations, role: 'owner', group: 'setup', module: 'integrations' },
+  billing: { title: 'Тариф и счета', icon: 'expenses', view: viewBilling, role: 'owner', group: 'more' },
+  settings: { title: 'Настройки', icon: 'settings', view: viewSettings, role: 'owner', group: 'setup' },
+  profile: { title: 'Профиль', icon: 'user', view: viewProfile, landlord: true, group: 'more' },
+  audit: { title: 'Журнал действий', icon: 'list', view: viewAudit, role: 'owner', group: 'more' },
+  ownerreport: { title: 'Отчёт собственнику', icon: 'stats', view: viewOwnerReport, roles: ['landlord', 'manager', 'owner'], group: 'work', module: 'owners' },
+  help: { title: 'Справка', icon: 'help', view: viewHelp, landlord: true, group: 'more' },
 };
 // Собственник видит только шахматку (чтение), свой отчёт, справку и профиль; остальные — по ролям
-export const routeVisible = (d) => (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
+// Необязательные разделы (d.module) видны, только если модуль включён в «Настройки → Модули»; собственник свой отчёт видит всегда
+export const moduleOn = (d) => !d.module || state.me.role === 'landlord' || (state.me.modules || []).includes(d.module);
+export const routeVisible = (d) => moduleOn(d) && (d.roles ? d.roles.includes(state.me.role) : (state.me.role === 'landlord' ? !!d.landlord : (!d.role || can(d.role))));
+export const NAV_GROUPS = [['work', 'Работа'], ['money', 'Деньги'], ['setup', 'Настройка']];
 export const MOBILE_ORDER = ['board', 'today', 'cleaning', 'bookings', 'tasks', 'household', 'guests', 'reviews', 'autopilot', 'expenses', 'channels', 'notifications', 'settings', 'integrations', 'billing', 'rates', 'autoprice', 'analytics', 'stats', 'ownerreport', 'audit', 'help', 'profile'];
 export const LANDLORD_ORDER = ['ownerreport', 'board', 'help', 'profile'];
 export const currentRoute = () => { const home = { housekeeper: 'cleaning', landlord: 'ownerreport' }[state.me?.role] || (window.innerWidth < 860 && can('manager') ? 'today' : 'board'); const r = location.hash.replace(/^#\/?/, '').split('?')[0] || home; return ROUTES[r] ? r : home; };
@@ -143,6 +146,12 @@ export function render() {
   const main = h('main', { class: 'main' });
   $app.append(layout(route, main));
   if (!routeVisible(def)) {
+    if (!moduleOn(def)) {
+      main.append(h('div', { class: 'card empty' }, h('h3', {}, `«${def.title}» выключен`),
+        h('p', {}, 'Это необязательный раздел — он включается в «Настройки → Модули».'),
+        can('owner') ? h('a', { class: 'btn primary', href: '#/settings' }, 'Открыть настройки') : h('p', { class: 'muted' }, 'Попросите владельца включить его.')));
+      return;
+    }
     main.append(h('div', { class: 'card empty' }, h('h3', {}, 'Раздел недоступен'), 'Попросите владельца расширить ваши права.'));
     return;
   }
@@ -216,7 +225,12 @@ export function layout(route, main) {
         h('div', { style: { flex: 1, minWidth: 0 } }, h('div', { class: 'brand-name' }, 'Флигель')),
         bellBtn('', '#C3CCC0'), sideSearchBtn),
       propertySwitcher('prop-switch') || h('div', { class: 'brand-sub', style: { padding: '0 8px 0 30px' } }, prop ? prop.name : ''),
-      h('nav', { class: 'nav' }, visible.map(link)),
+      h('nav', { class: 'nav' }, NAV_GROUPS.flatMap(([g, title]) => {
+        const items = visible.filter(([, d]) => d.group === g);
+        return items.length ? [h('div', { class: 'nav-group' }, title), ...items.map(link)] : [];
+      })),
+      h('div', { class: 'side-more', role: 'navigation', 'aria-label': 'Ещё' }, visible.filter(([, d]) => d.group === 'more')
+        .map(([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, d.title, BADGE[key] ? h('span', { class: 'badge', 'data-badge': BADGE[key], style: { display: state[BADGE[key]] ? '' : 'none' } }, state[BADGE[key]] || 0) : null))),
       h('div', { class: 'side-foot' }, h('b', {}, state.me.name), ROLE[state.me.role],
         h('br'), h('button', { onclick: logout }, 'Выйти'), ' · ', h('button', { class: 'desk-only', title: 'Горячие клавиши', onclick: hotkeysDialog }, '⌨'), ' · ', h('button', { title: 'Светлая / тёмная тема', onclick: () => { const dark = getComputedStyle(document.documentElement).colorScheme === 'dark'; store.set('theme', dark ? 'light' : 'dark'); applyTheme(); } }, 'Тема'))),
     h('div', {},
@@ -241,8 +255,10 @@ function topBanner() {
 
 // Все разделы, не поместившиеся в нижнюю панель телефона
 export function moreSheet(items, route) {
-  openModal('Разделы', h('div', { class: 'more-grid' },
-    items.map(([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '', onclick: () => closeModal() }, icon(d.icon), d.title))),
+  const groups = [...NAV_GROUPS, ['more', 'Ещё']].map(([g, title]) => [title, items.filter(([, d]) => d.group === g)]).filter(([, list]) => list.length);
+  openModal('Разделы', h('div', {}, groups.map(([title, list]) => h('div', {},
+    groups.length > 1 ? h('div', { class: 'nav-group', style: { color: 'var(--muted)', padding: '10px 2px 4px' } }, title) : null,
+    h('div', { class: 'more-grid' }, list.map(([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '', onclick: () => closeModal() }, icon(d.icon), d.title)))))),
   [h('button', { class: 'btn', onclick: () => closeModal() }, 'Закрыть'), h('span', { class: 'spacer' }),
     h('span', { class: 'muted small' }, `${state.me.name} · ${ROLE[state.me.role]}`)]);
 }

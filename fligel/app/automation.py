@@ -208,7 +208,7 @@ def notify_overdue_tasks() -> int:
     sent = 0
     with tx() as conn:
         accounts = all_(conn, "SELECT t.account_id, count(*) AS n, min(t.title) AS first_title FROM tasks t JOIN accounts a ON a.id = t.account_id"
-                              " WHERE a.status = 'active' AND t.done_at IS NULL AND t.due_date < current_date"
+                              " WHERE a.status = 'active' AND 'tasks' = ANY(a.modules) AND t.done_at IS NULL AND t.due_date < current_date"
                               " AND (t.overdue_notified_on IS NULL OR t.overdue_notified_on < current_date)"
                               " AND extract(hour from now()) >= %s GROUP BY t.account_id", (OVERDUE_HOUR,))
         for a in accounts:
@@ -224,7 +224,7 @@ def notify_overdue_tasks() -> int:
 def run_due() -> int:
     """Один проход автопилота по всем включённым правилам (вызывается планировщиком)."""
     with tx() as conn:
-        rules = all_(conn, "SELECT r.* FROM automation_rules r JOIN accounts a ON a.id = r.account_id WHERE r.enabled AND a.status = 'active'")
+        rules = all_(conn, "SELECT r.* FROM automation_rules r JOIN accounts a ON a.id = r.account_id WHERE r.enabled AND a.status = 'active' AND 'autopilot' = ANY(a.modules)")
     fired = 0
     for rule in rules:
         try:

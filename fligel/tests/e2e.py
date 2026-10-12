@@ -49,6 +49,22 @@ def scenario(browser, label, vp, problems):
     except Exception:  # noqa: BLE001
         pass
 
+    step("простое меню и модули")
+    page.goto(f"{BASE}/app/#/board")
+    page.wait_for_selector(".bar, .b-cell, .board", state="attached", timeout=10000)
+    if not mobile:
+        links = page.locator("nav.nav a").all_inner_texts()
+        if len(links) > 10 or any("Автопилот" in t for t in links):
+            problems.append(f"[{label}] у нового владельца меню не простое: {links}")
+    page.goto(f"{BASE}/app/#/settings")
+    page.wait_for_selector("#modules-card", timeout=10000)
+    page.get_by_role("switch", name="Автопилот и отзывы").click()
+    page.wait_for_selector("[role=switch][aria-label^='Автопилот и отзывы: включён']", timeout=10000)
+    if not mobile and not page.locator("nav.nav a", has_text="Автопилот").count():
+        problems.append(f"[{label}] после включения модуля раздел не появился в меню")
+    page.get_by_role("switch", name="Автопилот и отзывы").click()
+    page.wait_for_selector("[role=switch][aria-label^='Автопилот и отзывы: выключен']", timeout=10000)
+
     step("бронь с оплатой")
     page.goto(f"{BASE}/app/#/board")
     page.wait_for_selector(".b-cell", state="attached", timeout=10000)
