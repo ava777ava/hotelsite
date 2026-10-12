@@ -18,7 +18,7 @@ from datetime import date, timedelta
 import httpx
 import psycopg
 
-from . import autoprice, automation, billing, booklog, webhooks, config, ical, notify
+from . import autoprice, automation, billing, booklog, webhooks, config, ical, notify, syncdebug
 from .db import all_, one, run, tx
 from .expenses import generate_due_expenses
 
@@ -37,6 +37,8 @@ class SyncResult:
     removed: int = 0
     conflicts: int = 0
     echoes: int = 0
+    events: int = 0
+    skipped: int = 0
     message: str = ""
     conflict_details: list = field(default_factory=list)
 
@@ -241,12 +243,15 @@ def sync_feed(feed_id, fetcher=None) -> SyncResult:
         feed = _load_feed(conn, feed_id)
     if not feed:
         return SyncResult(status="error", message="Календарь не найден")
+    text = None
     try:
         text = (fetcher or fetch)(feed["url"])
-        events = ical.parse(text, feed["timezone"])
+        events, skipped = ical.parse_report(text, feed["timezone"])
     except Exception as e:  # сеть, формат, код ответа
         res = SyncResult(status="error", message=str(e)[:500] or type(e).__name__)
         with tx() as conn:
+            if text is not None:   # календарь получен, но не разобран — именно его и нужно разглядывать при отладке
+                syncdebug.save(conn, feed["account_id"], "received", feed["channel"], text, feed_id=feed_id, status="error", note=res.message)
             run(conn, "UPDATE ical_feeds SET last_status = 'error', last_error = %s, last_synced_at = now()"
                       " WHERE id = %s", (res.message, feed_id))
             run(conn, "INSERT INTO sync_log (account_id, feed_id, status, message) VALUES (%s, %s, 'error', %s)",
@@ -266,12 +271,17 @@ def sync_feed(feed_id, fetcher=None) -> SyncResult:
         if not one(conn, "SELECT id FROM ical_feeds WHERE id = %s FOR UPDATE", (feed_id,)):
             return SyncResult(status="error", message="Календарь удалён")
         res = apply_events(conn, feed, events)
+        if skipped:
+            res.message = (res.message + f" Не удалось разобрать событий: {skipped}.").strip()
+        res.events, res.skipped = len(events), skipped
         run(conn, "UPDATE ical_feeds SET last_status = 'ok', last_error = %s, last_synced_at = now()"
                   " WHERE id = %s", (res.message or None, feed_id))
         log_msg = res.message + (f" Совпало с нашими бронями (эхо): {res.echoes}." if res.echoes else "")
-        run(conn, "INSERT INTO sync_log (account_id, feed_id, status, added, updated, removed, conflicts, message)"
-                  " VALUES (%s, %s, 'ok', %s, %s, %s, %s, %s)",
-            (feed["account_id"], feed_id, res.added, res.updated, res.removed, res.conflicts, log_msg.strip()))
+        run(conn, "INSERT INTO sync_log (account_id, feed_id, status, added, updated, removed, conflicts, message, events, echoes, skipped)"
+                  " VALUES (%s, %s, 'ok', %s, %s, %s, %s, %s, %s, %s, %s)",
+            (feed["account_id"], feed_id, res.added, res.updated, res.removed, res.conflicts, log_msg.strip(), len(events), res.echoes, skipped))
+        syncdebug.save(conn, feed["account_id"], "received", feed["channel"], text, feed_id=feed_id, events=len(events),
+                       note=(f"Событий: {len(events)}, эхо: {res.echoes}" + (f", не разобрано: {skipped}" if skipped else "")))
     return res
 
 
@@ -336,6 +346,11 @@ def run_once() -> int:
     except Exception:
         log.exception("Сбой отправки вебхуков")
     notify.send_digests()
+    try:
+        syncdebug.check_stale()
+        syncdebug.purge_old()
+    except Exception:
+        log.exception("Сбой проверки состояния синхронизации")
     ids = claim_due_feeds()
     for fid in ids:
         try:

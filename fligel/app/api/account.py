@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
 
-from .. import audit, automation, billing, config, household, mail, modules, ratelimit
+from .. import audit, automation, billing, config, household, mail, modules, ratelimit, syncdebug
 from ..auth import hash_password, make_token, new_ical_token, new_reset_token, verify_password
 from ..db import all_, one, run, tx
 from ..errors import ApiError
@@ -255,6 +255,7 @@ def badges(c: Ctx):
         conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
                         (c.account_id,))["n"]
         overdue = tasks.overdue_count(conn, c.account_id, c.p.user_id, True)
+        conflicts += syncdebug.stale_count(conn, c.account_id)   # «проблемы с площадками»: конфликты + площадка давно не забирала наш календарь
     return {"requests": requests, "conflicts": conflicts, "tasks": overdue}
 
 

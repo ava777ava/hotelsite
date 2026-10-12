@@ -1,5 +1,6 @@
 // Флигель — интерфейс администратора (раздел «площадки»). ES-модуль без сборки.
 import { ago, api, fmtShort, h, icon, pad, qs, state, store, toast } from './core.js';
+import { drawSyncState } from './syncstate.js';
 
 // ---------- площадки ----------
 export const CHANNEL_HELP = {
@@ -26,6 +27,7 @@ export const CHANNEL_HELP = {
 
 export async function viewChannels(main) {
   let channel = store.get('channel', 'avito');
+  let tab = store.get('ch_tab', 'connect');
   const levelOverride = {};
   const content = h('div', { class: 'stack' });
   main.append(h('div', { class: 'page-head' }, h('h1', {}, 'Площадки'),
@@ -33,7 +35,8 @@ export async function viewChannels(main) {
       const btn = e.currentTarget; btn.disabled = true;
       try { const r = await api('POST', '/api/feeds/sync-all'); toast(r.feeds ? `Обновлено календарей: ${r.feeds}. Новых броней: ${r.added}${r.errors ? `, ошибок: ${r.errors}` : ''}` : 'Нет подключённых календарей', r.errors > 0); load(); }
       catch (ex) { toast(ex.message, true); } finally { btn.disabled = false; }
-    } }, icon('sync'), 'Обновить всё')), content);
+    } }, icon('sync'), 'Обновить всё')),
+    h('div', { class: 'seg', style: { marginBottom: '12px' } }, [['connect', 'Подключение'], ['state', 'Состояние синхронизации']].map(([k, l]) => h('button', { class: k === tab ? 'on' : '', onclick: () => { tab = k; store.set('ch_tab', k); main.innerHTML = ''; viewChannels(main); } }, l))), content);
 
   const copy = async (text) => { try { await navigator.clipboard.writeText(text); toast('Ссылка скопирована'); } catch { prompt('Скопируйте ссылку:', text); } };
 
@@ -129,5 +132,5 @@ export async function viewChannels(main) {
         h('thead', {}, h('tr', {}, [level === 'type' ? 'Категория' : 'Номер', 'Ссылка для площадки (наш календарь)', 'Ссылка с площадки (их календарь)', 'Состояние'].map((t) => h('th', {}, t)))),
         h('tbody', {}, items.map((it) => row(it, level, data.labels)))))));
   }
-  load().catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
+  (tab === 'state' ? drawSyncState(content) : load()).catch((ex) => content.append(h('div', { class: 'card empty' }, ex.message)));
 }

@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from .. import audit, config, ical
+from .. import audit, config, ical, syncdebug
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..sync import CHANNEL_LABELS, export_events, export_type_events, sync_feed
@@ -244,15 +244,21 @@ def sync_log(c: Ctx):
         )
 
 
-def _mark_fetched(conn, target_id, channel: str) -> None:
-    run(conn, "INSERT INTO ical_exports (target_id, channel) VALUES (%s, %s)"
-              " ON CONFLICT (target_id, channel) DO UPDATE SET last_fetched_at = now(),"
-              " fetch_count = ical_exports.fetch_count + 1", (target_id, channel))
+def _mark_fetched(conn, target_id, channel: str, user_agent: str = "") -> None:
+    run(conn, "INSERT INTO ical_exports (target_id, channel, last_user_agent) VALUES (%s, %s, %s)"
+              " ON CONFLICT (target_id, channel) DO UPDATE SET last_fetched_at = now(), last_user_agent = EXCLUDED.last_user_agent,"
+              " fetch_count = ical_exports.fetch_count + 1", (target_id, channel, user_agent[:300]))
 
 
-def _calendar(name: str, events) -> Response:
-    return Response(ical.generate(name, events), media_type="text/calendar; charset=utf-8",
-                    headers={"Cache-Control": "no-store"})
+def _serve(conn, request: Request, account_id, target_id, channel: str, name: str, events) -> Response:
+    """Отдаёт календарь площадке и запоминает: когда и кем он забран, и что именно мы отдали (режим отладки)."""
+    body = ical.generate(name, events)
+    ua = request.headers.get("user-agent", "")
+    _mark_fetched(conn, target_id, channel, ua)
+    # DTSTAMP в каждом ответе новый — для сравнения копий его отбрасываем, иначе каждый запрос плодил бы «новый» календарь
+    stable = "\n".join(l for l in body.splitlines() if not l.startswith("DTSTAMP:"))
+    syncdebug.save(conn, account_id, "served", channel, body, target_id=target_id, events=len(events), user_agent=ua, hash_source=stable)
+    return Response(body, media_type="text/calendar; charset=utf-8", headers={"Cache-Control": "no-store"})
 
 
 def ical_export(request: Request) -> Response:
@@ -267,8 +273,7 @@ def ical_export(request: Request) -> Response:
         if not room:
             return PlainTextResponse("Not found", status_code=404)
         events = export_events(conn, room, channel)
-        _mark_fetched(conn, room["id"], channel)
-    return _calendar(f"{room['property_name']} — {room['name']}", events)
+        return _serve(conn, request, room["account_id"], room["id"], channel, f"{room['property_name']} — {room['name']}", events)
 
 
 def ical_type_export(request: Request) -> Response:
@@ -285,8 +290,7 @@ def ical_type_export(request: Request) -> Response:
         mode = one(conn, "SELECT mode FROM ical_export_settings WHERE room_type_id = %s AND channel = %s",
                    (rt["id"], channel))
         events = export_type_events(conn, rt, channel, mode["mode"] if mode else "per_booking")
-        _mark_fetched(conn, rt["id"], channel)
-    return _calendar(f"{rt['property_name']} — {rt['name']}", events)
+        return _serve(conn, request, rt["account_id"], rt["id"], channel, f"{rt['property_name']} — {rt['name']}", events)
 
 
 routes = [
