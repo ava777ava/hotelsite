@@ -1,5 +1,6 @@
 """Регистрация, вход, сотрудники, настройка объекта и номеров."""
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from starlette.routing import Route
@@ -18,6 +19,7 @@ log = logging.getLogger("fligel.auth")
 
 ROLE_LABELS = {"owner": "Владелец", "manager": "Администратор", "housekeeper": "Горничная"}
 RESET_TOKEN_TTL_HOURS = 1
+RESET_MIN_SECONDS = 0.35   # ниже этого времени «забыли пароль» не отвечает — чтобы по скорости нельзя было узнать, есть ли email
 
 
 def _unique_slug(conn, base: str) -> str:
@@ -114,6 +116,8 @@ def forgot_password(c: Ctx):
     if not ratelimit.allow(f"reset-ip:{ratelimit.client_ip(c.request)}", config.RESET_REQUESTS_PER_HOUR, 3600) \
             or (email and not ratelimit.allow(f"reset-mail:{email}", 3, 3600)):
         raise ApiError(429, "Слишком много запросов. Попробуйте через час")
+    started = time.monotonic()
+    letter = None
     if email:
         with tx() as conn:
             user = one(conn, "SELECT id, name FROM users WHERE lower(email) = %s", (email,))
@@ -123,12 +127,17 @@ def forgot_password(c: Ctx):
                           " VALUES (%s, %s, now() + make_interval(hours => %s))",
                     (user["id"], token, RESET_TOKEN_TTL_HOURS))
                 link = f"{config.PUBLIC_BASE_URL}/app/#/reset-password?token={token}"
-                mail.send_or_log(
-                    email, "Восстановление пароля — Флигель",
-                    f"Здравствуйте, {user['name']}!\n\nЧтобы задать новый пароль, перейдите по ссылке "
-                    f"(действует 1 час):\n{link}\n\nЕсли вы не запрашивали восстановление пароля, "
-                    "просто проигнорируйте это письмо.",
-                )
+                letter = (email, "Восстановление пароля — Флигель",
+                          f"Здравствуйте, {user['name']}!\n\nЧтобы задать новый пароль, перейдите по ссылке "
+                          f"(действует 1 час):\n{link}\n\nЕсли вы не запрашивали восстановление пароля, "
+                          "просто проигнорируйте это письмо.")
+    if letter:
+        # только после коммита (токен уже в БД) и в фоне: ни SMTP, ни транзакция не влияют на время ответа
+        mail.send_background(*letter)
+    # одинаковое время ответа для существующего и несуществующего email: ниже этого порога не отвечаем
+    pause = RESET_MIN_SECONDS - (time.monotonic() - started)
+    if pause > 0:
+        time.sleep(pause)
     return {"message": message}
 
 

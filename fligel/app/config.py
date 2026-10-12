@@ -86,3 +86,20 @@ DEMO_RESET_HOUR = int(os.environ.get("DEMO_RESET_HOUR", "4"))
 # Вход в панель оператора и в публичный API: лимиты попыток
 OPERATOR_LOGIN_PER_10MIN = int(os.environ.get("OPERATOR_LOGIN_PER_10MIN", "10"))
 API_REQUESTS_PER_MINUTE = int(os.environ.get("API_REQUESTS_PER_MINUTE", "120"))
+
+
+def config_warnings() -> list[str]:
+    """Что в настройках сервера нужно поправить перед боем. Показывается в /health (поле warnings) и в панели оператора.
+    На доступность (ok / код 200) не влияет — это подсказки, а не поломка."""
+    out = []
+    if TELEGRAM_BOT_TOKEN and not TELEGRAM_WEBHOOK_SECRET:
+        out.append("Telegram: задан токен бота, но не задан TELEGRAM_WEBHOOK_SECRET — вебхук Telegram может подделать кто угодно. "
+                   "Задайте секрет в .env и заново вызовите setWebhook с secret_token (см. deploy/DEPLOY.md).")
+    if MAX_BOT_TOKEN and not MAX_WEBHOOK_SECRET:
+        out.append("MAX: задан токен бота, но не задан MAX_WEBHOOK_SECRET — вебхук MAX может подделать кто угодно.")
+    if not PUBLIC_BASE_URL.startswith(("http://localhost", "http://127.0.0.1")):
+        if not SMTP_HOST:
+            out.append("Почта: не задан SMTP_HOST — письма гостям и «забыли пароль» не уходят (только пишутся в лог сервера).")
+        if not SELLER.get("name"):
+            out.append("Счета: не заполнены реквизиты продавца SELLER_* — счета клиентам выставлять нельзя без реквизитов.")
+    return out

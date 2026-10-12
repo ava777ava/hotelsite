@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 
 import httpx
 
+from . import outbox
 from .db import all_, run, tx
 from .errors import ApiError
 
@@ -64,31 +65,31 @@ send = _default_send  # в тестах подменяется
 
 
 def process_outbox(limit: int = 20) -> dict:
+    """Доставка вебхуков. Транзакция не держится во время HTTP-запроса: захват → отправка → отметка (см. app/outbox.py)."""
+    outbox.recover("webhook_deliveries")
+    rows = outbox.claim("webhook_deliveries",
+                        "SELECT d.id, d.event, d.payload, d.attempts, d.webhook_id, w.url, w.secret, w.enabled FROM webhook_deliveries d"
+                        " JOIN webhooks w ON w.id = d.webhook_id WHERE d.status = 'pending' AND d.next_attempt_at <= now()"
+                        " ORDER BY d.created_at LIMIT %s FOR UPDATE OF d SKIP LOCKED", (limit,))
     sent = failed = 0
-    with tx() as conn:
-        rows = all_(conn, "SELECT d.id, d.event, d.payload, d.attempts, d.webhook_id, w.url, w.secret, w.enabled FROM webhook_deliveries d"
-                          " JOIN webhooks w ON w.id = d.webhook_id WHERE d.status = 'pending' AND d.next_attempt_at <= now()"
-                          " ORDER BY d.created_at LIMIT %s FOR UPDATE OF d SKIP LOCKED", (limit,))
-        for r in rows:
-            body = json.dumps({**r["payload"], "id": str(r["id"])}, ensure_ascii=False, separators=(",", ":")).encode()
-            headers = {"Content-Type": "application/json", "User-Agent": "Fligel-Webhooks/1", "X-Fligel-Event": r["event"],
-                       "X-Fligel-Delivery": str(r["id"]), "X-Fligel-Signature": sign(r["secret"], body)}
-            try:
-                if not r["enabled"]:
-                    raise RuntimeError("Вебхук выключен")
-                check_url(r["url"])   # адрес мог начать указывать на внутреннюю сеть уже после регистрации
-                send(r["url"], body, headers)
-                run(conn, "UPDATE webhook_deliveries SET status = 'sent', sent_at = now(), attempts = attempts + 1, last_error = NULL WHERE id = %s", (r["id"],))
-                run(conn, "UPDATE webhooks SET last_status = 'ok', last_delivery_at = now() WHERE id = %s", (r["webhook_id"],))
-                sent += 1
-            except Exception as e:  # noqa: BLE001
-                attempts = r["attempts"] + 1
-                msg = (e.message if isinstance(e, ApiError) else str(e))[:300]
+    for r in rows:
+        body = json.dumps({**r["payload"], "id": str(r["id"])}, ensure_ascii=False, separators=(",", ":")).encode()
+        headers = {"Content-Type": "application/json", "User-Agent": "Fligel-Webhooks/1", "X-Fligel-Event": r["event"],
+                   "X-Fligel-Delivery": str(r["id"]), "X-Fligel-Signature": sign(r["secret"], body)}
+        try:
+            if not r["enabled"]:
+                raise RuntimeError("Вебхук выключен")
+            check_url(r["url"])   # адрес мог начать указывать на внутреннюю сеть уже после регистрации
+            send(r["url"], body, headers)
+        except Exception as e:  # noqa: BLE001
+            msg = (e.message if isinstance(e, ApiError) else str(e))[:300]
+            with tx() as conn:
                 run(conn, "UPDATE webhooks SET last_status = %s, last_delivery_at = now() WHERE id = %s", (f"ошибка: {msg}", r["webhook_id"]))
-                if attempts >= MAX_ATTEMPTS or not r["enabled"]:
-                    run(conn, "UPDATE webhook_deliveries SET status = 'failed', attempts = %s, last_error = %s WHERE id = %s", (attempts, msg, r["id"]))
-                    failed += 1
-                else:
-                    run(conn, "UPDATE webhook_deliveries SET attempts = %s, last_error = %s, next_attempt_at = now() + make_interval(mins => %s) WHERE id = %s",
-                        (attempts, msg, min(2 ** attempts, 60), r["id"]))
+            if outbox.mark_retry("webhook_deliveries", r, msg, MAX_ATTEMPTS, give_up=not r["enabled"]):
+                failed += 1
+            continue
+        outbox.mark_sent("webhook_deliveries", r["id"])
+        with tx() as conn:
+            run(conn, "UPDATE webhooks SET last_status = 'ok', last_delivery_at = now() WHERE id = %s", (r["webhook_id"],))
+        sent += 1
     return {"sent": sent, "failed": failed}

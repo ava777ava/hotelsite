@@ -82,9 +82,12 @@ async function panel() {
   let data = null;
   const table = h('div', { class: 'card' });
   const kpis = h('div', { class: 'kpis' });
+  const warns = h('div', { class: 'stack' });
   const load = async () => { data = await api('GET', '/api/operator/accounts'); draw(); };
   function draw() {
     const s = data.stats;
+    warns.innerHTML = '';
+    warns.append(...(data.warnings || []).map((w) => h('div', { class: 'note', role: 'alert', style: { background: 'var(--ochre-soft)', color: 'var(--ochre-ink)', margin: 0 } }, '⚠ ', w)));
     kpis.innerHTML = '';
     kpis.append(...[['Аккаунтов', s.accounts], ['Активных', s.active], ['На пробном', s.trial], ['Номеров', s.rooms], ['Броней за 30 дней', s.bookings_30d]].map(([l, v]) => h('div', { class: 'kpi' }, h('div', { class: 'l' }, l), h('div', { class: 'v' }, v))));
     const needle = q.value.trim().toLowerCase();
@@ -106,7 +109,7 @@ async function panel() {
   }
   root.append(h('div', { class: 'page-head' }, h('h1', {}, 'Панель оператора'), q,
     h('button', { class: 'btn', title: 'Разослать напоминания об окончании тарифа сейчас (обычно это делает планировщик)', onclick: async () => { try { const r = await api('POST', '/api/operator/reminders', {}); toast(`Отправлено напоминаний: ${r.sent}`); } catch (ex) { toast(ex.message, true); } } }, 'Напомнить об оплате'),
-    h('button', { class: 'btn ghost', onclick: () => { setTok(null); render(); } }, 'Выйти')), kpis, table);
+    h('button', { class: 'btn ghost', onclick: () => { setTok(null); render(); } }, 'Выйти')), warns, kpis, table);
   await load();
   return root;
 }

@@ -51,7 +51,7 @@ def _account_rows(conn) -> list[dict]:
 def accounts(c: Ctx):
     with tx() as conn:
         return {"items": _account_rows(conn), "stats": admin.stats(conn), "plans": [{"key": k, "label": v} for k, v in PLAN_LABELS.items()],
-                "prices": config.PLAN_PRICES}
+                "prices": config.PLAN_PRICES, "warnings": config.config_warnings()}
 
 
 @op_api()

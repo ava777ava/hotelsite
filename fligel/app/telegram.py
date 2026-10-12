@@ -13,7 +13,7 @@ from datetime import date, datetime
 
 import httpx
 
-from . import config
+from . import config, outbox
 from .db import all_, one, run, tx
 
 log = logging.getLogger("fligel.telegram")
@@ -148,36 +148,29 @@ send_message = _default_send
 
 
 def process_outbox(limit: int = 20) -> dict:
-    """Отправляет накопившиеся сообщения из очереди. При сбое — повтор с растущей паузой
-    (2, 4, 8… минут, не больше часа), после MAX_ATTEMPTS попыток сообщение помечается
+    """Отправляет накопившиеся сообщения из очереди. Транзакция БД во время HTTP-запросов не держится (см. app/outbox.py).
+    При сбое — повтор с растущей паузой (2, 4, 8… минут, не больше часа), после MAX_ATTEMPTS попыток сообщение помечается
     окончательно неотправленным (status='failed') и больше не трогается."""
     if not enabled():
         return {"sent": 0, "failed": 0}
+    outbox.recover("telegram_outbox")
+    rows = outbox.claim(
+        "telegram_outbox",
+        "SELECT id, chat_id, text, attempts FROM telegram_outbox WHERE status = 'pending'"
+        " AND next_attempt_at <= now() ORDER BY created_at LIMIT %s FOR UPDATE SKIP LOCKED",
+        (limit,),
+    )
     sent = failed = 0
-    with tx() as conn:
-        rows = all_(
-            conn,
-            "SELECT id, chat_id, text, attempts FROM telegram_outbox WHERE status = 'pending'"
-            " AND next_attempt_at <= now() ORDER BY created_at LIMIT %s FOR UPDATE SKIP LOCKED",
-            (limit,),
-        )
-        for row in rows:
-            try:
-                send_message(row["chat_id"], row["text"])
-                run(conn, "UPDATE telegram_outbox SET status = 'sent', sent_at = now() WHERE id = %s", (row["id"],))
-                sent += 1
-            except Exception as e:
-                attempts = row["attempts"] + 1
-                if attempts >= MAX_ATTEMPTS:
-                    run(conn, "UPDATE telegram_outbox SET status = 'failed', attempts = %s, last_error = %s"
-                              " WHERE id = %s", (attempts, str(e)[:500], row["id"]))
-                    failed += 1
-                    log.warning("Сообщение в Telegram не отправлено после %s попыток: %s", attempts, e)
-                else:
-                    delay_minutes = min(2 ** attempts, 60)
-                    run(conn, "UPDATE telegram_outbox SET attempts = %s, last_error = %s,"
-                              " next_attempt_at = now() + make_interval(mins => %s) WHERE id = %s",
-                        (attempts, str(e)[:500], delay_minutes, row["id"]))
+    for row in rows:
+        try:
+            send_message(row["chat_id"], row["text"])
+        except Exception as e:  # noqa: BLE001
+            if outbox.mark_retry("telegram_outbox", row, str(e), MAX_ATTEMPTS):
+                failed += 1
+                log.warning("Сообщение в Telegram не отправлено после %s попыток: %s", row["attempts"] + 1, e)
+            continue
+        outbox.mark_sent("telegram_outbox", row["id"])
+        sent += 1
     return {"sent": sent, "failed": failed}
 
 

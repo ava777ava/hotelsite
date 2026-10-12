@@ -1627,6 +1627,7 @@ class AuthSecurityTests(Base):
         r = self.client.post("/api/auth/forgot-password", json={"email": "no-such-user@example.ru"})
         self.assertEqual(r.status_code, 200)
         known = self.client.post("/api/auth/forgot-password", json={"email": self.email})
+        mail.flush()
         self.assertEqual(known.json()["message"], r.json()["message"])  # ответ не выдаёт, есть ли email
         self.assertEqual(len(self.outgoing), 1)  # письмо ушло только для реального email
 
@@ -1637,6 +1638,7 @@ class AuthSecurityTests(Base):
 
     def test_reset_password_flow(self):
         r = self.client.post("/api/auth/forgot-password", json={"email": self.email})
+        mail.flush()
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(self.outgoing), 1)
         to, subject, body = self.outgoing[0]
@@ -1657,6 +1659,7 @@ class AuthSecurityTests(Base):
         config.SMTP_HOST = ""  # по умолчанию SMTP не настроен — это и проверяем
         with self.assertLogs("fligel.mail", level="INFO") as logs:
             r = self.client.post("/api/auth/forgot-password", json={"email": self.email})
+            mail.flush()
         self.assertEqual(r.status_code, 200)
         self.assertEqual(self.outgoing, [])  # mail.send не вызывался вовсе
         self.assertTrue(any("token=" in msg for msg in logs.output))
@@ -1665,6 +1668,7 @@ class AuthSecurityTests(Base):
         self.assertEqual(self.client.post("/api/auth/reset-password",
                                           json={"token": "wrong", "password": "new-password-1"}).status_code, 422)
         self.client.post("/api/auth/forgot-password", json={"email": self.email})
+        mail.flush()
         token = self._extract_token(self.outgoing[0][2])
         with db.tx() as conn:
             db.run(conn, "UPDATE password_resets SET expires_at = now() - interval '1 minute' WHERE token = %s",

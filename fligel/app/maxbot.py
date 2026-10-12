@@ -14,7 +14,7 @@ from datetime import datetime
 
 import httpx
 
-from . import config
+from . import config, outbox
 from .db import all_, one, run, tx
 from .telegram import EVENTS, EVENT_LABELS, LINK_CODE_TTL_MINUTES, MAX_ATTEMPTS, _digest_text  # те же события и тексты
 
@@ -119,29 +119,23 @@ send_message = _default_send
 
 
 def process_outbox(limit: int = 20) -> dict:
-    """Отправка с повторами (2, 4, 8… минут, не дольше часа); после MAX_ATTEMPTS попыток — status='failed'."""
+    """Отправка с повторами (2, 4, 8… минут, не дольше часа); после MAX_ATTEMPTS попыток — status='failed'. Без транзакции на время запроса."""
     if not enabled():
         return {"sent": 0, "failed": 0}
+    outbox.recover("max_outbox")
+    rows = outbox.claim("max_outbox", "SELECT id, chat_id, text, attempts FROM max_outbox WHERE status = 'pending'"
+                                      " AND next_attempt_at <= now() ORDER BY created_at LIMIT %s FOR UPDATE SKIP LOCKED", (limit,))
     sent = failed = 0
-    with tx() as conn:
-        rows = all_(conn, "SELECT id, chat_id, text, attempts FROM max_outbox WHERE status = 'pending'"
-                          " AND next_attempt_at <= now() ORDER BY created_at LIMIT %s FOR UPDATE SKIP LOCKED", (limit,))
-        for row in rows:
-            try:
-                send_message(row["chat_id"], row["text"])
-                run(conn, "UPDATE max_outbox SET status = 'sent', sent_at = now() WHERE id = %s", (row["id"],))
-                sent += 1
-            except Exception as e:
-                attempts = row["attempts"] + 1
-                if attempts >= MAX_ATTEMPTS:
-                    run(conn, "UPDATE max_outbox SET status = 'failed', attempts = %s, last_error = %s WHERE id = %s",
-                        (attempts, str(e)[:500], row["id"]))
-                    failed += 1
-                    log.warning("Сообщение в MAX не отправлено после %s попыток: %s", attempts, e)
-                else:
-                    run(conn, "UPDATE max_outbox SET attempts = %s, last_error = %s,"
-                              " next_attempt_at = now() + make_interval(mins => %s) WHERE id = %s",
-                        (attempts, str(e)[:500], min(2 ** attempts, 60), row["id"]))
+    for row in rows:
+        try:
+            send_message(row["chat_id"], row["text"])
+        except Exception as e:  # noqa: BLE001
+            if outbox.mark_retry("max_outbox", row, str(e), MAX_ATTEMPTS):
+                failed += 1
+                log.warning("Сообщение в MAX не отправлено после %s попыток: %s", row["attempts"] + 1, e)
+            continue
+        outbox.mark_sent("max_outbox", row["id"])
+        sent += 1
     return {"sent": sent, "failed": failed}
 
 

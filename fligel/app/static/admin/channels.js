@@ -118,7 +118,7 @@ export async function viewChannels(main) {
       h('div', { class: 'board-tools' }, tabs),
       h('div', { class: 'card card-pad' },
         h('div', { style: { display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } },
-          h('h3', { style: { marginRight: 'auto' } }, `Как подключить: ${data.labels[channel]}`), levelSeg),
+          h('h3', { style: { marginRight: 'auto' } }, `Как подключить: ${data.labels[channel]}`), h('span', { class: 'muted small' }, 'На площадке у вас:'), levelSeg),
         h('ol', { class: 'steps small' }, CHANNEL_HELP[channel].map((st) => h('li', {}, st))),
         h('p', { class: 'muted small', style: { marginBottom: 0 } },
           level === 'type'

@@ -147,7 +147,8 @@ def health(request: Request):
         db_ok = False
     scheduler_ok = sync.scheduler_alive()
     body = {"ok": db_ok and scheduler_ok, "db": db_ok,
-            "scheduler": scheduler_ok if config.SYNC_ENABLED else None, "backup_check": _backup_check() if db_ok else None}
+            "scheduler": scheduler_ok if config.SYNC_ENABLED else None, "backup_check": _backup_check() if db_ok else None,
+            "warnings": config.config_warnings()}
     return Json(body, status_code=200 if body["ok"] else 503)
 
 

@@ -5,6 +5,7 @@
 восстановления пароля можно взять из лога и открыть вручную."""
 import logging
 import smtplib
+import threading
 from email.message import EmailMessage
 
 from . import config
@@ -39,3 +40,26 @@ def send_or_log(to: str, subject: str, body: str) -> None:
     else:
         log.info("SMTP не настроен (режим разработки) — письмо не отправлено, вот его содержимое:\n"
                   "Кому: %s\nТема: %s\n\n%s", to, subject, body)
+
+
+_pending: list[threading.Thread] = []
+
+
+def send_background(to: str, subject: str, body: str) -> None:
+    """Отправляет письмо в фоне, чтобы время ответа API не зависело от скорости SMTP-сервера (важно для «забыли пароль»:
+    иначе по времени ответа можно понять, есть ли такой email). Сбой только пишется в лог."""
+    def work():
+        try:
+            send_or_log(to, subject, body)
+        except Exception:  # noqa: BLE001
+            log.exception("Не удалось отправить письмо на %s", to)
+    t = threading.Thread(target=work, daemon=True, name="fligel-mail")
+    _pending[:] = [x for x in _pending if x.is_alive()]
+    _pending.append(t)
+    t.start()
+
+
+def flush(timeout: float = 10) -> None:
+    """Дождаться фоновых писем (для тестов и аккуратной остановки)."""
+    for t in list(_pending):
+        t.join(timeout)
