@@ -30,6 +30,24 @@ def resolve_host(host: str) -> list[str]:
         return []
 
 
+def is_public_ip(ip: str) -> bool:
+    a = ipaddress.ip_address(ip)
+    return a.is_global and not (a.is_multicast or a.is_unspecified)
+
+
+def check_public_host(host: str) -> None:
+    """Хост должен указывать только на публичные адреса (защита от SSRF: внутренняя сеть, метаданные облака, localhost).
+    Поднимает RuntimeError с понятным текстом."""
+    try:
+        ips = [host] if ipaddress.ip_address(host) else []
+    except ValueError:
+        ips = resolve_host(host)
+    if not ips:
+        raise RuntimeError("Не удалось определить адрес сервера по ссылке")
+    if not all(is_public_ip(i) for i in ips):
+        raise RuntimeError("Ссылка ведёт во внутреннюю сеть — разрешены только публичные адреса площадок")
+
+
 def check_url(url: str) -> str:
     """Проверка адреса вебхука: https, публичный хост. Возвращает нормализованный адрес или поднимает понятную ошибку."""
     url = (url or "").strip()

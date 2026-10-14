@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import PlainTextResponse, Response
 from starlette.routing import Route
 
-from .. import audit, config, ical, syncdebug
+from .. import audit, config, ical, syncdebug, webhooks
 from ..db import all_, one, run, tx
 from ..errors import ApiError
 from ..sync import CHANNEL_LABELS, export_events, export_type_events, sync_feed
@@ -101,6 +101,11 @@ def _check_url(url: str) -> str:
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ApiError(422, "Вставьте полную ссылку на календарь, начиная с https://", {"field": "url"})
     host = parsed.hostname or ""
+    try:   # адрес-число (127.1.2.3, 172.16.0.5, ::1, 169.254.169.254) — только публичный
+        if not webhooks.is_public_ip(host) and not config.PUBLIC_BASE_URL.startswith("http://localhost"):
+            raise ApiError(422, "Ссылка должна вести на сайт площадки", {"field": "url"})
+    except ValueError:
+        pass   # имя хоста: адрес проверяется при каждом обращении (sync.fetch)
     if (host in ("localhost", "0.0.0.0") or host.startswith("127.") or host.startswith("10.")
             or host.startswith("192.168.") or host.startswith("169.254.")) \
             and not config.PUBLIC_BASE_URL.startswith("http://localhost"):

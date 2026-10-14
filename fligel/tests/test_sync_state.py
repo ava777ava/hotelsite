@@ -127,6 +127,92 @@ class SyncStateTests(Base):
         self.assertIn("503", row["last_error"])
 
 
+class FetchGuardTests(Base):
+    """Календарь площадки забираем только с публичных адресов (SSRF): внутренняя сеть, метаданные облака, редиректы внутрь."""
+
+    def setUp(self):
+        self._base = config.PUBLIC_BASE_URL
+        config.PUBLIC_BASE_URL = "https://fligel.example"      # боевой режим: проверка включена
+        self._resolve = sync.webhooks.resolve_host
+
+    def tearDown(self):
+        config.PUBLIC_BASE_URL = self._base
+        sync.webhooks.resolve_host = self._resolve
+
+    def test_internal_addresses_are_refused(self):
+        for url in ("http://127.0.0.1/x.ics", "http://169.254.169.254/latest/meta-data", "http://10.0.0.5/c.ics", "https://172.16.3.4/c.ics",
+                    "http://192.168.1.1/c.ics", "http://[::1]/c.ics", "http://100.64.0.1/c.ics", "http://0.0.0.0/c.ics"):
+            with self.subTest(url=url), self.assertRaises(RuntimeError):
+                sync._guard(url)
+        with self.assertRaises(RuntimeError):
+            sync._guard("ftp://example.com/c.ics")
+
+    def test_hostname_resolving_to_private_ip_is_refused(self):
+        sync.webhooks.resolve_host = lambda host: ["10.1.2.3"]
+        with self.assertRaises(RuntimeError):
+            sync._guard("https://innocent.example.com/c.ics")
+        sync.webhooks.resolve_host = lambda host: ["93.184.216.34", "10.1.2.3"]   # хоть один внутренний — отказ
+        with self.assertRaises(RuntimeError):
+            sync._guard("https://mixed.example.com/c.ics")
+        sync.webhooks.resolve_host = lambda host: ["93.184.216.34"]
+        sync._guard("https://public.example.com/c.ics")   # публичный — проходит
+        sync.webhooks.resolve_host = lambda host: []
+        with self.assertRaises(RuntimeError):
+            sync._guard("https://nothing.example.com/c.ics")
+
+    def test_redirect_into_internal_network_is_not_followed(self):
+        import httpx
+        sync.webhooks.resolve_host = lambda host: ["10.0.0.1"] if host == "internal.local" else ["93.184.216.34"]
+        seen = []
+
+        def handler(request):
+            seen.append(str(request.url))
+            if request.url.host == "calendar.example.com":
+                return httpx.Response(302, headers={"location": "http://internal.local/secret"})
+            return httpx.Response(200, text="SECRET")
+        real = httpx.Client
+        sync.httpx.Client = lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+        try:
+            with self.assertRaisesRegex(RuntimeError, "внутреннюю сеть"):
+                sync.fetch("https://calendar.example.com/c.ics")
+        finally:
+            sync.httpx.Client = real
+        self.assertEqual(seen, ["https://calendar.example.com/c.ics"])   # до внутреннего адреса запрос не дошёл
+
+    def test_normal_redirect_is_followed(self):
+        import httpx
+        sync.webhooks.resolve_host = lambda host: ["93.184.216.34"]
+
+        def handler(request):
+            if request.url.path == "/old.ics":
+                return httpx.Response(301, headers={"location": "/new.ics"})
+            return httpx.Response(200, text="BEGIN:VCALENDAR\nEND:VCALENDAR")
+        real = httpx.Client
+        sync.httpx.Client = lambda **kw: real(transport=httpx.MockTransport(handler), **kw)
+        try:
+            self.assertIn("VCALENDAR", sync.fetch("https://calendar.example.com/old.ics"))
+        finally:
+            sync.httpx.Client = real
+
+    def test_feed_form_rejects_numeric_internal_address(self):
+        ctx = self.register(f"fg{id(self)}@example.ru")
+        for url in ("http://172.16.0.9/c.ics", "http://169.254.169.254/x", "https://[::1]/c.ics"):
+            r = self.client.post("/api/feeds", headers=ctx["h"], json={"room_id": ctx["rooms"][0]["id"], "channel": "avito", "url": url})
+            self.assertEqual(r.status_code, 422, url)
+
+    def test_error_snapshot_of_foreign_response_is_truncated(self):
+        ctx = self.register(f"fgs{id(self)}@example.ru")
+        self.client.put("/api/sync/debug", headers=ctx["h"], json={"enabled": True})
+        orig = sync.fetch
+        sync.fetch = lambda url: "<html>" + "x" * 100000
+        try:
+            fid = self.client.post("/api/feeds", headers=ctx["h"], json={"room_id": ctx["rooms"][0]["id"], "channel": "avito", "url": "https://example.com/c.ics"}).json()["id"]
+        finally:
+            sync.fetch = orig
+        snap = self.client.get("/api/sync/snapshots", headers=ctx["h"], params={"kind": "received", "feed_id": fid}).json()["items"][0]
+        self.assertLessEqual(snap["size"], 20000)
+
+
 class StaleExportTests(Base):
     def setUp(self):
         self.ctx = self.register(f"stale{id(self)}@example.ru")

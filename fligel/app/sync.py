@@ -17,6 +17,7 @@ from datetime import date, timedelta
 
 import httpx
 import psycopg
+from urllib.parse import urljoin, urlparse
 
 from . import autoprice, automation, billing, booklog, webhooks, config, ical, notify, syncdebug
 from .db import all_, one, run, tx
@@ -43,18 +44,41 @@ class SyncResult:
     conflict_details: list = field(default_factory=list)
 
 
+MAX_REDIRECTS = 4
+
+
+def _guard(url: str) -> None:
+    """Календарь площадки забираем только с публичных адресов: иначе владелец мог бы заставить сервер ходить во внутреннюю сеть
+    (SSRF) и увидеть ответ в сыром календаре. В разработке (адрес сервиса localhost) и при WEBHOOK_ALLOW_HTTP=1 проверка отключена."""
+    if webhooks.ALLOW_HTTP or config.PUBLIC_BASE_URL.startswith(("http://localhost", "http://127.0.0.1")):
+        return
+    u = urlparse(url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise RuntimeError("Ссылка должна начинаться с https://")
+    webhooks.check_public_host(u.hostname)
+
+
 def fetch(url: str) -> str:
     headers = {"User-Agent": "Fligel-Calendar-Sync/1.0", "Accept": "text/calendar, */*"}
-    with httpx.Client(timeout=20, follow_redirects=True, headers=headers) as client:
-        with client.stream("GET", url) as resp:
-            if resp.status_code != 200:
-                raise RuntimeError(f"Площадка ответила кодом {resp.status_code}")
-            chunks, size = [], 0
-            for chunk in resp.iter_bytes():
-                size += len(chunk)
-                if size > MAX_FEED_BYTES:
-                    raise RuntimeError("Календарь слишком большой (больше 5 МБ)")
-                chunks.append(chunk)
+    # переходы по редиректам делаем сами и проверяем каждый адрес: публичный сайт не должен «перенаправить» нас внутрь сети
+    with httpx.Client(timeout=20, follow_redirects=False, headers=headers) as client:
+        for _ in range(MAX_REDIRECTS + 1):
+            _guard(url)
+            with client.stream("GET", url) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308) and resp.headers.get("location"):
+                    url = urljoin(url, resp.headers["location"])
+                    continue
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Площадка ответила кодом {resp.status_code}")
+                chunks, size = [], 0
+                for chunk in resp.iter_bytes():
+                    size += len(chunk)
+                    if size > MAX_FEED_BYTES:
+                        raise RuntimeError("Календарь слишком большой (больше 5 МБ)")
+                    chunks.append(chunk)
+            break
+        else:
+            raise RuntimeError("Слишком много переходов по ссылке")
     raw = b"".join(chunks)
     try:
         return raw.decode("utf-8")
@@ -252,7 +276,7 @@ def sync_feed(feed_id, fetcher=None) -> SyncResult:
         res = SyncResult(status="error", message=str(e)[:500] or type(e).__name__)
         with tx() as conn:
             if text is not None:   # календарь получен, но не разобран — именно его и нужно разглядывать при отладке
-                syncdebug.save(conn, feed["account_id"], "received", feed["channel"], text, feed_id=feed_id, status="error", note=res.message)
+                syncdebug.save(conn, feed["account_id"], "received", feed["channel"], text[:20000], feed_id=feed_id, status="error", note=res.message)   # чужой ответ целиком не храним
             run(conn, "UPDATE ical_feeds SET last_status = 'error', last_error = %s, last_synced_at = now()"
                       " WHERE id = %s", (res.message, feed_id))
             run(conn, "INSERT INTO sync_log (account_id, feed_id, status, message) VALUES (%s, %s, 'error', %s)",
