@@ -64,6 +64,12 @@ class IcalFormatTests(unittest.TestCase):
             e = self.one(cal(ev(f"UID:dur-{dur}", "DTSTART;VALUE=DATE:20350710", f"DURATION:{dur}")))
             self.assertEqual((e.end - e.start).days, nights, dur)
 
+    def test_duration_rounds_up_and_negative_is_rejected(self):
+        e = self.one(cal(ev("UID:r", "DTSTART;VALUE=DATE:20350710", "DURATION:PT26H")))
+        self.assertEqual((e.end - e.start).days, 2)
+        events, skipped = ical.parse_report(cal(ev("UID:n", "DTSTART;VALUE=DATE:20350710", "DURATION:-P1D")), MSK)
+        self.assertEqual((len(events), skipped), (0, 1))
+
     def test_missing_dtend_means_one_night_and_end_before_start_is_fixed(self):
         e = self.one(cal(ev("UID:a", "DTSTART;VALUE=DATE:20350710")))
         self.assertEqual(e.end, date(2035, 7, 11))
@@ -146,6 +152,22 @@ class FormatsThroughSyncTests(Base):
                 res = self.feed(channel)
                 self.assertEqual((res["status"], res["added"]), ("ok", 1), res)
                 self.assertEqual(self.nights(), [(a.isoformat(), b.isoformat(), channel)])
+
+    def test_unparsable_event_does_not_cancel_its_booking(self):
+        a, b = date.fromisoformat(d(5)), date.fromisoformat(d(7))
+        good = ev("UID:keep1", f"DTSTART;VALUE=DATE:{a:%Y%m%d}", f"DTEND;VALUE=DATE:{b:%Y%m%d}")
+        self.body = cal(good)
+        res = self.feed("avito")
+        self.assertEqual(res["added"], 1)
+        # на следующем проходе то же событие пришло «кривым» — бронь не должна считаться исчезнувшей с площадки
+        self.body = cal(ev("UID:keep1", "DTSTART;VALUE=DATE:мусор"))
+        r = self.client.post(f"/api/feeds/{res['id']}/sync", headers=self.ctx["h"]).json()
+        self.assertEqual((r["status"], r["removed"]), ("ok", 0))
+        self.assertEqual([x[2] for x in self.nights()], ["avito"])
+        # а когда календарь снова разбирается целиком и события действительно нет — бронь снимается
+        self.body = cal()
+        r = self.client.post(f"/api/feeds/{res['id']}/sync", headers=self.ctx["h"]).json()
+        self.assertEqual(r["removed"], 1)
 
     def test_one_broken_event_does_not_block_the_rest(self):
         a, b = date.fromisoformat(d(5)), date.fromisoformat(d(7))

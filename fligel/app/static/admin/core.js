@@ -212,7 +212,7 @@ export const state = {
   propertyId: store.get('propertyId'),
   boardFrom: null,
   boardDays: parseInt(store.get('board_days', ''), 10) || (window.innerWidth < 860 ? 14 : 31),
-  conflicts: 0,
+  conflicts: 0, exportStale: 0, channelIssues: 0,
   requests: 0,
   tasks: 0,
   financeKind: store.get('finance_kind', 'expense'),

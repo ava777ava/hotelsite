@@ -130,16 +130,20 @@ class ConfigWarningsTests(Base):
     def tearDown(self):
         config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_WEBHOOK_SECRET, config.MAX_BOT_TOKEN, config.MAX_WEBHOOK_SECRET = self._saved
 
-    def test_health_and_operator_warn_about_missing_webhook_secret(self):
+    def test_health_shows_only_the_count_and_operator_gets_the_texts(self):
         config.TELEGRAM_BOT_TOKEN, config.TELEGRAM_WEBHOOK_SECRET = "tok", ""
         r = self.client.get("/health")
-        self.assertTrue(any("TELEGRAM_WEBHOOK_SECRET" in w for w in r.json()["warnings"]))
         self.assertEqual(r.status_code, 200)   # предупреждение не роняет мониторинг
+        self.assertIsInstance(r.json()["warnings"], int)
+        self.assertGreaterEqual(r.json()["warnings"], 1)
+        self.assertNotIn("TELEGRAM_WEBHOOK_SECRET", r.text)   # публичный /health не подсказывает, что вебхук можно подделать
+        base = r.json()["warnings"]
         config.TELEGRAM_WEBHOOK_SECRET = "secret"
-        self.assertFalse(any("TELEGRAM" in w for w in self.client.get("/health").json()["warnings"]))
+        self.assertEqual(self.client.get("/health").json()["warnings"], base - 1)
         config.TELEGRAM_BOT_TOKEN = ""
         config.MAX_BOT_TOKEN, config.MAX_WEBHOOK_SECRET = "tok", ""
-        self.assertTrue(any("MAX_WEBHOOK_SECRET" in w for w in self.client.get("/health").json()["warnings"]))
+        self.assertEqual(self.client.get("/health").json()["warnings"], base)
+        self.assertTrue(any("MAX_WEBHOOK_SECRET" in w for w in config.config_warnings()))
 
     def test_operator_panel_gets_warnings(self):
         with db.tx() as conn:
@@ -192,6 +196,19 @@ class ModulesTests(Base):
         self.client.put("/api/modules", headers=ctx["h"], json={"modules": ["autopilot"]})
         automation.run_due()
         self.assertEqual(runs(), 1)
+
+    def test_cleaning_after_checkout_works_without_autopilot_module(self):
+        ctx = self.register(f"modclean{id(self)}@example.ru", all_modules=False)   # новый аккаунт: готовые сценарии включены, модуль — нет
+        room = ctx["rooms"][0]
+        self.book(ctx, room, d(-2), d(0), guest="Уехал", guest_email="g@guest.ru")
+        with db.tx() as conn:
+            db.run(conn, "UPDATE automation_rules SET at_hour = 0 WHERE account_id = %s", (ctx["prop"]["account_id"],))
+        automation.run_due()
+        with db.tx() as conn:
+            self.assertEqual(db.one(conn, "SELECT hk_status FROM rooms WHERE id = %s", (room["id"],))["hk_status"], "dirty")
+            # письма и прочее остальное — только с модулем
+            self.assertEqual(db.one(conn, "SELECT count(*) AS n FROM automation_runs r JOIN automation_rules u ON u.id = r.rule_id"
+                                          " WHERE r.account_id = %s AND u.preset <> 'cleaning_after_checkout'", (ctx["prop"]["account_id"],))["n"], 0)
 
     def test_backfill_keeps_modules_in_use(self):
         ctx = self.register(f"modfill{id(self)}@example.ru", all_modules=False)

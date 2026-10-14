@@ -104,7 +104,7 @@ export async function refreshBadges() {
   if (!state.me || state.me.role === 'landlord') return;
   try {
     const b = await api('GET', '/api/badges');
-    state.requests = b.requests; state.conflicts = b.conflicts; state.tasks = b.tasks || 0; updateTitle();
+    state.requests = b.requests; state.conflicts = b.conflicts; state.exportStale = b.export_stale || 0; state.channelIssues = b.conflicts + (b.export_stale || 0); state.tasks = b.tasks || 0; updateTitle();
     if (can('manager')) try { state.bell = (await api('GET', '/api/notifications')).unread; } catch { /* колокольчик необязателен */ }
     document.querySelectorAll('[data-bell]').forEach((el) => { el.textContent = state.bell || ''; el.style.display = state.bell ? '' : 'none'; });
     document.querySelectorAll('[data-badge]').forEach((el) => {
@@ -203,7 +203,7 @@ export function guestSearchDrawer() {
 export function layout(route, main) {
   const visible = Object.entries(ROUTES).filter(([, d]) => routeVisible(d));
   if (state.me.role === 'landlord') visible.sort((a, b2) => LANDLORD_ORDER.indexOf(a[0]) - LANDLORD_ORDER.indexOf(b2[0]));
-  const BADGE = { bookings: 'requests', channels: 'conflicts', tasks: 'tasks' };
+  const BADGE = { bookings: 'requests', channels: 'channelIssues', tasks: 'tasks' };
   const link = ([key, d]) => h('a', { href: `#/${key}`, class: key === route ? 'active' : '' }, icon(d.icon), h('span', {}, d.title),
     BADGE[key] ? h('span', { class: 'badge', 'data-badge': BADGE[key], style: { display: state[BADGE[key]] ? '' : 'none' } }, state[BADGE[key]] || 0) : null);
   const prop = state.me.properties.find((p) => p.id === state.propertyId);

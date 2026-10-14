@@ -2,7 +2,7 @@
 
 * Сырые календари: последние SNAPSHOTS_KEEP штук для каждой площадки/номера — и то, что мы забрали у площадки (received),
   и то, что отдали ей мы (served). Одинаковый календарь второй раз не копируется — растёт счётчик. Нужно, чтобы разбирать
-  реальные форматы Авито, Яндекса и других. Включено по умолчанию (accounts.sync_debug), хранится не дольше SNAPSHOTS_DAYS дней
+  реальные форматы Авито, Яндекса и других. Выключено по умолчанию (accounts.sync_debug; включает владелец), хранится не дольше SNAPSHOTS_DAYS дней
   и показывается только владельцу: в календаре могут быть имена гостей.
 * Состояние: когда забрали календарь площадки, когда площадка забирала наш, сколько событий, сколько «эхо» отброшено, ошибки.
 * Предупреждение, если площадка не забирала наш календарь дольше STALE_EXPORT_HOURS часов."""
@@ -27,9 +27,19 @@ def debug_enabled(conn, account_id) -> bool:
 
 def save(conn, account_id, kind: str, channel: str, body: str, *, feed_id=None, target_id=None, events: int = 0,
          status: str = "ok", note: str = "", user_agent: str = "", hash_source: str | None = None) -> None:
-    """Запоминает сырой календарь (если включён режим отладки). Вызывать внутри транзакции."""
+    """Запоминает сырой календарь (если включён режим отладки). Вызывать внутри транзакции.
+    Отладка не должна ломать обмен с площадкой: сбой записи откатывается своей точкой сохранения и только пишется в лог."""
+    try:
+        with conn.transaction():
+            _save(conn, account_id, kind, channel, body, feed_id, target_id, events, status, note, user_agent, hash_source)
+    except Exception:  # noqa: BLE001
+        log.exception("Не удалось сохранить сырой календарь (режим отладки)")
+
+
+def _save(conn, account_id, kind, channel, body, feed_id, target_id, events, status, note, user_agent, hash_source) -> None:
     if not debug_enabled(conn, account_id):
         return
+    body = body.replace("\x00", "")   # PostgreSQL не хранит NUL в text
     if len(body) > MAX_BODY:
         body, note = body[:MAX_BODY], (note + " Календарь обрезан до 2 МБ.").strip()
     digest = hashlib.sha256((hash_source if hash_source is not None else body).encode("utf-8", "replace")).hexdigest()

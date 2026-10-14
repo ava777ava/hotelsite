@@ -16,6 +16,7 @@ class SyncStateTests(Base):
         self._orig = sync.fetch
         self.body = cal(ev("UID:u1", f"DTSTART;VALUE=DATE:{d(5).replace('-', '')}", f"DTEND;VALUE=DATE:{d(7).replace('-', '')}", "SUMMARY:Занято"))
         sync.fetch = lambda url: self.body
+        self.client.put("/api/sync/debug", headers=self.ctx["h"], json={"enabled": True})   # по умолчанию режим отладки выключен
 
     def tearDown(self):
         sync.fetch = self._orig
@@ -67,6 +68,12 @@ class SyncStateTests(Base):
         items = self.client.get("/api/sync/snapshots", headers=self.ctx["h"], params={"kind": "served", "target_id": self.room["id"], "channel": "avito"}).json()["items"]
         self.assertEqual(len(items), 2)
         self.assertIn("BEGIN:VEVENT", self.client.get(f"/api/sync/snapshots/{items[0]['id']}", headers=self.ctx["h"]).json()["body"])
+
+    def test_debug_is_off_by_default(self):
+        other = self.register(f"ssdef{id(self)}@example.ru")
+        self.assertFalse(self.client.get("/api/sync/state", headers=other["h"]).json()["debug"])
+        fid = self.client.post("/api/feeds", headers=other["h"], json={"room_id": other["rooms"][0]["id"], "channel": "avito", "url": "https://example.com/c.ics"}).json()["id"]
+        self.assertEqual(self.client.get("/api/sync/snapshots", headers=other["h"], params={"kind": "received", "feed_id": fid}).json()["items"], [])
 
     def test_debug_off_stores_nothing_and_clears_saved(self):
         fid = self.feed()
@@ -158,7 +165,8 @@ class StaleExportTests(Base):
         self.assertEqual(len(self.bell()), 1)
         syncdebug.check_stale()                      # повторный проход — то же предупреждение, второго уведомления нет
         self.assertEqual((self.alerts(), len(self.bell())), (1, 1))
-        self.assertEqual(self.client.get("/api/badges", headers=self.ctx["h"]).json()["conflicts"], 1)
+        badges = self.client.get("/api/badges", headers=self.ctx["h"]).json()
+        self.assertEqual((badges["conflicts"], badges["export_stale"]), (0, 1))   # не выдаём за двойную бронь
         st = self.client.get("/api/sync/state", headers=self.ctx["h"]).json()
         self.assertEqual(st["stale"], 1)
         with db.tx() as conn:
@@ -166,7 +174,7 @@ class StaleExportTests(Base):
         self.client.get(f"/ical/{token}/avito.ics")  # площадка забрала календарь
         syncdebug.check_stale()
         self.assertEqual(self.alerts(), 0)
-        self.assertEqual(self.client.get("/api/badges", headers=self.ctx["h"]).json()["conflicts"], 0)
+        self.assertEqual(self.client.get("/api/badges", headers=self.ctx["h"]).json()["export_stale"], 0)
 
     def test_never_fetched_feed_warns_after_threshold_from_connection(self):
         self.age(7, fetched=False)

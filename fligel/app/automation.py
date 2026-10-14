@@ -224,7 +224,8 @@ def notify_overdue_tasks() -> int:
 def run_due() -> int:
     """Один проход автопилота по всем включённым правилам (вызывается планировщиком)."""
     with tx() as conn:
-        rules = all_(conn, "SELECT r.* FROM automation_rules r JOIN accounts a ON a.id = r.account_id WHERE r.enabled AND a.status = 'active' AND 'autopilot' = ANY(a.modules)")
+        rules = all_(conn, "SELECT r.* FROM automation_rules r JOIN accounts a ON a.id = r.account_id WHERE r.enabled AND a.status = 'active'"
+                           " AND ('autopilot' = ANY(a.modules) OR r.preset = 'cleaning_after_checkout')")   # уборка после выезда — часть базового раздела «Уборка»
     fired = 0
     for rule in rules:
         try:

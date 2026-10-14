@@ -4,6 +4,7 @@
 занятость как набор VEVENT с датами начала/окончания. Мы читаем UID, DTSTART, DTEND,
 SUMMARY и STATUS; всё остальное игнорируем.
 """
+import math
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -64,9 +65,11 @@ def _duration_days(value: str) -> int:
     m = _DURATION.match(value.strip())
     if not m:
         raise ValueError(f"Непонятная длительность {value!r}")
-    _, w, d, h, mi, sec = m.groups()
+    sign, w, d, h, mi, sec = m.groups()
+    if sign == "-":
+        raise ValueError("Отрицательная длительность")
     total = timedelta(weeks=int(w or 0), days=int(d or 0), hours=int(h or 0), minutes=int(mi or 0), seconds=int(sec or 0))
-    return max(1, round(total / timedelta(days=1)))
+    return max(1, math.ceil(total / timedelta(days=1)))   # неполные сутки (PT26H) — это уже вторая ночь
 
 
 def parse_report(text: str, default_tz: str = "Europe/Moscow") -> tuple[list[Event], int]:

@@ -64,6 +64,27 @@ def _default_send(url: str, body: bytes, headers: dict) -> None:
 send = _default_send  # в тестах подменяется
 
 
+def _deliver(r: dict) -> str:
+    """Одна доставка: 'sent' / 'failed' (окончательно) / 'retry'."""
+    body = json.dumps({**r["payload"], "id": str(r["id"])}, ensure_ascii=False, separators=(",", ":")).encode()
+    headers = {"Content-Type": "application/json", "User-Agent": "Fligel-Webhooks/1", "X-Fligel-Event": r["event"],
+               "X-Fligel-Delivery": str(r["id"]), "X-Fligel-Signature": sign(r["secret"], body)}
+    try:
+        if not r["enabled"]:
+            raise RuntimeError("Вебхук выключен")
+        check_url(r["url"])   # адрес мог начать указывать на внутреннюю сеть уже после регистрации
+        send(r["url"], body, headers)
+    except Exception as e:  # noqa: BLE001
+        msg = (e.message if isinstance(e, ApiError) else str(e))[:300]
+        with tx() as conn:
+            run(conn, "UPDATE webhooks SET last_status = %s, last_delivery_at = now() WHERE id = %s", (f"ошибка: {msg}", r["webhook_id"]))
+        return "failed" if outbox.mark_retry("webhook_deliveries", r, msg, MAX_ATTEMPTS, give_up=not r["enabled"]) else "retry"
+    outbox.mark_sent("webhook_deliveries", r["id"])
+    with tx() as conn:
+        run(conn, "UPDATE webhooks SET last_status = 'ok', last_delivery_at = now() WHERE id = %s", (r["webhook_id"],))
+    return "sent"
+
+
 def process_outbox(limit: int = 20) -> dict:
     """Доставка вебхуков. Транзакция не держится во время HTTP-запроса: захват → отправка → отметка (см. app/outbox.py)."""
     outbox.recover("webhook_deliveries")
@@ -73,23 +94,11 @@ def process_outbox(limit: int = 20) -> dict:
                         " ORDER BY d.created_at LIMIT %s FOR UPDATE OF d SKIP LOCKED", (limit,))
     sent = failed = 0
     for r in rows:
-        body = json.dumps({**r["payload"], "id": str(r["id"])}, ensure_ascii=False, separators=(",", ":")).encode()
-        headers = {"Content-Type": "application/json", "User-Agent": "Fligel-Webhooks/1", "X-Fligel-Event": r["event"],
-                   "X-Fligel-Delivery": str(r["id"]), "X-Fligel-Signature": sign(r["secret"], body)}
         try:
-            if not r["enabled"]:
-                raise RuntimeError("Вебхук выключен")
-            check_url(r["url"])   # адрес мог начать указывать на внутреннюю сеть уже после регистрации
-            send(r["url"], body, headers)
-        except Exception as e:  # noqa: BLE001
-            msg = (e.message if isinstance(e, ApiError) else str(e))[:300]
-            with tx() as conn:
-                run(conn, "UPDATE webhooks SET last_status = %s, last_delivery_at = now() WHERE id = %s", (f"ошибка: {msg}", r["webhook_id"]))
-            if outbox.mark_retry("webhook_deliveries", r, msg, MAX_ATTEMPTS, give_up=not r["enabled"]):
-                failed += 1
+            outcome = _deliver(r)
+        except Exception:  # noqa: BLE001 — сбой одной записи не должен оставлять остальные захваченные в 'sending'
+            log.exception("Вебхук: сбой обработки доставки %s", r["id"])
             continue
-        outbox.mark_sent("webhook_deliveries", r["id"])
-        with tx() as conn:
-            run(conn, "UPDATE webhooks SET last_status = 'ok', last_delivery_at = now() WHERE id = %s", (r["webhook_id"],))
-        sent += 1
+        sent += outcome == "sent"
+        failed += outcome == "failed"
     return {"sent": sent, "failed": failed}

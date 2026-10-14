@@ -126,7 +126,7 @@ def _place(conn, feed: dict, rooms: list[dict], ev: ical.Event, uid: str, existi
     return False
 
 
-def apply_events(conn, feed: dict, events: list[ical.Event], today: date | None = None) -> SyncResult:
+def apply_events(conn, feed: dict, events: list[ical.Event], today: date | None = None, skipped: int = 0) -> SyncResult:
     """Применяет события календаря площадки к броням. Вызывается внутри транзакции.
 
     Защита от «эха»: площадка может вернуть в своём календаре наши же брони, которые она
@@ -208,8 +208,9 @@ def apply_events(conn, feed: dict, events: list[ical.Event], today: date | None 
                 "Проверьте раздел «Конфликты».",
                 link="#/channels", bell=True,
             )
-    # Исчезнувшие из календаря будущие брони — отменены на площадке
-    for uid, b in existing.items():
+    # Исчезнувшие из календаря будущие брони — отменены на площадке.
+    # Если часть событий не удалось разобрать, их брони выглядят «исчезнувшими» — ничего не отменяем, пока календарь не разбирается целиком.
+    for uid, b in ([] if skipped else existing.items()):
         if uid not in seen and b["status"] != "cancelled" and b["check_out"] >= today:
             run(conn, "UPDATE bookings SET status = 'cancelled', updated_at = now() WHERE id = %s", (b["id"],))
             booklog.log(conn, feed["account_id"], b["id"], None, "cancelled",
@@ -270,7 +271,7 @@ def sync_feed(feed_id, fetcher=None) -> SyncResult:
         # Блокируем календарь, чтобы два процесса не применяли его одновременно
         if not one(conn, "SELECT id FROM ical_feeds WHERE id = %s FOR UPDATE", (feed_id,)):
             return SyncResult(status="error", message="Календарь удалён")
-        res = apply_events(conn, feed, events)
+        res = apply_events(conn, feed, events, skipped=skipped)
         if skipped:
             res.message = (res.message + f" Не удалось разобрать событий: {skipped}.").strip()
         res.events, res.skipped = len(events), skipped

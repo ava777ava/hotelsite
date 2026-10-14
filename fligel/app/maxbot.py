@@ -130,11 +130,17 @@ def process_outbox(limit: int = 20) -> dict:
         try:
             send_message(row["chat_id"], row["text"])
         except Exception as e:  # noqa: BLE001
-            if outbox.mark_retry("max_outbox", row, str(e), MAX_ATTEMPTS):
-                failed += 1
-                log.warning("Сообщение в MAX не отправлено после %s попыток: %s", row["attempts"] + 1, e)
+            try:
+                if outbox.mark_retry("max_outbox", row, str(e), MAX_ATTEMPTS):
+                    failed += 1
+                    log.warning("Сообщение в MAX не отправлено после %s попыток: %s", row["attempts"] + 1, e)
+            except Exception:  # noqa: BLE001
+                log.exception("Не удалось записать ошибку отправки %s", row["id"])
             continue
-        outbox.mark_sent("max_outbox", row["id"])
+        try:
+            outbox.mark_sent("max_outbox", row["id"])
+        except Exception:  # noqa: BLE001 — сообщение уже ушло; остальные захваченные не бросаем в 'sending'
+            log.exception("Не удалось отметить отправленным сообщение %s", row["id"])
         sent += 1
     return {"sent": sent, "failed": failed}
 

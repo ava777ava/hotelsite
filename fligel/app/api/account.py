@@ -255,8 +255,8 @@ def badges(c: Ctx):
         conflicts = one(conn, "SELECT count(*) AS n FROM sync_conflicts WHERE account_id = %s AND NOT resolved",
                         (c.account_id,))["n"]
         overdue = tasks.overdue_count(conn, c.account_id, c.p.user_id, True)
-        conflicts += syncdebug.stale_count(conn, c.account_id)   # «проблемы с площадками»: конфликты + площадка давно не забирала наш календарь
-    return {"requests": requests, "conflicts": conflicts, "tasks": overdue}
+        stale = syncdebug.stale_count(conn, c.account_id)   # площадка давно не забирала наш календарь — это не двойная бронь, считаем отдельно
+    return {"requests": requests, "conflicts": conflicts, "export_stale": stale, "tasks": overdue}
 
 
 @api("manager")

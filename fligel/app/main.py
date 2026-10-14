@@ -148,7 +148,7 @@ def health(request: Request):
     scheduler_ok = sync.scheduler_alive()
     body = {"ok": db_ok and scheduler_ok, "db": db_ok,
             "scheduler": scheduler_ok if config.SYNC_ENABLED else None, "backup_check": _backup_check() if db_ok else None,
-            "warnings": config.config_warnings()}
+            "warnings": len(config.config_warnings())}   # только число: тексты (что именно не настроено) — в панели оператора, не для всего интернета
     return Json(body, status_code=200 if body["ok"] else 503)
 
 

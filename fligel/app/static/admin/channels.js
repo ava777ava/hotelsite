@@ -92,9 +92,14 @@ export async function viewChannels(main) {
   async function load() {
     const [data, conflicts] = await Promise.all([
       api('GET', '/api/channels?' + qs({ property_id: state.propertyId })), api('GET', '/api/conflicts')]);
-    state.conflicts = conflicts.length;
+    state.conflicts = conflicts.length; state.channelIssues = conflicts.length + (state.exportStale || 0);
     const level = levelOverride[channel] || data.levels[channel];
     content.innerHTML = '';
+    if (state.exportStale) {
+      content.append(h('div', { class: 'note', role: 'alert', style: { background: 'var(--ochre-soft)', color: 'var(--ochre-ink)' } },
+        `⚠ Площадка не забирала наш календарь больше 6 часов (календарей: ${state.exportStale}). `,
+        h('a', { href: '#/channels', onclick: (e) => { e.preventDefault(); store.set('ch_tab', 'state'); main.innerHTML = ''; viewChannels(main); } }, 'Открыть «Состояние синхронизации»')));
+    }
     if (conflicts.length) {
       content.append(h('div', { class: 'card' },
         h('div', { class: 'card-head' }, h('h2', {}, 'Конфликты: двойное бронирование'), h('span', { class: 'pill bad' }, conflicts.length)),
