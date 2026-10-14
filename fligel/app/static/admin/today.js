@@ -122,7 +122,7 @@ export function printDaySheet(day, data) {
     const cols = ['Номер', 'Гость', 'Телефон', 'Гостей', withDue ? 'К оплате' : null, 'Отметка'].filter(Boolean);
     const rows = list.length
       ? list.map((b) => h('tr', {}, td(b.room_name), td(b.guest_name || `Гость (${SOURCE[b.source]})`), td(b.guest_phone || '—'),
-          td(String(b.guests_count)), withDue ? td(fmtMoney(Number(b.total_price) - Number(b.paid_amount))) : null,
+          td(String(b.guests_count)), withDue ? td(Number(b.total_price) - Number(b.paid_amount) < 0 ? `переплата ${fmtMoney(Number(b.paid_amount) - Number(b.total_price))}` : fmtMoney(Number(b.total_price) - Number(b.paid_amount))) : null,
           h('td', { style: { borderBottom: '1px solid #999', width: '70px' } })))
       : [h('tr', {}, h('td', { colspan: String(cols.length), style: { padding: '6px', color: '#666' } }, 'Нет'))];
     return h('div', { style: { marginBottom: '26px' } },
