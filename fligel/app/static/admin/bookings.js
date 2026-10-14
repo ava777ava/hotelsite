@@ -58,7 +58,7 @@ export async function viewBookings(main) {
           h('td', { class: 'num', 'data-l': 'Заезд' }, fmtShort(b.check_in), h('div', { class: 'muted small' }, humanDay(b.check_in))), h('td', { class: 'num', 'data-l': 'Выезд' }, fmtShort(b.check_out)),
           h('td', { class: 'num', 'data-l': 'Номер' }, b.room_name),
           h('td', { 'data-l': 'Гость' }, b.status === 'blocked' ? h('span', { class: 'muted' }, 'Закрыто') : (b.guest_name || h('span', { class: 'muted' }, '—')),
-            b.guest_phone ? h('div', { class: 'muted small' }, b.guest_phone) : null),
+            b.guest_phone ? h('div', { class: 'muted small nowrap' }, b.guest_phone) : null),
           h('td', { 'data-l': 'Источник' }, h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '6px' } }, h('i', { class: 'dot', style: { background: `var(--src-${b.source})` } }), SOURCE[b.source])),
           h('td', { 'data-l': 'Статус' }, h('span', { class: 'pill ' + ({ confirmed: 'ok', pending: 'warn', blocked: 'none', cancelled: 'bad' }[b.status]) }, STATUS[b.status])),
           h('td', { class: 'num', 'data-l': b.status === 'blocked' ? null : 'Сумма' }, b.status === 'blocked' ? '' : fmtMoney(b.total_price)),

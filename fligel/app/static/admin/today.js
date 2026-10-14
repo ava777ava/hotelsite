@@ -23,7 +23,7 @@ export async function viewToday(main) {
     const due = Number(b.total_price) - Number(b.paid_amount);
     return h('div', { class: 'item', onclick: () => bookingDrawer(b, load) },
       h('div', { class: 'room-chip' }, b.room_name),
-      h('div', { style: { flex: 1, minWidth: 0 } },
+      h('div', { style: { flex: '1 1 150px', minWidth: 0 } },
         h('div', { style: { fontWeight: 600 } }, b.guest_name || `Гость с площадки ${SOURCE[b.source]}`,
           scope.value === 'all' ? h('span', { class: 'muted small', style: { fontWeight: 400 } }, ' · ', b.property_name) : null),
         h('div', { class: 'muted small' }, `${fmtShort(b.check_in)} — ${fmtShort(b.check_out)} · ${count(b.guests_count, 'guest')} · ${SOURCE[b.source]}`),
