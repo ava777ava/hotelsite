@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .venv/
 /backups/
+docs/tutorial_src/content.json
