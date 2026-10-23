@@ -87,7 +87,7 @@ def cover():
         Paragraph('От покупки сервера до первого клиента: пошагово, простыми словами, с командами «копируй и вставляй»', s(fontSize=14, leading=19, textColor=GREY, spaceAfter=30)),
         Paragraph('Для кого: для владельца сервиса, который раньше не разворачивал серверы.', s(fontSize=12, leading=16, spaceAfter=5)),
         Paragraph('Сколько времени: первый запуск — 2–3 часа, подключение первой площадки — ещё полдня (из-за ожидания обмена календарями).', s(fontSize=12, leading=16, spaceAfter=5)),
-        Paragraph('Версия документа: 14.10.2026 · ветка проекта feature/stabilize', s(fontSize=12, leading=16, textColor=GREY))]
+        Paragraph('Версия документа: 23.10.2026 · ветка проекта main', s(fontSize=12, leading=16, textColor=GREY))]
 
 content = json.load(open('content.json'))
 story = []

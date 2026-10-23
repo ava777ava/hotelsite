@@ -99,7 +99,7 @@ deploy/              Docker-установка на сервер: setup.sh, ngin
 перезагрузка, затем установка Docker Desktop). Python и PostgreSQL ставить не нужно.
 
 ```bash
-git clone -b feature/next https://github.com/ava777ava/hotelsite.git
+git clone https://github.com/ava777ava/hotelsite.git
 cd hotelsite/fligel
 cp .env.example .env        # на Windows cmd: copy .env.example .env
 # в .env впишите:  SECRET_KEY=dev-secret-change-me   и   POSTGRES_PASSWORD=localtest123

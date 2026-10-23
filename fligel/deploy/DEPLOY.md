@@ -52,7 +52,7 @@ ssh root@<IP вашего сервера>
 ```bash
 apt-get update -y && apt-get install -y git
 cd /opt
-git clone <URL вашего репозитория> fligel
+git clone https://github.com/ava777ava/hotelsite.git fligel   # ветка main — актуальная
 cd fligel/fligel
 ```
 
