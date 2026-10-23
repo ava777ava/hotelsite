@@ -117,6 +117,39 @@ def main() -> int:
                 page.get_by_role("button", name="Инвентарь").click()
                 page.wait_for_selector(".inv-add", timeout=5000)
 
+            def drag_booking():
+                """Перенос брони перетаскиванием: мышь тянет сразу, на телефоне — долгое нажатие и перенос; результат — окно подтверждения."""
+                page.goto(f"{BASE}/app/#/board")
+                page.wait_for_selector(".bar.draggable", timeout=8000)
+                page.evaluate("window.scrollTo(0, 300)" if mobile else "window.scrollTo(0, 0)")
+                page.wait_for_timeout(300)
+                pick = page.evaluate("""() => { const h = window.innerHeight - (window.innerWidth < 860 ? 120 : 20);
+                  const bs = [...document.querySelectorAll('.bar.draggable')].map((b) => b.getBoundingClientRect())
+                    .filter((r) => r.top > 150 && r.bottom < h && r.left > 260 * (window.innerWidth >= 860 ? 1 : 0) + 20 && r.right < window.innerWidth - 20 && r.width > 60);
+                  return bs.length ? [bs[0].left + Math.min(bs[0].width / 2, 40), bs[0].top + bs[0].height / 2] : null; }""")
+                if not pick:
+                    raise RuntimeError("не нашлась подходящая бронь для переноса")
+                x, y = pick
+                if mobile:
+                    cdp = ctx.new_cdp_session(page)
+                    touch = lambda kind, px=0, py=0: cdp.send("Input.dispatchTouchEvent", {"type": kind, "touchPoints": [{"x": px, "y": py, "id": 1}] if kind != "touchEnd" else []})  # noqa: E731
+                    touch("touchStart", x, y)
+                    page.wait_for_timeout(600)
+                    for i in range(1, 8):
+                        touch("touchMove", x + i * 10, y)
+                        page.wait_for_timeout(30)
+                    touch("touchEnd")
+                else:
+                    page.mouse.move(x, y)
+                    page.mouse.down()
+                    page.mouse.move(x + 60, y, steps=6)
+                    page.mouse.move(x + 100, y, steps=6)
+                    page.mouse.up()
+                page.wait_for_selector(".move-summary", timeout=4000)   # окно «Подтвердить перенос» открылось
+                page.get_by_role("button", name="Отмена").first.click()
+                page.wait_for_selector(".move-summary", state="detached", timeout=3000)
+
+            step("перетаскивание брони", drag_booking)
             step("карточка брони", open_booking)
             step("хозяйство", household_flow)
             step("задачи", tasks_flow)
