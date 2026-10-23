@@ -87,6 +87,7 @@ function build(title, sub, content, outFile) {
   for (const [kind, ...a] of content) {
     switch (kind) {
       case 'h1': children.push(h1(a[0])); break;
+      case 'h1n': children.push(new Paragraph({ heading: HeadingLevel.HEADING_1, spacing: { before: 240, after: 200 }, children: [new TextRun({ text: a[0], font: FONT })] })); break;
       case 'h2': children.push(h2(a[0])); break;
       case 'h3': children.push(h3(a[0])); break;
       case 'p': children.push(p(a[0])); break;
